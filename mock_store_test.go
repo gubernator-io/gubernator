@@ -21,7 +21,7 @@ package gubernator_test
 import (
 	"context"
 
-	guber "github.com/mailgun/gubernator/v2"
+	guber "github.com/gubernator-io/gubernator/v2"
 	"github.com/stretchr/testify/mock"
 )
 

@@ -22,7 +22,7 @@ import (
 	"net"
 	"testing"
 
-	gubernator "github.com/mailgun/gubernator/v2"
+	"github.com/gubernator-io/gubernator/v2"
 	"github.com/mailgun/holster/v4/clock"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"

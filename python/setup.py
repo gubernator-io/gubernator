@@ -39,7 +39,7 @@ setup(
     description="Python client for gubernator",
     author="Derrick J. Wippler",
     author_email='thrawn01@gmail.com',
-    url='https://github.com/mailgun/gubernator',
+    url='https://github.com/gubernator-io/gubernator',
     package_dir={'': '.'},
     packages=find_packages('.', exclude=['tests']),
     install_requires=requirements,

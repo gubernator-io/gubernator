@@ -36,8 +36,8 @@ jobs:
         uses: docker/build-push-action@v5
         with:
           tags: |
-            ghcr.io/mailgun/gubernator:${{ github.event.release.tag_name }}
-            ghcr.io/mailgun/gubernator:latest
+            ghcr.io/gubernator-io/gubernator:${{ github.event.release.tag_name }}
+            ghcr.io/gubernator-io/gubernator:latest
           build-args: |
             VERSION=${{ github.event.release.tag_name }}
           platforms: linux/amd64,linux/arm64

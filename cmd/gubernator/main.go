@@ -25,7 +25,7 @@ import (
 	"runtime"
 	"syscall"
 
-	gubernator "github.com/mailgun/gubernator/v2"
+	"github.com/gubernator-io/gubernator/v2"
 	"github.com/mailgun/holster/v4/clock"
 	"github.com/mailgun/holster/v4/tracing"
 	"github.com/sirupsen/logrus"
@@ -65,7 +65,7 @@ func main() {
 	// Initialize tracing.
 	ctx := context.Background()
 	err = tracing.InitTracing(ctx,
-		"github.com/mailgun/gubernator/v2",
+		"github.com/gubernator-io/gubernator/v2",
 		tracing.WithLevel(gubernator.GetTracingLevel()),
 		tracing.WithResource(res),
 	)

@@ -19,7 +19,7 @@ package gubernator_test
 import (
 	"testing"
 
-	gubernator "github.com/mailgun/gubernator/v2"
+	"github.com/gubernator-io/gubernator/v2"
 	"github.com/stretchr/testify/assert"
 )
 

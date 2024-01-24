@@ -19,8 +19,8 @@ package cluster_test
 import (
 	"testing"
 
-	gubernator "github.com/mailgun/gubernator/v2"
-	"github.com/mailgun/gubernator/v2/cluster"
+	gubernator "github.com/gubernator-io/gubernator/v2"
+	"github.com/gubernator-io/gubernator/v2/cluster"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"go.uber.org/goleak"
