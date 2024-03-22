@@ -24,10 +24,6 @@ jobs:
       - name: Fetch git tags
         run: git fetch --tags
 
-      # TODO(thrawn01) enable after org transition is complete.
-      #- name: Version consistency check
-      #  run: ./contrib/check-version.sh
-
       - name: Set up Go
         uses: actions/setup-go@v5
         with:
