@@ -19,14 +19,15 @@ package main
 import (
 	"context"
 	"flag"
+	"fmt"
 	"io"
 	"os"
 	"os/signal"
 	"runtime"
+	"strings"
 	"syscall"
 
 	"github.com/gubernator-io/gubernator/v2"
-	"github.com/mailgun/holster/v4/clock"
 	"github.com/mailgun/holster/v4/tracing"
 	"github.com/sirupsen/logrus"
 	"go.opentelemetry.io/otel/sdk/resource"
@@ -39,13 +40,26 @@ var Version = "dev-build"
 var tracerCloser io.Closer
 
 func main() {
+	err := Main(context.Background())
+	if err != nil {
+		log.Error(err.Error())
+		os.Exit(1)
+	}
+}
+
+func Main(ctx context.Context) error {
 	var configFile string
 
 	logrus.Infof("Gubernator %s (%s/%s)", Version, runtime.GOARCH, runtime.GOOS)
 	flags := flag.NewFlagSet("gubernator", flag.ContinueOnError)
+	flags.SetOutput(io.Discard)
 	flags.StringVar(&configFile, "config", "", "environment config file")
 	flags.BoolVar(&gubernator.DebugEnabled, "debug", false, "enable debug")
-	checkErr(flags.Parse(os.Args[1:]), "while parsing flags")
+	if err := flags.Parse(os.Args[1:]); err != nil {
+		if !strings.Contains(err.Error(), "flag provided but not defined") {
+			return fmt.Errorf("while parsing flags: %w", err)
+		}
+	}
 
 	// in order to prevent logging to /tmp by k8s.io/client-go
 	// and other kubernetes related dependencies which are using
@@ -61,9 +75,13 @@ func main() {
 	if err != nil {
 		log.WithError(err).Fatal("during tracing.NewResource()")
 	}
+	defer func() {
+		if tracerCloser != nil {
+			_ = tracerCloser.Close()
+		}
+	}()
 
 	// Initialize tracing.
-	ctx := context.Background()
 	err = tracing.InitTracing(ctx,
 		"github.com/gubernator-io/gubernator/v2",
 		tracing.WithLevel(gubernator.GetTracingLevel()),
@@ -73,42 +91,36 @@ func main() {
 		log.WithError(err).Fatal("during tracing.InitTracing()")
 	}
 
+	var configFileReader io.Reader
 	// Read our config from the environment or optional environment config file
-	configFileReader, err := os.Open(configFile)
-	if err != nil {
-		log.WithError(err).Fatal("while opening config file")
+	if configFile != "" {
+		configFileReader, err = os.Open(configFile)
+		if err != nil {
+			log.WithError(err).Fatal("while opening config file")
+		}
 	}
-	conf, err := gubernator.SetupDaemonConfig(logrus.StandardLogger(), configFileReader)
-	checkErr(err, "while getting config")
 
-	ctx, cancel := context.WithTimeout(ctx, clock.Second*10)
+	conf, err := gubernator.SetupDaemonConfig(logrus.StandardLogger(), configFileReader)
+	if err != nil {
+		return fmt.Errorf("while collecting daemon config: %w", err)
+	}
 
 	// Start the daemon
 	daemon, err := gubernator.SpawnDaemon(ctx, conf)
-	checkErr(err, "while spawning daemon")
-	cancel()
+	if err != nil {
+		return fmt.Errorf("while spawning daemon: %w", err)
+	}
 
 	// Wait here for signals to clean up our mess
 	c := make(chan os.Signal, 1)
-	signal.Notify(c, os.Interrupt, syscall.SIGTERM)
-	for range c {
+	signal.Notify(c, os.Interrupt, syscall.SIGTERM, syscall.SIGINT)
+	select {
+	case <-c:
 		log.Info("caught signal; shutting down")
 		daemon.Close()
 		_ = tracing.CloseTracing(context.Background())
-		exit(0)
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
 	}
-}
-
-func checkErr(err error, msg string) {
-	if err != nil {
-		log.WithError(err).Error(msg)
-		exit(1)
-	}
-}
-
-func exit(code int) {
-	if tracerCloser != nil {
-		tracerCloser.Close()
-	}
-	os.Exit(code)
 }
