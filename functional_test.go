@@ -31,9 +31,9 @@ import (
 	"testing"
 	"time"
 
+	guber "github.com/gubernator-io/gubernator/v2"
+	"github.com/gubernator-io/gubernator/v2/cluster"
 	"github.com/mailgun/errors"
-	guber "github.com/mailgun/gubernator/v2"
-	"github.com/mailgun/gubernator/v2/cluster"
 	"github.com/mailgun/holster/v4/clock"
 	"github.com/mailgun/holster/v4/syncutil"
 	"github.com/mailgun/holster/v4/testutil"

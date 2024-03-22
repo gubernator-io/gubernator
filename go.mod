@@ -1,4 +1,4 @@
-module github.com/mailgun/gubernator/v2
+module github.com/gubernator-io/gubernator/v2
 
 go 1.20
 

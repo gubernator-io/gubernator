@@ -19,7 +19,7 @@ package gubernator_test
 // Mock implementation of Cache.
 
 import (
-	guber "github.com/mailgun/gubernator/v2"
+	guber "github.com/gubernator-io/gubernator/v2"
 	"github.com/stretchr/testify/mock"
 )
 

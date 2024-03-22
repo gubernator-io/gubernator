@@ -22,8 +22,8 @@ import (
 	"strings"
 	"testing"
 
-	gubernator "github.com/mailgun/gubernator/v2"
-	"github.com/mailgun/gubernator/v2/cluster"
+	"github.com/gubernator-io/gubernator/v2"
+	"github.com/gubernator-io/gubernator/v2/cluster"
 	"github.com/mailgun/holster/v4/clock"
 	"github.com/pkg/errors"
 	"github.com/stretchr/testify/require"

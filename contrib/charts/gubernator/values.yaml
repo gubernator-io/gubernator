@@ -13,7 +13,7 @@ gubernator:
   replicaCount: 4
 
   image:
-    repository: ghcr.io/mailgun/gubernator
+    repository: ghcr.io/gubernator-io/gubernator
     pullPolicy: IfNotPresent
 
     # By default tag is overriding appVersion from .Chart.yaml

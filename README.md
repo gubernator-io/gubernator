@@ -32,7 +32,7 @@ rate limit config is made up of only 4, 64bit integers.
 ### Quick Start
 ```bash
 # Download the docker-compose file
-$ curl -O https://raw.githubusercontent.com/mailgun/gubernator/master/docker-compose.yaml
+$ curl -O https://raw.githubusercontent.com/gubernator-io/gubernator/master/docker-compose.yaml
 # Run the docker container
 $ docker-compose up -d
 ```
@@ -331,7 +331,7 @@ $ curl http://localhost:9080/v1/HealthCheck
 ##### Kubernetes
 ```bash
 # Download the kubernetes deployment spec
-$ curl -O https://raw.githubusercontent.com/mailgun/gubernator/master/k8s-deployment.yaml
+$ curl -O https://raw.githubusercontent.com/gubernator-io/gubernator/master/k8s-deployment.yaml
 
 # Edit the deployment file to change the environment config variables
 $ vi k8s-deployment.yaml

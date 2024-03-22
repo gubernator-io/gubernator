@@ -23,7 +23,7 @@ import (
 	"net/http"
 	"os"
 
-	guber "github.com/mailgun/gubernator/v2"
+	guber "github.com/gubernator-io/gubernator/v2"
 )
 
 func main() {

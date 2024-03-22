@@ -26,7 +26,7 @@ import (
 	"time"
 
 	"github.com/davecgh/go-spew/spew"
-	guber "github.com/mailgun/gubernator/v2"
+	guber "github.com/gubernator-io/gubernator/v2"
 	"github.com/mailgun/holster/v4/clock"
 	"github.com/mailgun/holster/v4/errors"
 	"github.com/mailgun/holster/v4/setter"
@@ -70,7 +70,7 @@ func main() {
 	}
 	ctx := context.Background()
 	err = tracing.InitTracing(ctx,
-		"github.com/mailgun/gubernator/v2/cmd/gubernator-cli",
+		"github.com/gubernator-io/gubernator/v2/cmd/gubernator-cli",
 		tracing.WithResource(res),
 	)
 	if err != nil {
