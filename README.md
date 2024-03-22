@@ -322,7 +322,7 @@ simplest way to try gubernator out.
 ##### Docker with existing etcd cluster
 ```bash
 $ docker run -p 8081:81 -p 9080:80 -e GUBER_ETCD_ENDPOINTS=etcd1:2379,etcd2:2379 \
-   ghcr.io/mailgun/gubernator:latest
+   ghcr.io/gubernator-io/gubernator:latest
 
 # Hit the HTTP API at localhost:9080
 $ curl http://localhost:9080/v1/HealthCheck
