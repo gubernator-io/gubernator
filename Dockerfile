@@ -6,6 +6,8 @@ ARG TARGETPLATFORM
 ENV BUILDPLATFORM=${BUILDPLATFORM:-linux/amd64}
 ENV TARGETPLATFORM=${TARGETPLATFORM:-linux/amd64}
 
+LABEL org.opencontainers.image.source = "https://github.com/gubernator-io/gubernator"
+
 WORKDIR /go/src
 
 # This should create cached layer of our dependencies for subsequent builds to use
@@ -37,6 +39,7 @@ COPY --from=build /healthcheck /healthcheck
 
 # Healtcheck
 HEALTHCHECK --interval=3s --timeout=1s --start-period=2s --retries=2 CMD [ "/healthcheck" ]
+
 
 # Run the server
 ENTRYPOINT ["/gubernator"]
