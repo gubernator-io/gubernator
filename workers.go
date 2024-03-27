@@ -51,6 +51,12 @@ import (
 	"go.opentelemetry.io/otel/trace"
 )
 
+type InternalPool interface {
+	GetRateLimit(context.Context, *RateLimitReq, RateLimitReqState) (*RateLimitResp, error)
+	Store(ctx context.Context) error
+	Close() error
+}
+
 type WorkerPool struct {
 	hasher          workerHasher
 	workers         []*Worker
