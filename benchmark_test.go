@@ -144,5 +144,6 @@ func BenchmarkServer(b *testing.B) {
 				return nil
 			}, nil)
 		}
+		fan.Wait()
 	})
 }
