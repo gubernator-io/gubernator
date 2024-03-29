@@ -47,6 +47,9 @@ func MutexRead(b *testing.B, concurrency int) {
 		b.Fatal("item count in pool does not match expected size")
 	}
 
+	// TODO: Change benchmark to use RunParallel()
+	// b.RunParallel()
+
 	b.ResetTimer()
 	var wg, launched sync.WaitGroup
 	launched.Add(concurrency)

@@ -2,7 +2,6 @@ package lockfree
 
 import (
 	"sync/atomic"
-	"unsafe"
 )
 
 // Element is the element in the list which points to the next element.
@@ -14,6 +13,11 @@ type Element[Value any] struct {
 	// prev points to the prev element in the list which is the nearest element closest
 	// to the 'head' of the linked list.
 	prev atomic.Pointer[Element[Value]]
+
+	// deleted means this element is in the process of being unlinked.
+	// All operations that link to this element should retry until this element
+	// has been unlinked.
+	deleted atomic.Int64
 
 	Value Value
 }
@@ -75,47 +79,77 @@ func (l *List[Value]) AddToHead(v *Element[Value]) *Element[Value] {
 	}
 }
 
-// MoveToHead moves an item in the list to the head of the list.
-func (l *List[Value]) MoveToHead(v *Element[Value]) {
-	if v == l.head.Load() {
+// Remove removes an item from the linked list. The algorithm here does not
+func (l *List[Value]) Remove(v *Element[Value]) {
+	// Mark the current element as deleted
+	v.deleted.Store(1)
+
+	// If l.head and v are the same, then swap l.head with the next element in the list. If we are the
+	// only element in the list, then the next element will be the empty element added during init.
+	if l.head.CompareAndSwap(v, v.next.Load()) {
+		// It's a race to unlink the next element from this one, so we avoid the race and don't
+		// unlink from the next element. This deleted element will be unlinked when the next
+		// element is added via AddToHead() or Removed().
+
+		// Remove any links to other elements
+		v.next.Store(nil)
+		v.prev.Store(nil)
 		return
 	}
-	prev := (*Element[Value])(atomic.SwapPointer((*unsafe.Pointer)(unsafe.Pointer(&v.next)), nil))
+
 	for {
-		head := l.head.Load()
-		v.next.Store(head)
-		if l.head.CompareAndSwap(head, v) {
-			if prev != nil {
-				next := prev.next.Load()
-				prev.next.Store(next)
-			} else {
-				l.tail.Store(l.head.Load())
-			}
-			return
+		// If the prev element in the list is currently deleted, then try again
+		if v.prev.Load().deleted.Load() == 1 {
+			continue
 		}
-		v.next.Store(head)
+
 	}
+	// If the next element in the list, does not currently point back to us, then
+	// there is another
+	//self := v.next.Load().prev.Load()
+	//if self != v {
+	//	// Try again
+	//}
+
+	//prev := (*Element[Value])(nil)
+	//curr := l.head.Load()
+	//for curr != nil {
+	//	if curr == v {
+	//		if prev == nil {
+	//			l.head.Store(curr.next.Load())
+	//		} else {
+	//			prev.next.Store(curr.next.Load())
+	//		}
+	//		if curr == l.tail.Load() {
+	//			l.tail.Store(prev)
+	//		}
+	//		l.len.Add(-1)
+	//		return
+	//	}
+	//	prev, curr = curr, curr.next.Load()
+	//}
 }
 
-// Remove removes an item from the linked list.
-func (l *List[Value]) Remove(v *Element[Value]) {
-	prev := (*Element[Value])(nil)
-	curr := l.head.Load()
-	for curr != nil {
-		if curr == v {
-			if prev == nil {
-				l.head.Store(curr.next.Load())
-			} else {
-				prev.next.Store(curr.next.Load())
-			}
-			if curr == l.tail.Load() {
-				l.tail.Store(prev)
-			}
-			l.len.Add(-1)
-			return
-		}
-		prev, curr = curr, curr.next.Load()
-	}
+// MoveToHead moves an item in the list to the head of the list.
+func (l *List[Value]) MoveToHead(v *Element[Value]) {
+	//if v == l.head.Load() {
+	//	return
+	//}
+	//prev := (*Element[Value])(atomic.SwapPointer((*unsafe.Pointer)(unsafe.Pointer(&v.next)), nil))
+	//for {
+	//	head := l.head.Load()
+	//	v.next.Store(head)
+	//	if l.head.CompareAndSwap(head, v) {
+	//		if prev != nil {
+	//			next := prev.next.Load()
+	//			prev.next.Store(next)
+	//		} else {
+	//			l.tail.Store(l.head.Load())
+	//		}
+	//		return
+	//	}
+	//	v.next.Store(head)
+	//}
 }
 
 // Len returns the length of the linked list
