@@ -9,14 +9,11 @@ import (
 	"github.com/gubernator-io/gubernator/v2"
 )
 
-func MutexRead(b *testing.B, concurrency int) {
+func OtterRead(b *testing.B, concurrency int) {
 	// Ensure the size of the data in the pool is consistent throughout all concurrency levels
 	const size = 1_000_000
 	l := &MockLoader{}
-	p := gubernator.NewWorkerMutex(gubernator.Config{
-		CacheFactory: func(maxSize int) gubernator.Cache {
-			return gubernator.NewLRUCache(maxSize)
-		},
+	p := gubernator.NewWorkerOtter(gubernator.Config{
 		CacheSize: size * 1_000_000,
 		Loader:    l,
 	})
@@ -47,9 +44,6 @@ func MutexRead(b *testing.B, concurrency int) {
 		b.Fatal("item count in pool does not match expected size")
 	}
 
-	// TODO: Change benchmark to use RunParallel()
-	// b.RunParallel()
-
 	b.ResetTimer()
 	var wg, launched sync.WaitGroup
 	launched.Add(concurrency)
@@ -76,14 +70,11 @@ func MutexRead(b *testing.B, concurrency int) {
 	wg.Wait()
 }
 
-func MutexWrite(b *testing.B, concurrency int) {
+func OtterWrite(b *testing.B, concurrency int) {
 	// Ensure the size of the data in the pool is consistent throughout all concurrency levels
 	const size = 1_000_000
 	l := &MockLoader{}
-	p := gubernator.NewWorkerMutex(gubernator.Config{
-		CacheFactory: func(maxSize int) gubernator.Cache {
-			return gubernator.NewLRUCache(maxSize)
-		},
+	p := gubernator.NewWorkerOtter(gubernator.Config{
 		CacheSize: size * 1_000_000,
 		Loader:    l,
 	})

@@ -99,23 +99,7 @@ func WorkerPoolWrite(b *testing.B, concurrency int) {
 	for i := 0; i < size; i++ {
 		key := gubernator.RandomString(10)
 		keys = append(keys, key)
-		//_, err := p.GetRateLimit(ctx, &gubernator.RateLimitReq{
-		//	CreatedAt: &createdAt,
-		//	UniqueKey: key,
-		//	Name:      key,
-		//}, gubernator.RateLimitReqState{})
-		//if err != nil {
-		//	b.Fatal(err)
-		//}
 	}
-
-	//if err := p.Store(ctx); err != nil {
-	//	b.Fatal(err)
-	//}
-	//
-	//if l.Count != size {
-	//	b.Fatal("item count in pool does not match expected size")
-	//}
 
 	b.ResetTimer()
 	var wg, launched sync.WaitGroup

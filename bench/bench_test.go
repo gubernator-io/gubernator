@@ -15,13 +15,28 @@ func BenchmarkAccessStructure(b *testing.B) {
 
 func BenchmarkConcurrency(b *testing.B) {
 	for _, con := range []int{1, 10, 100, 1000, 5_000, 10_000, 15_000, 20_000} {
+		b.Run(fmt.Sprintf("NoCache_%d", con), func(b *testing.B) {
+			bench.NoCache(b, con)
+		})
+	}
+	for _, con := range []int{1, 10, 100, 1000, 5_000, 10_000, 15_000, 20_000} {
+		b.Run(fmt.Sprintf("OtterWrite_%d", con), func(b *testing.B) {
+			bench.OtterWrite(b, con)
+		})
+	}
+	for _, con := range []int{1, 10, 100, 1000, 5_000, 10_000, 15_000, 20_000} {
+		b.Run(fmt.Sprintf("OtterRead_%d", con), func(b *testing.B) {
+			bench.OtterRead(b, con)
+		})
+	}
+	for _, con := range []int{1, 10, 100, 1000, 5_000, 10_000, 15_000, 20_000} {
 		b.Run(fmt.Sprintf("MutexRead_%d", con), func(b *testing.B) {
 			bench.MutexRead(b, con)
 		})
 	}
 	for _, con := range []int{1, 10, 100, 1000, 5_000, 10_000, 15_000, 20_000} {
 		b.Run(fmt.Sprintf("MutexWrite_%d", con), func(b *testing.B) {
-			bench.MutexRead(b, con)
+			bench.MutexWrite(b, con)
 		})
 	}
 	for _, con := range []int{1, 10, 100, 1000, 5_000, 10_000, 15_000, 20_000} {
