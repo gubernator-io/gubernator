@@ -14,11 +14,7 @@ func (o *NoCache) GetItem(key string) (*CacheItem, bool) {
 	return &CacheItem{
 		Key: key,
 		Value: &TokenBucketItem{
-			Status:    0,
-			Limit:     10,
-			Duration:  1000,
-			Remaining: 10,
-			CreatedAt: MillisecondNow(),
+			CreatedAt: MillisecondNow() - 100,
 		},
 	}, true
 }

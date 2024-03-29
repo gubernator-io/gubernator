@@ -5,8 +5,6 @@ import (
 	"sync"
 
 	"github.com/mailgun/errors"
-	"github.com/prometheus/client_golang/prometheus"
-	"go.opentelemetry.io/otel/trace"
 )
 
 // WorkerMutex implements the InternalPool interface but has one cache. It is a singleton
@@ -26,7 +24,7 @@ func NewWorkerMutex(conf Config) *WorkerMutex {
 }
 
 func (w *WorkerMutex) GetRateLimit(ctx context.Context, req *RateLimitReq, state RateLimitReqState) (*RateLimitResp, error) {
-	defer prometheus.NewTimer(metricFuncTimeDuration.WithLabelValues("WorkerMutex.GetRateLimit")).ObserveDuration()
+	//defer prometheus.NewTimer(metricFuncTimeDuration.WithLabelValues("WorkerMutex.GetRateLimit")).ObserveDuration()
 	var rlResponse *RateLimitResp
 	var err error
 
@@ -39,8 +37,8 @@ func (w *WorkerMutex) GetRateLimit(ctx context.Context, req *RateLimitReq, state
 		if err != nil {
 			msg := "Error in tokenBucket"
 			countError(err, msg)
-			err = errors.Wrap(err, msg)
-			trace.SpanFromContext(ctx).RecordError(err)
+			//err = errors.Wrap(err, msg)
+			//trace.SpanFromContext(ctx).RecordError(err)
 		}
 
 	case Algorithm_LEAKY_BUCKET:
@@ -48,14 +46,14 @@ func (w *WorkerMutex) GetRateLimit(ctx context.Context, req *RateLimitReq, state
 		if err != nil {
 			msg := "Error in leakyBucket"
 			countError(err, msg)
-			err = errors.Wrap(err, msg)
-			trace.SpanFromContext(ctx).RecordError(err)
+			//err = errors.Wrap(err, msg)
+			//trace.SpanFromContext(ctx).RecordError(err)
 		}
 
 	default:
 		err = errors.Errorf("Invalid rate limit algorithm '%d'", req.Algorithm)
-		trace.SpanFromContext(ctx).RecordError(err)
-		metricCheckErrorCounter.WithLabelValues("Invalid algorithm").Add(1)
+		//trace.SpanFromContext(ctx).RecordError(err)
+		//metricCheckErrorCounter.WithLabelValues("Invalid algorithm").Add(1)
 	}
 
 	return rlResponse, err

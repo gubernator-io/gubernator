@@ -2,6 +2,7 @@ package bench_test
 
 import (
 	"fmt"
+	"runtime"
 	"testing"
 
 	"github.com/gubernator-io/gubernator/v2/bench"
@@ -13,7 +14,50 @@ func BenchmarkAccessStructure(b *testing.B) {
 	}
 }
 
+func BenchmarkParallel(b *testing.B) {
+	fmt.Printf("Current Operating System has '%d' CPUs\n", runtime.NumCPU())
+
+	for _, p := range []int{1, 2, 4, 8, 10, 12, 16, 20, 24, 28, 32} {
+		b.Run(fmt.Sprintf("NoCache_%d", p), func(b *testing.B) {
+			bench.NoCacheParallel(b, p)
+		})
+	}
+	for _, p := range []int{1, 2, 4, 8, 10, 12, 16, 20, 24, 28, 32} {
+		b.Run(fmt.Sprintf("MutexRead_%d", p), func(b *testing.B) {
+			bench.MutexReadParallel(b, p)
+		})
+	}
+	for _, p := range []int{1, 2, 4, 8, 10, 12, 16, 20, 24, 28, 32} {
+		b.Run(fmt.Sprintf("MutexWrite_%d", p), func(b *testing.B) {
+			bench.MutexWriteParallel(b, p)
+		})
+	}
+	for _, p := range []int{1, 2, 4, 8, 10, 12, 16, 20, 24, 28, 32} {
+		b.Run(fmt.Sprintf("OtterRead_%d", p), func(b *testing.B) {
+			bench.OtterReadParallel(b, p)
+		})
+	}
+	for _, p := range []int{1, 2, 4, 8, 10, 12, 16, 20, 24, 28, 32} {
+		b.Run(fmt.Sprintf("OtterWrite_%d", p), func(b *testing.B) {
+			bench.OtterWriteParallel(b, p)
+		})
+	}
+	for _, p := range []int{1, 2, 4, 8, 10, 12, 16, 20, 24, 28, 32} {
+		b.Run(fmt.Sprintf("WorkerPoolRead_%d", p), func(b *testing.B) {
+			bench.WorkerPoolReadParallel(b, p)
+		})
+	}
+	for _, p := range []int{1, 2, 4, 8, 10, 12, 16, 20, 24, 28, 32} {
+		b.Run(fmt.Sprintf("WorkerPoolWrite_%d", p), func(b *testing.B) {
+			bench.WorkerPoolWriteParallel(b, p)
+		})
+	}
+}
+
 func BenchmarkConcurrency(b *testing.B) {
+	fmt.Printf("Current Operating System has '%d' CPUs\n", runtime.NumCPU())
+	runtime.GOMAXPROCS(runtime.NumCPU())
+
 	for _, con := range []int{1, 10, 100, 1000, 5_000, 10_000, 15_000, 20_000} {
 		b.Run(fmt.Sprintf("NoCache_%d", con), func(b *testing.B) {
 			bench.NoCache(b, con)

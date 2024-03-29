@@ -46,7 +46,6 @@ import (
 	"github.com/OneOfOne/xxhash"
 	"github.com/mailgun/holster/v4/errors"
 	"github.com/mailgun/holster/v4/setter"
-	"github.com/prometheus/client_golang/prometheus"
 	"github.com/sirupsen/logrus"
 	"go.opentelemetry.io/otel/trace"
 )
@@ -297,7 +296,7 @@ func (p *WorkerPool) GetRateLimit(ctx context.Context, rlRequest *RateLimitReq, 
 
 // Handle request received by worker.
 func (worker *Worker) handleGetRateLimit(ctx context.Context, req *RateLimitReq, reqState RateLimitReqState, cache Cache) (*RateLimitResp, error) {
-	defer prometheus.NewTimer(metricFuncTimeDuration.WithLabelValues("Worker.handleGetRateLimit")).ObserveDuration()
+	//defer prometheus.NewTimer(metricFuncTimeDuration.WithLabelValues("Worker.handleGetRateLimit")).ObserveDuration()
 	var rlResponse *RateLimitResp
 	var err error
 
@@ -307,8 +306,8 @@ func (worker *Worker) handleGetRateLimit(ctx context.Context, req *RateLimitReq,
 		if err != nil {
 			msg := "Error in tokenBucket"
 			countError(err, msg)
-			err = errors.Wrap(err, msg)
-			trace.SpanFromContext(ctx).RecordError(err)
+			//err = errors.Wrap(err, msg)
+			//trace.SpanFromContext(ctx).RecordError(err)
 		}
 
 	case Algorithm_LEAKY_BUCKET:
@@ -316,14 +315,14 @@ func (worker *Worker) handleGetRateLimit(ctx context.Context, req *RateLimitReq,
 		if err != nil {
 			msg := "Error in leakyBucket"
 			countError(err, msg)
-			err = errors.Wrap(err, msg)
-			trace.SpanFromContext(ctx).RecordError(err)
+			//err = errors.Wrap(err, msg)
+			//trace.SpanFromContext(ctx).RecordError(err)
 		}
 
 	default:
 		err = errors.Errorf("Invalid rate limit algorithm '%d'", req.Algorithm)
-		trace.SpanFromContext(ctx).RecordError(err)
-		metricCheckErrorCounter.WithLabelValues("Invalid algorithm").Add(1)
+		//trace.SpanFromContext(ctx).RecordError(err)
+		//metricCheckErrorCounter.WithLabelValues("Invalid algorithm").Add(1)
 	}
 
 	return rlResponse, err
