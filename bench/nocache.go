@@ -20,7 +20,7 @@ func NoCacheParallel(b *testing.B, processors int) {
 	createdAt := time.Now().UnixNano() / 1_000_000
 	keys := GenerateRandomKeys()
 	mask := len(keys) - 1
-	//start := time.Now()
+	start := time.Now()
 	b.ResetTimer()
 
 	b.RunParallel(func(pb *testing.PB) {
@@ -40,8 +40,8 @@ func NoCacheParallel(b *testing.B, processors int) {
 		}
 
 	})
-	//opsPerSec := float64(b.N) / time.Since(start).Seconds()
-	//b.ReportMetric(opsPerSec, "ops/s")
+	opsPerSec := float64(b.N) / time.Since(start).Seconds()
+	b.ReportMetric(opsPerSec, "ops/s")
 }
 
 func NoCache(b *testing.B, concurrency int) {

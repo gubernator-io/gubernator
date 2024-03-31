@@ -48,7 +48,7 @@ func MutexReadParallel(b *testing.B, processors int) {
 	}
 
 	mask := len(keys) - 1
-	//start := time.Now()
+	start := time.Now()
 	b.ResetTimer()
 
 	b.RunParallel(func(pb *testing.PB) {
@@ -68,8 +68,8 @@ func MutexReadParallel(b *testing.B, processors int) {
 		}
 
 	})
-	//opsPerSec := float64(b.N) / time.Since(start).Seconds()
-	//b.ReportMetric(opsPerSec, "ops/s")
+	opsPerSec := float64(b.N) / time.Since(start).Seconds()
+	b.ReportMetric(opsPerSec, "ops/s")
 }
 
 func MutexWriteParallel(b *testing.B, processors int) {
@@ -87,7 +87,7 @@ func MutexWriteParallel(b *testing.B, processors int) {
 	createdAt := time.Now().UnixNano() / 1_000_000
 	keys := GenerateRandomKeys()
 	mask := len(keys) - 1
-	//start := time.Now()
+	start := time.Now()
 	b.ResetTimer()
 
 	b.RunParallel(func(pb *testing.PB) {
@@ -107,8 +107,8 @@ func MutexWriteParallel(b *testing.B, processors int) {
 		}
 
 	})
-	//opsPerSec := float64(b.N) / time.Since(start).Seconds()
-	//b.ReportMetric(opsPerSec, "ops/s")
+	opsPerSec := float64(b.N) / time.Since(start).Seconds()
+	b.ReportMetric(opsPerSec, "ops/s")
 }
 
 func MutexRead(b *testing.B, concurrency int) {
