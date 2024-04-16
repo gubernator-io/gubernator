@@ -61,14 +61,14 @@ type WorkerPool struct {
 }
 
 type Worker struct {
-	name                string
-	conf                *Config
-	cache               Cache
-	getRateLimitRequest chan request
-	storeRequest        chan workerStoreRequest
-	loadRequest         chan workerLoadRequest
-	addCacheItemRequest chan workerAddCacheItemRequest
-	getCacheItemRequest chan workerGetCacheItemRequest
+	name                    string
+	conf                    *Config
+	cache                   Cache
+	getRateLimitRequestuest chan request
+	storeRequest            chan workerStoreRequest
+	loadRequest             chan workerLoadRequest
+	addCacheItemRequest     chan workerAddCacheItemRequest
+	getCacheItemRequest     chan workerGetCacheItemRequest
 }
 
 type workerHasher interface {
@@ -137,7 +137,7 @@ func NewWorkerPool(conf *Config) *WorkerPool {
 	}
 
 	// Create workers.
-	conf.Logger.Infof("Starting %d Gubernator workers...", conf.Workers)
+	conf.Logger.Debugf("Starting %d Gubernator workers...", conf.Workers)
 	for i := 0; i < conf.Workers; i++ {
 		chp.workers[i] = chp.newWorker()
 		go chp.dispatch(chp.workers[i])
@@ -162,13 +162,13 @@ func (p *WorkerPool) Close() error {
 // Create a new pool worker instance.
 func (p *WorkerPool) newWorker() *Worker {
 	worker := &Worker{
-		conf:                p.conf,
-		cache:               p.conf.CacheFactory(p.workerCacheSize),
-		getRateLimitRequest: make(chan request),
-		storeRequest:        make(chan workerStoreRequest),
-		loadRequest:         make(chan workerLoadRequest),
-		addCacheItemRequest: make(chan workerAddCacheItemRequest),
-		getCacheItemRequest: make(chan workerGetCacheItemRequest),
+		conf:                    p.conf,
+		cache:                   p.conf.CacheFactory(p.workerCacheSize),
+		getRateLimitRequestuest: make(chan request),
+		storeRequest:            make(chan workerStoreRequest),
+		loadRequest:             make(chan workerLoadRequest),
+		addCacheItemRequest:     make(chan workerAddCacheItemRequest),
+		getCacheItemRequest:     make(chan workerGetCacheItemRequest),
 	}
 	workerNumber := atomic.AddInt64(&workerCounter, 1) - 1
 	worker.name = strconv.FormatInt(workerNumber, 10)
@@ -191,7 +191,7 @@ func (p *WorkerPool) dispatch(worker *Worker) {
 	for {
 		// Dispatch requests from each channel.
 		select {
-		case req, ok := <-worker.getRateLimitRequest:
+		case req, ok := <-worker.getRateLimitRequestuest:
 			if !ok {
 				// Channel closed.  Unexpected, but should be handled.
 				logrus.Error("workerPool worker stopped because channel closed")
@@ -258,7 +258,7 @@ func (p *WorkerPool) dispatch(worker *Worker) {
 }
 
 // GetRateLimit sends a GetRateLimit request to worker pool.
-func (p *WorkerPool) GetRateLimit(ctx context.Context, rlRequest *RateLimitReq, reqState RateLimitReqState) (*RateLimitResp, error) {
+func (p *WorkerPool) GetRateLimit(ctx context.Context, rlRequest *RateLimitRequest, reqState RateLimitContext) (*RateLimitResponse, error) {
 	// Delegate request to assigned channel based on request key.
 	worker := p.getWorker(rlRequest.HashKey())
 	queueGauge := metricWorkerQueue.WithLabelValues("GetRateLimit", worker.name)
@@ -273,7 +273,7 @@ func (p *WorkerPool) GetRateLimit(ctx context.Context, rlRequest *RateLimitReq, 
 
 	// Send request.
 	select {
-	case worker.getRateLimitRequest <- handlerRequest:
+	case worker.getRateLimitRequestuest <- handlerRequest:
 		// Successfully sent request.
 	case <-ctx.Done():
 		return nil, ctx.Err()
@@ -290,9 +290,9 @@ func (p *WorkerPool) GetRateLimit(ctx context.Context, rlRequest *RateLimitReq, 
 }
 
 // Handle request received by worker.
-func (worker *Worker) handleGetRateLimit(ctx context.Context, req *RateLimitReq, reqState RateLimitReqState, cache Cache) (*RateLimitResp, error) {
+func (worker *Worker) handleGetRateLimit(ctx context.Context, req *RateLimitRequest, reqState RateLimitContext, cache Cache) (*RateLimitResponse, error) {
 	defer prometheus.NewTimer(metricFuncTimeDuration.WithLabelValues("Worker.handleGetRateLimit")).ObserveDuration()
-	var rlResponse *RateLimitResp
+	var rlResponse *RateLimitResponse
 	var err error
 
 	switch req.Algorithm {

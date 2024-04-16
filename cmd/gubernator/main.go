@@ -27,7 +27,7 @@ import (
 	"strings"
 	"syscall"
 
-	"github.com/gubernator-io/gubernator/v2"
+	"github.com/gubernator-io/gubernator/v3"
 	"github.com/mailgun/holster/v4/tracing"
 	"github.com/sirupsen/logrus"
 	"go.opentelemetry.io/otel/sdk/resource"
@@ -83,7 +83,7 @@ func Main(ctx context.Context) error {
 
 	// Initialize tracing.
 	err = tracing.InitTracing(ctx,
-		"github.com/gubernator-io/gubernator/v2",
+		"github.com/gubernator-io/gubernator/v3",
 		tracing.WithLevel(gubernator.GetTracingLevel()),
 		tracing.WithResource(res),
 	)
@@ -117,7 +117,7 @@ func Main(ctx context.Context) error {
 	select {
 	case <-c:
 		log.Info("caught signal; shutting down")
-		daemon.Close()
+		_ = daemon.Close(context.Background())
 		_ = tracing.CloseTracing(context.Background())
 		return nil
 	case <-ctx.Done():

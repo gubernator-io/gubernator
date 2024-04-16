@@ -19,7 +19,7 @@ package gubernator_test
 // Mock implementation of Loader.
 
 import (
-	guber "github.com/gubernator-io/gubernator/v2"
+	guber "github.com/gubernator-io/gubernator/v3"
 	"github.com/stretchr/testify/mock"
 )
 

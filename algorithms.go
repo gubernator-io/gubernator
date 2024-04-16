@@ -20,7 +20,6 @@ import (
 	"context"
 
 	"github.com/mailgun/holster/v4/clock"
-	"github.com/prometheus/client_golang/prometheus"
 	"github.com/sirupsen/logrus"
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/trace"
@@ -34,10 +33,7 @@ import (
 // with 100 emails and the request will succeed. You can override this default behavior with `DRAIN_OVER_LIMIT`
 
 // Implements token bucket algorithm for rate limiting. https://en.wikipedia.org/wiki/Token_bucket
-func tokenBucket(ctx context.Context, s Store, c Cache, r *RateLimitReq, reqState RateLimitReqState) (resp *RateLimitResp, err error) {
-	tokenBucketTimer := prometheus.NewTimer(metricFuncTimeDuration.WithLabelValues("tokenBucket"))
-	defer tokenBucketTimer.ObserveDuration()
-
+func tokenBucket(ctx context.Context, s Store, c Cache, r *RateLimitRequest, reqState RateLimitContext) (resp *RateLimitResponse, err error) {
 	// Get rate limit from cache.
 	hashKey := r.HashKey()
 	item, ok := c.GetItem(hashKey)
@@ -81,7 +77,7 @@ func tokenBucket(ctx context.Context, s Store, c Cache, r *RateLimitReq, reqStat
 			if s != nil {
 				s.Remove(ctx, hashKey)
 			}
-			return &RateLimitResp{
+			return &RateLimitResponse{
 				Status:    Status_UNDER_LIMIT,
 				Limit:     r.Limit,
 				Remaining: r.Limit,
@@ -112,7 +108,7 @@ func tokenBucket(ctx context.Context, s Store, c Cache, r *RateLimitReq, reqStat
 			t.Limit = r.Limit
 		}
 
-		rl := &RateLimitResp{
+		rl := &RateLimitResponse{
 			Status:    t.Status,
 			Limit:     r.Limit,
 			Remaining: t.Remaining,
@@ -203,7 +199,7 @@ func tokenBucket(ctx context.Context, s Store, c Cache, r *RateLimitReq, reqStat
 }
 
 // Called by tokenBucket() when adding a new item in the store.
-func tokenBucketNewItem(ctx context.Context, s Store, c Cache, r *RateLimitReq, reqState RateLimitReqState) (resp *RateLimitResp, err error) {
+func tokenBucketNewItem(ctx context.Context, s Store, c Cache, r *RateLimitRequest, reqState RateLimitContext) (resp *RateLimitResponse, err error) {
 	createdAt := *r.CreatedAt
 	expire := createdAt + r.Duration
 
@@ -229,7 +225,7 @@ func tokenBucketNewItem(ctx context.Context, s Store, c Cache, r *RateLimitReq, 
 		ExpireAt:  expire,
 	}
 
-	rl := &RateLimitResp{
+	rl := &RateLimitResponse{
 		Status:    Status_UNDER_LIMIT,
 		Limit:     r.Limit,
 		Remaining: t.Remaining,
@@ -257,10 +253,7 @@ func tokenBucketNewItem(ctx context.Context, s Store, c Cache, r *RateLimitReq, 
 }
 
 // Implements leaky bucket algorithm for rate limiting https://en.wikipedia.org/wiki/Leaky_bucket
-func leakyBucket(ctx context.Context, s Store, c Cache, r *RateLimitReq, reqState RateLimitReqState) (resp *RateLimitResp, err error) {
-	leakyBucketTimer := prometheus.NewTimer(metricFuncTimeDuration.WithLabelValues("V1Instance.getRateLimit_leakyBucket"))
-	defer leakyBucketTimer.ObserveDuration()
-
+func leakyBucket(ctx context.Context, s Store, c Cache, r *RateLimitRequest, reqState RateLimitContext) (resp *RateLimitResponse, err error) {
 	if r.Burst == 0 {
 		r.Burst = r.Limit
 	}
@@ -370,7 +363,7 @@ func leakyBucket(ctx context.Context, s Store, c Cache, r *RateLimitReq, reqStat
 			b.Remaining = float64(b.Burst)
 		}
 
-		rl := &RateLimitResp{
+		rl := &RateLimitResponse{
 			Limit:     b.Limit,
 			Remaining: int64(b.Remaining),
 			Status:    Status_UNDER_LIMIT,
@@ -434,7 +427,7 @@ func leakyBucket(ctx context.Context, s Store, c Cache, r *RateLimitReq, reqStat
 }
 
 // Called by leakyBucket() when adding a new item in the store.
-func leakyBucketNewItem(ctx context.Context, s Store, c Cache, r *RateLimitReq, reqState RateLimitReqState) (resp *RateLimitResp, err error) {
+func leakyBucketNewItem(ctx context.Context, s Store, c Cache, r *RateLimitRequest, reqState RateLimitContext) (resp *RateLimitResponse, err error) {
 	createdAt := *r.CreatedAt
 	duration := r.Duration
 	rate := float64(duration) / float64(r.Limit)
@@ -458,7 +451,7 @@ func leakyBucketNewItem(ctx context.Context, s Store, c Cache, r *RateLimitReq, 
 		Burst:     r.Burst,
 	}
 
-	rl := RateLimitResp{
+	rl := RateLimitResponse{
 		Status:    Status_UNDER_LIMIT,
 		Limit:     b.Limit,
 		Remaining: r.Burst - r.Hits,
