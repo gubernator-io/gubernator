@@ -15,6 +15,10 @@ $(GOLANGCI_LINT): ## Download Go linter
 lint: $(GOLANGCI_LINT) ## Run Go linter
 	$(GOLANGCI_LINT) run -v -c .golangci.yml ./...
 
+.PHONY: validate
+validate: lint test
+	go mod tidy && git diff --exit-code
+
 .PHONY: test
 test: ## Run unit tests and measure code coverage
 	(go test -v -race -p=1 -count=1 -tags holster_test_mode -coverprofile coverage.out ./...; ret=$$?; \

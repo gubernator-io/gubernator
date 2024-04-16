@@ -15,6 +15,7 @@ import (
 	"testing"
 	"time"
 
+	cli "github.com/gubernator-io/gubernator/v3/cmd/gubernator"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"golang.org/x/net/proxy"
@@ -46,11 +47,10 @@ func TestCLI(t *testing.T) {
 		{
 			name: "Should start with no config provided",
 			env: []string{
-				"GUBER_GRPC_ADDRESS=localhost:1050",
-				"GUBER_HTTP_ADDRESS=localhost:1051",
+				"GUBER_HTTP_ADDRESS=localhost:8080",
 			},
 			args:     []string{},
-			contains: "HTTP Gateway Listening on",
+			contains: "HTTP Listening on",
 		},
 	}
 	for _, tt := range tests {
