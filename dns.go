@@ -29,8 +29,8 @@ import (
 	"github.com/sirupsen/logrus"
 )
 
-// Adapted from TimothyYe/godns
 // DNSResolver represents a dns resolver
+// Adapted from TimothyYe/godns
 type DNSResolver struct {
 	Servers []string
 	random  *rand.Rand
@@ -118,7 +118,7 @@ type DNSPoolConfig struct {
 	// (Required) Filesystem path to "/etc/resolv.conf", override for testing
 	ResolvConf string
 
-	// (Required) Own GRPC address
+	// (Required) Own advertise address
 	OwnAddress string
 
 	// (Required) Called when the list of gubernators in the pool updates
@@ -138,7 +138,7 @@ func NewDNSPool(conf DNSPoolConfig) (*DNSPool, error) {
 	setter.SetDefault(&conf.Logger, logrus.WithField("category", "gubernator"))
 
 	if conf.OwnAddress == "" {
-		return nil, errors.New("Advertise.GRPCAddress is required")
+		return nil, errors.New("AdvertiseAddress is required")
 	}
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -157,12 +157,11 @@ func peer(ip string, self string, ipv6 bool) PeerInfo {
 	if ipv6 {
 		ip = "[" + ip + "]"
 	}
-	grpc := ip + ":81"
+	addr := ip + ":80"
 	return PeerInfo{
 		DataCenter:  "",
-		HTTPAddress: ip + ":80",
-		GRPCAddress: grpc,
-		IsOwner:     grpc == self,
+		HTTPAddress: addr,
+		IsOwner:     addr == self,
 	}
 
 }

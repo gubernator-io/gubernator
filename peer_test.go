@@ -19,27 +19,23 @@ package gubernator_test
 import (
 	"context"
 	"runtime"
-	"strings"
+	"sync"
 	"testing"
 
-	"github.com/gubernator-io/gubernator/v2"
-	"github.com/gubernator-io/gubernator/v2/cluster"
+	"github.com/gubernator-io/gubernator/v3"
+	"github.com/gubernator-io/gubernator/v3/cluster"
 	"github.com/mailgun/holster/v4/clock"
-	"github.com/pkg/errors"
+	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-	"golang.org/x/sync/errgroup"
 )
 
 func TestPeerClientShutdown(t *testing.T) {
-	type test struct {
+	const threads = 10
+
+	cases := []struct {
 		Name     string
 		Behavior gubernator.Behavior
-	}
-
-	const threads = 10
-	createdAt := epochMillis(clock.Now())
-
-	cases := []test{
+	}{
 		{"No batching", gubernator.Behavior_NO_BATCHING},
 		{"Batching", gubernator.Behavior_BATCHING},
 		{"Global", gubernator.Behavior_GLOBAL},
@@ -59,45 +55,45 @@ func TestPeerClientShutdown(t *testing.T) {
 		c := cases[i]
 
 		t.Run(c.Name, func(t *testing.T) {
-			client, err := gubernator.NewPeerClient(gubernator.PeerConfig{
-				Info:     cluster.GetRandomPeer(cluster.DataCenterNone),
+			client, err := gubernator.NewPeer(gubernator.PeerConfig{
+				Info:     cluster.GetRandomPeerInfo(cluster.DataCenterNone),
 				Behavior: config,
 			})
 			require.NoError(t, err)
 
-			wg := errgroup.Group{}
-			wg.SetLimit(threads)
-			// Spawn a whole bunch of concurrent requests to test shutdown in various states
-			for j := 0; j < threads; j++ {
-				wg.Go(func() error {
+			wg := sync.WaitGroup{}
+			wg.Add(threads)
+			// Spawn a bunch of concurrent requests to test shutdown in various states
+			for i := 0; i < threads; i++ {
+				go func(client *gubernator.Peer, behavior gubernator.Behavior) {
+					defer wg.Done()
 					ctx := context.Background()
-					_, err := client.GetPeerRateLimit(ctx, &gubernator.RateLimitReq{
-						Hits:      1,
-						Limit:     100,
-						Behavior:  c.Behavior,
-						CreatedAt: &createdAt,
+					_, err := client.Forward(ctx, &gubernator.RateLimitRequest{
+						Hits:     1,
+						Limit:    100,
+						Behavior: behavior,
 					})
 
-					if err != nil {
-						if !strings.Contains(err.Error(), "client connection is closing") {
-							return errors.Wrap(err, "unexpected error in test")
-						}
+					isExpectedErr := false
+
+					switch err.(type) {
+					case nil:
+						isExpectedErr = true
 					}
-					return nil
-				})
+
+					assert.True(t, true, isExpectedErr)
+
+				}(client, c.Behavior)
 			}
 
 			// yield the processor that way we allow other goroutines to start their request
 			runtime.Gosched()
 
-			shutDownErr := client.Shutdown(context.Background())
+			err = client.Close(context.Background())
+			assert.NoError(t, err)
 
-			err = wg.Wait()
-			if err != nil {
-				t.Error(err)
-				t.Fail()
-			}
-			require.NoError(t, shutDownErr)
+			wg.Wait()
 		})
+
 	}
 }

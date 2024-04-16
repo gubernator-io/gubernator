@@ -28,23 +28,23 @@ import (
 // globalManager manages async hit queue and updates peers in
 // the cluster periodically when a global rate limit we own updates.
 type globalManager struct {
-	hitsQueue                   chan *RateLimitReq
-	broadcastQueue              chan *RateLimitReq
+	hitsQueue                   chan *RateLimitRequest
+	broadcastQueue              chan *RateLimitRequest
 	wg                          syncutil.WaitGroup
 	conf                        BehaviorConfig
 	log                         FieldLogger
-	instance                    *V1Instance // TODO circular import? V1Instance also holds a reference to globalManager
+	instance                    *Service
 	metricGlobalSendDuration    prometheus.Summary
 	metricGlobalSendQueueLength prometheus.Gauge
 	metricBroadcastDuration     prometheus.Summary
 	metricGlobalQueueLength     prometheus.Gauge
 }
 
-func newGlobalManager(conf BehaviorConfig, instance *V1Instance) *globalManager {
+func newGlobalManager(conf BehaviorConfig, instance *Service) *globalManager {
 	gm := globalManager{
 		log:            instance.log,
-		hitsQueue:      make(chan *RateLimitReq, conf.GlobalBatchLimit),
-		broadcastQueue: make(chan *RateLimitReq, conf.GlobalBatchLimit),
+		hitsQueue:      make(chan *RateLimitRequest, conf.GlobalBatchLimit),
+		broadcastQueue: make(chan *RateLimitRequest, conf.GlobalBatchLimit),
 		instance:       instance,
 		conf:           conf,
 		metricGlobalSendDuration: prometheus.NewSummary(prometheus.SummaryOpts{
@@ -71,13 +71,13 @@ func newGlobalManager(conf BehaviorConfig, instance *V1Instance) *globalManager 
 	return &gm
 }
 
-func (gm *globalManager) QueueHit(r *RateLimitReq) {
+func (gm *globalManager) QueueHit(r *RateLimitRequest) {
 	if r.Hits != 0 {
 		gm.hitsQueue <- r
 	}
 }
 
-func (gm *globalManager) QueueUpdate(req *RateLimitReq) {
+func (gm *globalManager) QueueUpdate(req *RateLimitRequest) {
 	if req.Hits != 0 {
 		gm.broadcastQueue <- req
 	}
@@ -90,7 +90,7 @@ func (gm *globalManager) QueueUpdate(req *RateLimitReq) {
 // and in a periodic frequency determined by GlobalSyncWait.
 func (gm *globalManager) runAsyncHits() {
 	var interval = NewInterval(gm.conf.GlobalSyncWait)
-	hits := make(map[string]*RateLimitReq)
+	hits := make(map[string]*RateLimitRequest)
 
 	gm.wg.Until(func(done chan struct{}) bool {
 
@@ -114,7 +114,7 @@ func (gm *globalManager) runAsyncHits() {
 			// Send the hits if we reached our batch limit
 			if len(hits) == gm.conf.GlobalBatchLimit {
 				gm.sendHits(hits)
-				hits = make(map[string]*RateLimitReq)
+				hits = make(map[string]*RateLimitRequest)
 				gm.metricGlobalSendQueueLength.Set(0)
 				return true
 			}
@@ -128,7 +128,7 @@ func (gm *globalManager) runAsyncHits() {
 		case <-interval.C:
 			if len(hits) != 0 {
 				gm.sendHits(hits)
-				hits = make(map[string]*RateLimitReq)
+				hits = make(map[string]*RateLimitRequest)
 				gm.metricGlobalSendQueueLength.Set(0)
 			}
 		case <-done:
@@ -141,10 +141,10 @@ func (gm *globalManager) runAsyncHits() {
 
 // sendHits takes the hits collected by runAsyncHits and sends them to their
 // owning peers
-func (gm *globalManager) sendHits(hits map[string]*RateLimitReq) {
+func (gm *globalManager) sendHits(hits map[string]*RateLimitRequest) {
 	type pair struct {
-		client *PeerClient
-		req    GetPeerRateLimitsReq
+		client *Peer
+		req    ForwardRequest
 	}
 	defer prometheus.NewTimer(gm.metricGlobalSendDuration).ObserveDuration()
 	peerRequests := make(map[string]*pair)
@@ -156,13 +156,13 @@ func (gm *globalManager) sendHits(hits map[string]*RateLimitReq) {
 			gm.log.WithError(err).Errorf("while getting peer for hash key '%s'", r.HashKey())
 			continue
 		}
-		p, ok := peerRequests[peer.Info().GRPCAddress]
+		p, ok := peerRequests[peer.Info().HTTPAddress]
 		if ok {
 			p.req.Requests = append(p.req.Requests, r)
 		} else {
-			peerRequests[peer.Info().GRPCAddress] = &pair{
+			peerRequests[peer.Info().HTTPAddress] = &pair{
 				client: peer,
-				req:    GetPeerRateLimitsReq{Requests: []*RateLimitReq{r}},
+				req:    ForwardRequest{Requests: []*RateLimitRequest{r}},
 			}
 		}
 	}
@@ -173,12 +173,13 @@ func (gm *globalManager) sendHits(hits map[string]*RateLimitReq) {
 		fan.Run(func(in interface{}) error {
 			p := in.(*pair)
 			ctx, cancel := context.WithTimeout(context.Background(), gm.conf.GlobalTimeout)
-			_, err := p.client.GetPeerRateLimits(ctx, &p.req)
+			var resp ForwardResponse
+			err := p.client.ForwardBatch(ctx, &p.req, &resp)
 			cancel()
 
 			if err != nil {
 				gm.log.WithError(err).
-					Errorf("while sending global hits to '%s'", p.client.Info().GRPCAddress)
+					Errorf("while sending global hits to '%s'", p.client.Info().HTTPAddress)
 			}
 			return nil
 		}, p)
@@ -192,7 +193,7 @@ func (gm *globalManager) sendHits(hits map[string]*RateLimitReq) {
 // and in a periodic frequency determined by GlobalSyncWait.
 func (gm *globalManager) runBroadcasts() {
 	var interval = NewInterval(gm.conf.GlobalSyncWait)
-	updates := make(map[string]*RateLimitReq)
+	updates := make(map[string]*RateLimitRequest)
 
 	gm.wg.Until(func(done chan struct{}) bool {
 		select {
@@ -203,7 +204,7 @@ func (gm *globalManager) runBroadcasts() {
 			// Send the hits if we reached our batch limit
 			if len(updates) >= gm.conf.GlobalBatchLimit {
 				gm.broadcastPeers(context.Background(), updates)
-				updates = make(map[string]*RateLimitReq)
+				updates = make(map[string]*RateLimitRequest)
 				gm.metricGlobalQueueLength.Set(0)
 				return true
 			}
@@ -219,7 +220,7 @@ func (gm *globalManager) runBroadcasts() {
 				break
 			}
 			gm.broadcastPeers(context.Background(), updates)
-			updates = make(map[string]*RateLimitReq)
+			updates = make(map[string]*RateLimitRequest)
 			gm.metricGlobalQueueLength.Set(0)
 
 		case <-done:
@@ -231,27 +232,28 @@ func (gm *globalManager) runBroadcasts() {
 }
 
 // broadcastPeers broadcasts global rate limit statuses to all other peers
-func (gm *globalManager) broadcastPeers(ctx context.Context, updates map[string]*RateLimitReq) {
+func (gm *globalManager) broadcastPeers(ctx context.Context, updates map[string]*RateLimitRequest) {
 	defer prometheus.NewTimer(gm.metricBroadcastDuration).ObserveDuration()
-	var req UpdatePeerGlobalsReq
-	reqState := RateLimitReqState{IsOwner: false}
+	var req UpdateRequest
+	reqState := RateLimitContext{IsOwner: false}
 
 	gm.metricGlobalQueueLength.Set(float64(len(updates)))
 
 	for _, update := range updates {
-		// Get current rate limit state.
-		grlReq := proto.Clone(update).(*RateLimitReq)
+		grlReq := proto.Clone(update).(*RateLimitRequest)
 		grlReq.Hits = 0
-		status, err := gm.instance.workerPool.GetRateLimit(ctx, grlReq, reqState)
+
+		// Get current rate limit state.
+		state, err := gm.instance.workerPool.GetRateLimit(ctx, grlReq, reqState)
 		if err != nil {
 			gm.log.WithError(err).Error("while retrieving rate limit status")
 			continue
 		}
-		updateReq := &UpdatePeerGlobal{
+		updateReq := &UpdateRateLimit{
 			Key:       update.HashKey(),
 			Algorithm: update.Algorithm,
 			Duration:  update.Duration,
-			Status:    status,
+			State:     state,
 			CreatedAt: *update.CreatedAt,
 		}
 		req.Globals = append(req.Globals, updateReq)
@@ -265,15 +267,15 @@ func (gm *globalManager) broadcastPeers(ctx context.Context, updates map[string]
 		}
 
 		fan.Run(func(in interface{}) error {
-			peer := in.(*PeerClient)
+			peer := in.(*Peer)
 			ctx, cancel := context.WithTimeout(ctx, gm.conf.GlobalTimeout)
-			_, err := peer.UpdatePeerGlobals(ctx, &req)
+			err := peer.Update(ctx, &req)
 			cancel()
 
 			if err != nil {
 				// Only log if it's an unknown error
 				if !errors.Is(err, context.Canceled) && errors.Is(err, context.DeadlineExceeded) {
-					gm.log.WithError(err).Errorf("while broadcasting global updates to '%s'", peer.Info().GRPCAddress)
+					gm.log.WithError(err).Errorf("while broadcasting global updates to '%s'", peer.Info().HTTPAddress)
 				}
 			}
 			return nil
@@ -286,6 +288,6 @@ func (gm *globalManager) broadcastPeers(ctx context.Context, updates map[string]
 func (gm *globalManager) Close() {
 	gm.wg.Stop()
 	for _, peer := range gm.instance.GetPeerList() {
-		_ = peer.Shutdown(context.Background())
+		_ = peer.Close(context.Background())
 	}
 }
