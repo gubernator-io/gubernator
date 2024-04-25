@@ -399,6 +399,9 @@ func SetupDaemonConfig(logger *logrus.Logger, configFile io.Reader) (DaemonConfi
 	setter.SetDefault(&conf.MemberListPoolConf.MemberListAddress, os.Getenv("GUBER_MEMBERLIST_ADDRESS"), fmt.Sprintf("%s:7946", advAddr))
 	setter.SetDefault(&conf.MemberListPoolConf.KnownNodes, getEnvSlice("GUBER_MEMBERLIST_KNOWN_NODES"), []string{})
 	setter.SetDefault(&conf.MemberListPoolConf.Advertise.DataCenter, conf.DataCenter)
+	setter.SetDefault(&conf.MemberListPoolConf.EncryptionConfig.SecretKeys, getEnvSlice("GUBER_MEMBERLIST_SECRET_KEYS"), []string{})
+	setter.SetDefault(&conf.MemberListPoolConf.EncryptionConfig.GossipVerifyIncoming, getEnvBool(log, "GUBER_MEMBERLIST_GOSSIP_VERIFY_INCOMING"), true)
+	setter.SetDefault(&conf.MemberListPoolConf.EncryptionConfig.GossipVerifyOutgoing, getEnvBool(log, "GUBER_MEMBERLIST_GOSSIP_VERIFY_OUTGOING"), true)
 
 	// Kubernetes Config
 	setter.SetDefault(&conf.K8PoolConf.Namespace, os.Getenv("GUBER_K8S_NAMESPACE"), "default")

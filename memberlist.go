@@ -20,12 +20,14 @@ import (
 	"bufio"
 	"bytes"
 	"context"
+	"encoding/base64"
 	"encoding/gob"
 	"encoding/json"
 	"io"
 	"net"
 	"runtime"
 	"strconv"
+	"strings"
 
 	ml "github.com/hashicorp/memberlist"
 	"github.com/mailgun/holster/v4/clock"
@@ -63,6 +65,25 @@ type MemberListPoolConfig struct {
 
 	// (Optional) An interface through which logging will occur (Usually *logrus.Entry)
 	Logger FieldLogger
+
+	// (Optional) The encryption settings used for memberlist.
+	EncryptionConfig MemberListEncryptionConfig
+}
+
+type MemberListEncryptionConfig struct {
+	// (Required) A list of base64 encoded keys. Each key should be either 16, 24, or 32 bytes
+	// when decoded to select AES-128, AES-192, or AES-256 respectively.
+	// The first key in the list will be used for encrypting outbound messages. All keys are
+	// attempted when decrypting gossip, which allows for rotations.
+	SecretKeys []string `json:"secret-keys"`
+	// (Optional) Defaults to true. Controls whether to enforce encryption for incoming
+	// gossip. It is used for upshifting from unencrypted to encrypted gossip on
+	// a running cluster.
+	GossipVerifyIncoming bool `json:"gossip-verify-incoming"`
+	// (Optional) Defaults to true. Controls whether to enforce encryption for outgoing
+	// gossip. It is used for upshifting from unencrypted to encrypted gossip on
+	// a running cluster.
+	GossipVerifyOutgoing bool `json:"gossip-verify-outgoing"`
 }
 
 func NewMemberListPool(ctx context.Context, conf MemberListPoolConfig) (*MemberListPool, error) {
@@ -97,6 +118,27 @@ func NewMemberListPool(ctx context.Context, conf MemberListPoolConfig) (*MemberL
 	config.Events = m.events
 	config.AdvertiseAddr = host
 	config.AdvertisePort = port
+
+	// Enable gossip encryption if a key is defined.
+	if len(conf.EncryptionConfig.SecretKeys) > 0 {
+		config.GossipVerifyIncoming = conf.EncryptionConfig.GossipVerifyIncoming
+		config.GossipVerifyOutgoing = conf.EncryptionConfig.GossipVerifyOutgoing
+		config.Keyring = &ml.Keyring{}
+		for i, key := range conf.EncryptionConfig.SecretKeys {
+			secret, err := base64.StdEncoding.DecodeString(strings.TrimSpace(key))
+			if err != nil {
+				return nil, errors.Wrapf(err, "unable to base64 decode memberlist encryption key at index %d", i)
+			}
+			err = config.Keyring.AddKey(secret)
+			if err != nil {
+				return nil, errors.Wrapf(err, "unable to add secret key at index %d to memberlist", i)
+			}
+			// Set the first key as the default for encrypting outbound messages.
+			if i == 0 {
+				config.SecretKey = secret
+			}
+		}
+	}
 
 	if conf.NodeName != "" {
 		config.Name = conf.NodeName
