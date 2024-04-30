@@ -56,7 +56,7 @@ func DialV1Server(server string, tls *tls.Config) (V1Client, error) {
 		opts = append(opts, grpc.WithTransportCredentials(insecure.NewCredentials()))
 	}
 
-	conn, err := grpc.Dial(server, opts...)
+	conn, err := grpc.NewClient(server, opts...)
 	if err != nil {
 		return nil, errors.Wrapf(err, "failed to dial server %s", server)
 	}

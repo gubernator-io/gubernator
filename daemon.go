@@ -435,7 +435,7 @@ func (s *Daemon) Client() (V1Client, error) {
 		return s.client, nil
 	}
 
-	conn, err := grpc.DialContext(context.Background(),
+	conn, err := grpc.NewClient(
 		fmt.Sprintf("static:///%s", s.PeerInfo.GRPCAddress),
 		grpc.WithResolvers(NewStaticBuilder()),
 		grpc.WithTransportCredentials(insecure.NewCredentials()))
