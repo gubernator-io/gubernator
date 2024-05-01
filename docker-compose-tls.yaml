@@ -9,6 +9,7 @@ services:
       - GUBER_HTTP_ADDRESS=0.0.0.0:80
       - GUBER_ADVERTISE_ADDRESS=gubernator-1:81
       - GUBER_MEMBERLIST_KNOWN_NODES=gubernator-1
+      - GUBER_MEMBERLIST_SECRET_KEYS=eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHg=
       # TLS config
       - GUBER_TLS_CA=/etc/tls/ca.pem
       - GUBER_TLS_KEY=/etc/tls/gubernator.key
@@ -29,6 +30,7 @@ services:
       - GUBER_HTTP_ADDRESS=0.0.0.0:80
       - GUBER_ADVERTISE_ADDRESS=gubernator-2:81
       - GUBER_MEMBERLIST_KNOWN_NODES=gubernator-1
+      - GUBER_MEMBERLIST_SECRET_KEYS=eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHg=
       # TLS config
       - GUBER_TLS_CA=/etc/tls/ca.pem
       - GUBER_TLS_KEY=/etc/tls/gubernator.key
@@ -49,6 +51,7 @@ services:
       - GUBER_HTTP_ADDRESS=0.0.0.0:80
       - GUBER_ADVERTISE_ADDRESS=gubernator-3:81
       - GUBER_MEMBERLIST_KNOWN_NODES=gubernator-1
+      - GUBER_MEMBERLIST_SECRET_KEYS=eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHg=
       # TLS config
       - GUBER_TLS_CA=/etc/tls/ca.pem
       - GUBER_TLS_KEY=/etc/tls/gubernator.key
@@ -70,6 +73,7 @@ services:
       - GUBER_HTTP_ADDRESS=0.0.0.0:80
       - GUBER_ADVERTISE_ADDRESS=gubernator-4:81
       - GUBER_MEMBERLIST_KNOWN_NODES=gubernator-1
+      - GUBER_MEMBERLIST_SECRET_KEYS=eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHg=
       # TLS config
       - GUBER_TLS_CA=/etc/tls/ca.pem
       - GUBER_TLS_KEY=/etc/tls/gubernator.key
