@@ -1032,7 +1032,6 @@ func TestGlobalRateLimits(t *testing.T) {
 // Ensure global broadcast updates all peers when GetRateLimits is called on
 // either owner or non-owner peer.
 func TestGlobalRateLimitsWithLoadBalancing(t *testing.T) {
-	ctx := context.Background()
 	name := t.Name()
 	key := guber.RandomString(10)
 
@@ -1050,7 +1049,7 @@ func TestGlobalRateLimitsWithLoadBalancing(t *testing.T) {
 		grpc.WithDefaultServiceConfig(`{"loadBalancingConfig": [{"round_robin":{}}]}`),
 	}
 	address := fmt.Sprintf("static:///%s,%s", owner.PeerInfo.GRPCAddress, nonOwner.PeerInfo.GRPCAddress)
-	conn, err := grpc.DialContext(ctx, address, dialOpts...)
+	conn, err := grpc.NewClient(address, dialOpts...)
 	require.NoError(t, err)
 	client := guber.NewV1Client(conn)
 

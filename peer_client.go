@@ -103,7 +103,7 @@ func NewPeerClient(conf PeerConfig) (*PeerClient, error) {
 	}
 
 	var err error
-	peerClient.conn, err = grpc.Dial(conf.Info.GRPCAddress, opts...)
+	peerClient.conn, err = grpc.NewClient(conf.Info.GRPCAddress, opts...)
 	if err != nil {
 		return nil, err
 	}
