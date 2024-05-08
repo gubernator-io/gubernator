@@ -2,6 +2,7 @@ package bench
 
 import (
 	"context"
+	"fmt"
 	"math/rand"
 	"runtime"
 	"sync"
@@ -11,9 +12,7 @@ import (
 	"github.com/gubernator-io/gubernator/v2"
 )
 
-func OtterReadParallel(b *testing.B, processors int) {
-	runtime.GOMAXPROCS(processors)
-
+func OtterPreLoad(name string, keys []string) (*gubernator.WorkerOtter, error) {
 	l := &MockLoader{}
 	p := gubernator.NewWorkerOtter(gubernator.Config{
 		CacheSize: cacheSize * 1_000_000,
@@ -24,25 +23,40 @@ func OtterReadParallel(b *testing.B, processors int) {
 
 	// Prefill the cache
 	createdAt := time.Now().UnixNano() / 1_000_000
-	keys := GenerateRandomKeys()
 	for _, k := range keys {
 		_, err := p.GetRateLimit(ctx, &gubernator.RateLimitReq{
 			CreatedAt: &createdAt,
-			Name:      b.Name(),
+			Name:      name,
 			UniqueKey: k,
 		}, gubernator.RateLimitReqState{})
 		if err != nil {
-			b.Fatal(err)
+			return nil, err
 		}
 	}
 
 	if err := p.Store(ctx); err != nil {
-		b.Fatal(err)
+		return nil, err
 	}
 
 	if l.Count != cacheSize {
-		b.Fatal("item count in pool does not match expected size")
+		return nil, fmt.Errorf("item count '%d' in pool does not match expected size of '%d'", l.Count, cacheSize)
 	}
+
+	return p, nil
+}
+
+func OtterReadParallel(b *testing.B, processors int) {
+	runtime.GOMAXPROCS(processors)
+
+	keys := GenerateRandomKeys()
+	createdAt := time.Now().UnixNano() / 1_000_000
+	p, err := OtterPreLoad(b.Name(), keys)
+	if err != nil {
+		b.Fatal(err)
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second*10)
+	defer cancel()
 
 	mask := len(keys) - 1
 	start := time.Now()

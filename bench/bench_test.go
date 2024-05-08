@@ -21,41 +21,41 @@ BenchmarkParallel/NoCache_1-10         	 4955510       246.4 ns/op	   4058316 op
 
 func BenchmarkParallel(b *testing.B) {
 	fmt.Printf("Current Operating System has '%d' CPUs\n", runtime.NumCPU())
-	for _, p := range []int{1, 2, 4, 8, 12, 16, 20, 24, 28, 32} {
-		b.Run(fmt.Sprintf("NoCache_%d", p), func(b *testing.B) {
-			bench.NoCacheParallel(b, p)
-		})
-	}
-	for _, p := range []int{1, 2, 4, 8, 12, 16, 20, 24, 28, 32} {
-		b.Run(fmt.Sprintf("MutexRead_%d", p), func(b *testing.B) {
-			bench.MutexReadParallel(b, p)
-		})
-	}
-	for _, p := range []int{1, 2, 4, 8, 12, 16, 20, 24, 28, 32} {
-		b.Run(fmt.Sprintf("MutexWrite_%d", p), func(b *testing.B) {
-			bench.MutexWriteParallel(b, p)
-		})
-	}
+	//for _, p := range []int{1, 2, 4, 8, 12, 16, 20, 24, 28, 32} {
+	//	b.Run(fmt.Sprintf("NoCache_%d", p), func(b *testing.B) {
+	//		bench.NoCacheParallel(b, p)
+	//	})
+	//}
+	//for _, p := range []int{1, 2, 4, 8, 12, 16, 20, 24, 28, 32} {
+	//	b.Run(fmt.Sprintf("MutexRead_%d", p), func(b *testing.B) {
+	//		bench.MutexReadParallel(b, p)
+	//	})
+	//}
+	//for _, p := range []int{1, 2, 4, 8, 12, 16, 20, 24, 28, 32} {
+	//	b.Run(fmt.Sprintf("MutexWrite_%d", p), func(b *testing.B) {
+	//		bench.MutexWriteParallel(b, p)
+	//	})
+	//}
 	for _, p := range []int{1, 2, 4, 8, 12, 16, 20, 24, 28, 32} {
 		b.Run(fmt.Sprintf("OtterRead_%d", p), func(b *testing.B) {
 			bench.OtterReadParallel(b, p)
 		})
 	}
-	for _, p := range []int{1, 2, 4, 8, 12, 16, 20, 24, 28, 32} {
-		b.Run(fmt.Sprintf("OtterWrite_%d", p), func(b *testing.B) {
-			bench.OtterWriteParallel(b, p)
-		})
-	}
-	for _, p := range []int{1, 2, 4, 8, 12, 16, 20, 24, 28, 32} {
-		b.Run(fmt.Sprintf("WorkerPoolRead_%d", p), func(b *testing.B) {
-			bench.WorkerPoolReadParallel(b, p)
-		})
-	}
-	for _, p := range []int{1, 2, 4, 8, 12, 16, 20, 24, 28, 32} {
-		b.Run(fmt.Sprintf("WorkerPoolWrite_%d", p), func(b *testing.B) {
-			bench.WorkerPoolWriteParallel(b, p)
-		})
-	}
+	//for _, p := range []int{1, 2, 4, 8, 12, 16, 20, 24, 28, 32} {
+	//	b.Run(fmt.Sprintf("OtterWrite_%d", p), func(b *testing.B) {
+	//		bench.OtterWriteParallel(b, p)
+	//	})
+	//}
+	//for _, p := range []int{1, 2, 4, 8, 12, 16, 20, 24, 28, 32} {
+	//	b.Run(fmt.Sprintf("WorkerPoolRead_%d", p), func(b *testing.B) {
+	//		bench.WorkerPoolReadParallel(b, p)
+	//	})
+	//}
+	//for _, p := range []int{1, 2, 4, 8, 12, 16, 20, 24, 28, 32} {
+	//	b.Run(fmt.Sprintf("WorkerPoolWrite_%d", p), func(b *testing.B) {
+	//		bench.WorkerPoolWriteParallel(b, p)
+	//	})
+	//}
 }
 
 //func BenchmarkConcurrency(b *testing.B) {
