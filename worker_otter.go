@@ -15,7 +15,7 @@ type WorkerOtter struct {
 
 // NewWorkerOtter creates a new singleton using the otter cache.
 func NewWorkerOtter(conf Config) *WorkerOtter {
-	fmt.Println("NewWorkerOtter")
+	fmt.Println("NewWorkerOtter()")
 	cache, err := NewOtterCache(conf.CacheSize)
 	if err != nil {
 		panic(err)

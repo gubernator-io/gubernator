@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"runtime"
 	"testing"
+	"time"
 
 	"github.com/gubernator-io/gubernator/v2/bench"
 )
@@ -36,9 +37,17 @@ func BenchmarkParallel(b *testing.B) {
 	//		bench.MutexWriteParallel(b, p)
 	//	})
 	//}
+
+	k := bench.GenerateRandomKeys()
+	c := time.Now().UnixNano() / 1_000_000
+	w, err := bench.OtterPreLoad(b.Name(), k)
+	if err != nil {
+		b.Fatal(err)
+	}
+
 	for _, p := range []int{1, 2, 4, 8, 12, 16, 20, 24, 28, 32} {
 		b.Run(fmt.Sprintf("OtterRead_%d", p), func(b *testing.B) {
-			bench.OtterReadParallel(b, p)
+			bench.OtterReadParallel(b, p, w, &c, k)
 		})
 	}
 	//for _, p := range []int{1, 2, 4, 8, 12, 16, 20, 24, 28, 32} {

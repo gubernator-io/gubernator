@@ -45,15 +45,10 @@ func OtterPreLoad(name string, keys []string) (*gubernator.WorkerOtter, error) {
 	return p, nil
 }
 
-func OtterReadParallel(b *testing.B, processors int) {
-	runtime.GOMAXPROCS(processors)
+func OtterReadParallel(b *testing.B, processors int,
+	otter *gubernator.WorkerOtter, createdAt *int64, keys []string) {
 
-	keys := GenerateRandomKeys()
-	createdAt := time.Now().UnixNano() / 1_000_000
-	p, err := OtterPreLoad(b.Name(), keys)
-	if err != nil {
-		b.Fatal(err)
-	}
+	runtime.GOMAXPROCS(processors)
 
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second*10)
 	defer cancel()
@@ -66,8 +61,8 @@ func OtterReadParallel(b *testing.B, processors int) {
 		index := int(rand.Uint32() & uint32(mask))
 
 		for pb.Next() {
-			_, err := p.GetRateLimit(ctx, &gubernator.RateLimitReq{
-				CreatedAt: &createdAt,
+			_, err := otter.GetRateLimit(ctx, &gubernator.RateLimitReq{
+				CreatedAt: createdAt,
 				UniqueKey: keys[index&mask],
 				Name:      b.Name(),
 			}, gubernator.RateLimitReqState{})
