@@ -46,7 +46,7 @@ type Service struct {
 	propagator propagation.TraceContext
 	global     *globalManager
 	peerMutex  sync.RWMutex
-	workerPool *WorkerPool
+	cache      CacheManager
 	log        FieldLogger
 	conf       Config
 	isClosed   bool
@@ -83,14 +83,6 @@ var (
 		Name: "gubernator_check_error_counter",
 		Help: "The number of errors while checking rate limits.",
 	}, []string{"error"})
-	metricCommandCounter = prometheus.NewCounterVec(prometheus.CounterOpts{
-		Name: "gubernator_command_counter",
-		Help: "The count of commands processed by each worker in WorkerPool.",
-	}, []string{"worker", "method"})
-	metricWorkerQueue = prometheus.NewGaugeVec(prometheus.GaugeOpts{
-		Name: "gubernator_worker_queue_length",
-		Help: "The count of requests queued up in WorkerPool.",
-	}, []string{"method", "worker"})
 
 	// Batch behavior.
 	metricBatchSendRetries = prometheus.NewCounterVec(prometheus.CounterOpts{
@@ -123,7 +115,10 @@ func NewService(conf Config) (s *Service, err error) {
 		conf: conf,
 	}
 
-	s.workerPool = NewWorkerPool(&conf)
+	s.cache, err = NewCacheManager(conf)
+	if err != nil {
+		return nil, fmt.Errorf("during NewCacheManager(): %w", err)
+	}
 	s.global = newGlobalManager(conf.Behaviors, s)
 
 	if s.conf.Loader == nil {
@@ -131,9 +126,9 @@ func NewService(conf Config) (s *Service, err error) {
 	}
 
 	// Load the cache.
-	err = s.workerPool.Load(ctx)
+	err = s.cache.Load(ctx)
 	if err != nil {
-		return nil, fmt.Errorf("error in workerPool.Load: %w", err)
+		return nil, fmt.Errorf("error in CacheManager.Load: %w", err)
 	}
 
 	return s, nil
@@ -147,19 +142,19 @@ func (s *Service) Close(ctx context.Context) (err error) {
 	s.global.Close()
 
 	if s.conf.Loader != nil {
-		err = s.workerPool.Store(ctx)
+		err = s.cache.Store(ctx)
 		if err != nil {
 			s.log.WithError(err).
 				Error("Error in workerPool.Store")
-			return fmt.Errorf("error in workerPool.Store: %w", err)
+			return fmt.Errorf("error in CacheManager.Store: %w", err)
 		}
 	}
 
-	err = s.workerPool.Close()
+	err = s.cache.Close()
 	if err != nil {
 		s.log.WithError(err).
 			Error("Error in workerPool.Close")
-		return fmt.Errorf("error in workerPool.Close: %w", err)
+		return fmt.Errorf("error in CacheManager.Close: %w", err)
 	}
 
 	// Close all the peer clients
@@ -424,13 +419,26 @@ func (s *Service) Update(ctx context.Context, r *UpdateRequest, resp *v1.Reply) 
 	defer func() { tracing.EndScope(ctx, err) }()
 
 	now := MillisecondNow()
+
 	for _, g := range r.Globals {
-		item := &CacheItem{
-			ExpireAt:  g.State.ResetTime,
-			Algorithm: g.Algorithm,
-			Key:       g.Key,
+		item, _, err := s.cache.GetCacheItem(ctx, g.Key)
+		if err != nil {
+			return nil, err
 		}
 
+		if item == nil {
+			item = &CacheItem{
+				ExpireAt:  g.Status.ResetTime,
+				Algorithm: g.Algorithm,
+				Key:       g.Key,
+			}
+			err := s.cache.AddCacheItem(ctx, g.Key, item)
+			if err != nil {
+				return nil, fmt.Errorf("during CacheManager.AddCacheItem(): %w", err)
+			}
+		}
+
+		item.mutex.Lock()
 		switch g.Algorithm {
 		case Algorithm_LEAKY_BUCKET:
 			item.Value = &LeakyBucketItem{
@@ -449,14 +457,9 @@ func (s *Service) Update(ctx context.Context, r *UpdateRequest, resp *v1.Reply) 
 				CreatedAt: now,
 			}
 		}
-		err := s.workerPool.AddCacheItem(ctx, g.Key, item)
-		if err != nil {
-			return fmt.Errorf("error in workerPool.AddCacheItem: %w", err)
-		}
+		item.mutex.Unlock()
 	}
-
-	resp.Code = duh.CodeOK
-	return nil
+	return &UpdatePeerGlobalsResp{}, nil
 }
 
 // Forward is called by other peers when forwarding rate limits to this peer
@@ -583,9 +586,9 @@ func (s *Service) checkLocalRateLimit(ctx context.Context, r *RateLimitRequest, 
 	defer func() { tracing.EndScope(ctx, err) }()
 	defer prometheus.NewTimer(metricFuncTimeDuration.WithLabelValues("Service.checkLocalRateLimit")).ObserveDuration()
 
-	resp, err := s.workerPool.GetRateLimit(ctx, r, reqState)
+	resp, err := s.cache.GetRateLimit(ctx, r, reqState)
 	if err != nil {
-		return nil, fmt.Errorf("during workerPool.GetRateLimit: %w", err)
+		return nil, fmt.Errorf("during CacheManager.GetRateLimit: %w", err)
 	}
 
 	// If global behavior, then broadcast update to all peers.
@@ -738,12 +741,10 @@ func (s *Service) Describe(ch chan<- *prometheus.Desc) {
 	metricBatchSendDuration.Describe(ch)
 	metricBatchSendRetries.Describe(ch)
 	metricCheckErrorCounter.Describe(ch)
-	metricCommandCounter.Describe(ch)
 	metricConcurrentChecks.Describe(ch)
 	metricFuncTimeDuration.Describe(ch)
 	metricGetRateLimitCounter.Describe(ch)
 	metricOverLimitCounter.Describe(ch)
-	metricWorkerQueue.Describe(ch)
 	s.global.metricBroadcastDuration.Describe(ch)
 	s.global.metricGlobalQueueLength.Describe(ch)
 	s.global.metricGlobalSendDuration.Describe(ch)
@@ -756,12 +757,10 @@ func (s *Service) Collect(ch chan<- prometheus.Metric) {
 	metricBatchSendDuration.Collect(ch)
 	metricBatchSendRetries.Collect(ch)
 	metricCheckErrorCounter.Collect(ch)
-	metricCommandCounter.Collect(ch)
 	metricConcurrentChecks.Collect(ch)
 	metricFuncTimeDuration.Collect(ch)
 	metricGetRateLimitCounter.Collect(ch)
 	metricOverLimitCounter.Collect(ch)
-	metricWorkerQueue.Collect(ch)
 	s.global.metricBroadcastDuration.Collect(ch)
 	s.global.metricGlobalQueueLength.Collect(ch)
 	s.global.metricGlobalSendDuration.Collect(ch)

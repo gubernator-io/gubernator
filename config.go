@@ -79,7 +79,7 @@ type Config struct {
 	Behaviors BehaviorConfig
 
 	// (Optional) The cache implementation
-	CacheFactory func(maxSize int) Cache
+	CacheFactory func(maxSize int) (Cache, error)
 
 	// (Optional) A persistent store implementation. Allows the implementor the ability to store the rate limits this
 	// instance of gubernator owns. It's up to the implementor to decide what rate limits to persist.
@@ -142,8 +142,8 @@ func (c *Config) SetDefaults() error {
 	setter.SetDefault(&c.Logger, logrus.New().WithField("category", "gubernator"))
 
 	if c.CacheFactory == nil {
-		c.CacheFactory = func(maxSize int) Cache {
-			return NewLRUCache(maxSize)
+		c.CacheFactory = func(maxSize int) (Cache, error) {
+			return NewOtterCache(maxSize)
 		}
 	}
 
@@ -271,6 +271,9 @@ type DaemonConfig struct {
 
 	// (Optional) EventChannel receives hit events
 	EventChannel chan<- HitEvent
+
+	// (Optional) CacheProvider specifies which cache implementation to store rate limits in
+	CacheProvider string
 }
 
 func (d *DaemonConfig) ClientTLS() *tls.Config {
@@ -438,7 +441,10 @@ func SetupDaemonConfig(logger *logrus.Logger, configFile io.Reader) (DaemonConfi
 	setter.SetDefault(&conf.DNSPoolConf.ResolvConf, os.Getenv("GUBER_RESOLV_CONF"), "/etc/resolv.conf")
 	setter.SetDefault(&conf.DNSPoolConf.OwnAddress, conf.AdvertiseAddress)
 
+	setter.SetDefault(&conf.CacheProvider, os.Getenv("GUBER_CACHE_PROVIDER"), "default-lru")
+
 	// PeerPicker Config
+	// TODO: Deprecated: Remove in GUBER_PEER_PICKER in v3
 	if pp := os.Getenv("GUBER_PEER_PICKER"); pp != "" {
 		var replicas int
 		var hash string

@@ -1,160 +1,189 @@
 package gubernator_test
 
 import (
-	"strconv"
+	"math/rand"
 	"sync"
 	"testing"
 	"time"
 
 	"github.com/gubernator-io/gubernator/v3"
 	"github.com/mailgun/holster/v4/clock"
+	"github.com/stretchr/testify/require"
 )
 
 func BenchmarkCache(b *testing.B) {
+	const defaultNumKeys = 8192
 	testCases := []struct {
 		Name         string
-		NewTestCache func() gubernator.Cache
+		NewTestCache func() (gubernator.Cache, error)
 		LockRequired bool
 	}{
 		{
 			Name: "LRUCache",
-			NewTestCache: func() gubernator.Cache {
-				return gubernator.NewLRUCache(0)
+			NewTestCache: func() (gubernator.Cache, error) {
+				return gubernator.NewLRUCache(0), nil
 			},
 			LockRequired: true,
+		},
+		{
+			Name: "LRUMutexCache",
+			NewTestCache: func() (gubernator.Cache, error) {
+				return gubernator.NewLRUMutexCache(0), nil
+			},
+			LockRequired: true,
+		},
+		{
+			Name: "OtterCache",
+			NewTestCache: func() (gubernator.Cache, error) {
+				return gubernator.NewOtterCache(0)
+			},
+			LockRequired: false,
 		},
 	}
 
 	for _, testCase := range testCases {
 		b.Run(testCase.Name, func(b *testing.B) {
 			b.Run("Sequential reads", func(b *testing.B) {
-				cache := testCase.NewTestCache()
+				cache, err := testCase.NewTestCache()
+				require.NoError(b, err)
 				expire := clock.Now().Add(time.Hour).UnixMilli()
+				keys := GenerateRandomKeys(defaultNumKeys)
 
-				for i := 0; i < b.N; i++ {
-					key := strconv.Itoa(i)
+				for _, key := range keys {
 					item := &gubernator.CacheItem{
 						Key:      key,
-						Value:    i,
+						Value:    "value:" + key,
 						ExpireAt: expire,
 					}
-					cache.Add(item)
+					cache.AddIfNotPresent(item)
 				}
 
+				mask := len(keys) - 1
 				b.ReportAllocs()
 				b.ResetTimer()
 
 				for i := 0; i < b.N; i++ {
-					key := strconv.Itoa(i)
-					_, _ = cache.GetItem(key)
+					index := int(rand.Uint32() & uint32(mask))
+					_, _ = cache.GetItem(keys[index&mask])
 				}
 			})
 
 			b.Run("Sequential writes", func(b *testing.B) {
-				cache := testCase.NewTestCache()
+				cache, err := testCase.NewTestCache()
+				require.NoError(b, err)
 				expire := clock.Now().Add(time.Hour).UnixMilli()
+				keys := GenerateRandomKeys(defaultNumKeys)
 
+				mask := len(keys) - 1
 				b.ReportAllocs()
 				b.ResetTimer()
 
 				for i := 0; i < b.N; i++ {
+					index := int(rand.Uint32() & uint32(mask))
 					item := &gubernator.CacheItem{
-						Key:      strconv.Itoa(i),
-						Value:    i,
+						Key:      keys[index&mask],
+						Value:    "value:" + keys[index&mask],
 						ExpireAt: expire,
 					}
-					cache.Add(item)
+					cache.AddIfNotPresent(item)
 				}
 			})
 
 			b.Run("Concurrent reads", func(b *testing.B) {
-				cache := testCase.NewTestCache()
+				cache, err := testCase.NewTestCache()
+				require.NoError(b, err)
 				expire := clock.Now().Add(time.Hour).UnixMilli()
+				keys := GenerateRandomKeys(defaultNumKeys)
 
-				for i := 0; i < b.N; i++ {
-					key := strconv.Itoa(i)
+				for _, key := range keys {
 					item := &gubernator.CacheItem{
 						Key:      key,
-						Value:    i,
+						Value:    "value:" + key,
 						ExpireAt: expire,
 					}
-					cache.Add(item)
+					cache.AddIfNotPresent(item)
 				}
 
-				var wg sync.WaitGroup
 				var mutex sync.Mutex
-				var task func(i int)
+				var task func(key string)
 
 				if testCase.LockRequired {
-					task = func(i int) {
+					task = func(key string) {
 						mutex.Lock()
 						defer mutex.Unlock()
-						key := strconv.Itoa(i)
 						_, _ = cache.GetItem(key)
-						wg.Done()
 					}
 				} else {
-					task = func(i int) {
-						key := strconv.Itoa(i)
+					task = func(key string) {
 						_, _ = cache.GetItem(key)
-						wg.Done()
 					}
 				}
 
 				b.ReportAllocs()
 				b.ResetTimer()
 
-				for i := 0; i < b.N; i++ {
-					wg.Add(1)
-					go task(i)
-				}
+				mask := len(keys) - 1
 
-				wg.Wait()
+				b.RunParallel(func(pb *testing.PB) {
+					index := int(rand.Uint32() & uint32(mask))
+					for pb.Next() {
+						task(keys[index&mask])
+					}
+				})
+
 			})
 
 			b.Run("Concurrent writes", func(b *testing.B) {
-				cache := testCase.NewTestCache()
+				cache, err := testCase.NewTestCache()
+				require.NoError(b, err)
 				expire := clock.Now().Add(time.Hour).UnixMilli()
+				keys := GenerateRandomKeys(defaultNumKeys)
 
-				var wg sync.WaitGroup
 				var mutex sync.Mutex
-				var task func(i int)
+				var task func(key string)
 
 				if testCase.LockRequired {
-					task = func(i int) {
+					task = func(key string) {
 						mutex.Lock()
 						defer mutex.Unlock()
 						item := &gubernator.CacheItem{
-							Key:      strconv.Itoa(i),
-							Value:    i,
+							Key:      key,
+							Value:    "value:" + key,
 							ExpireAt: expire,
 						}
-						cache.Add(item)
-						wg.Done()
+						cache.AddIfNotPresent(item)
 					}
 				} else {
-					task = func(i int) {
+					task = func(key string) {
 						item := &gubernator.CacheItem{
-							Key:      strconv.Itoa(i),
-							Value:    i,
+							Key:      key,
+							Value:    "value:" + key,
 							ExpireAt: expire,
 						}
-						cache.Add(item)
-						wg.Done()
+						cache.AddIfNotPresent(item)
 					}
 				}
 
+				mask := len(keys) - 1
 				b.ReportAllocs()
 				b.ResetTimer()
 
-				for i := 0; i < b.N; i++ {
-					wg.Add(1)
-					go task(i)
-				}
-
-				wg.Wait()
+				b.RunParallel(func(pb *testing.PB) {
+					index := int(rand.Uint32() & uint32(mask))
+					for pb.Next() {
+						task(keys[index&mask])
+					}
+				})
 			})
 
 		})
 	}
+}
+
+func GenerateRandomKeys(size int) []string {
+	keys := make([]string, 0, size)
+	for i := 0; i < size; i++ {
+		keys = append(keys, gubernator.RandomString(20))
+	}
+	return keys
 }

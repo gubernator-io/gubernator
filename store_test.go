@@ -18,6 +18,9 @@ package gubernator_test
 
 import (
 	"context"
+	"fmt"
+	"net"
+	"sync"
 	"testing"
 
 	"github.com/gubernator-io/gubernator/v3"
@@ -81,6 +84,97 @@ func TestLoader(t *testing.T) {
 	assert.Equal(t, int64(2), item.Limit)
 	assert.Equal(t, int64(1), item.Remaining)
 	assert.Equal(t, gubernator.Status_UNDER_LIMIT, item.Status)
+}
+
+type NoOpStore struct{}
+
+func (ms *NoOpStore) Remove(ctx context.Context, key string) {}
+func (ms *NoOpStore) OnChange(ctx context.Context, r *gubernator.RateLimitReq, item *gubernator.CacheItem) {
+}
+
+func (ms *NoOpStore) Get(ctx context.Context, r *gubernator.RateLimitReq) (*gubernator.CacheItem, bool) {
+	return &gubernator.CacheItem{
+		Algorithm: gubernator.Algorithm_TOKEN_BUCKET,
+		Key:       r.HashKey(),
+		Value: gubernator.TokenBucketItem{
+			CreatedAt: gubernator.MillisecondNow(),
+			Duration:  gubernator.Minute * 60,
+			Limit:     1_000,
+			Remaining: 1_000,
+			Status:    0,
+		},
+		ExpireAt: 0,
+	}, true
+}
+
+// The goal of this test is to generate some race conditions where multiple routines load from the store and or
+// add items to the cache in parallel thus creating a race condition the code must then handle.
+func TestHighContentionFromStore(t *testing.T) {
+	const (
+		// Increase these number to improve the chance of contention, but at the cost of test speed.
+		numGoroutines = 500
+		numKeys       = 100
+	)
+	store := &NoOpStore{}
+	srv := newV1Server(t, "localhost:0", gubernator.Config{
+		Behaviors: gubernator.BehaviorConfig{
+			GlobalSyncWait: clock.Millisecond * 50, // Suitable for testing but not production
+			GlobalTimeout:  clock.Second,
+		},
+		Store: store,
+	})
+	client, err := gubernator.DialV1Server(srv.listener.Addr().String(), nil)
+	require.NoError(t, err)
+
+	keys := GenerateRandomKeys(numKeys)
+
+	var wg sync.WaitGroup
+	var ready sync.WaitGroup
+	wg.Add(numGoroutines)
+	ready.Add(numGoroutines)
+
+	for i := 0; i < numGoroutines; i++ {
+		go func() {
+			ready.Wait()
+			for idx := 0; idx < numKeys; idx++ {
+				_, err := client.GetRateLimits(context.Background(), &gubernator.GetRateLimitsReq{
+					Requests: []*gubernator.RateLimitReq{
+						{
+							Name:      keys[idx],
+							UniqueKey: "high_contention_",
+							Algorithm: gubernator.Algorithm_TOKEN_BUCKET,
+							Duration:  gubernator.Minute * 60,
+							Limit:     numKeys,
+							Hits:      1,
+						},
+					},
+				})
+				require.NoError(t, err)
+			}
+			wg.Done()
+		}()
+		ready.Done()
+	}
+	wg.Wait()
+
+	for idx := 0; idx < numKeys; idx++ {
+		resp, err := client.GetRateLimits(context.Background(), &gubernator.GetRateLimitsReq{
+			Requests: []*gubernator.RateLimitReq{
+				{
+					Name:      keys[idx],
+					UniqueKey: "high_contention_",
+					Algorithm: gubernator.Algorithm_TOKEN_BUCKET,
+					Duration:  gubernator.Minute * 60,
+					Limit:     numKeys,
+					Hits:      0,
+				},
+			},
+		})
+		require.NoError(t, err)
+		assert.Equal(t, int64(0), resp.Responses[0].Remaining)
+	}
+
+	assert.NoError(t, srv.Close())
 }
 
 func TestStore(t *testing.T) {
