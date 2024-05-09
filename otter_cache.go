@@ -36,7 +36,8 @@ func (o *OtterCache) GetItem(key string) (*CacheItem, bool) {
 	}
 
 	if item.IsExpired() {
-		fmt.Println("cache expired")
+		now := MillisecondNow()
+		fmt.Printf("cache item '%s' expired '%d' to '%d'\n", item.Key, item.ExpireAt, now)
 		// TODO: Avoid deletion, as that uses a mutex, better to just let the item expire or get set to a new value.
 		o.cache.Delete(key)
 		return nil, false

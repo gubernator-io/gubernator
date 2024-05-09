@@ -25,7 +25,7 @@ func OtterPreLoad(name string, keys []string) (*gubernator.WorkerOtter, error) {
 	for _, k := range keys {
 		_, err := p.GetRateLimit(ctx, &gubernator.RateLimitReq{
 			CreatedAt: &createdAt,
-			Duration:  10_000,
+			Duration:  100_000,
 			Name:      name,
 			UniqueKey: k,
 		}, gubernator.RateLimitReqState{})
@@ -65,7 +65,7 @@ func OtterReadParallel(b *testing.B, processors int,
 				UniqueKey: keys[index&mask],
 				CreatedAt: createdAt,
 				Name:      b.Name(),
-				Duration:  10_000,
+				Duration:  100_000,
 			}, gubernator.RateLimitReqState{})
 			index++
 			if err != nil {
@@ -73,7 +73,6 @@ func OtterReadParallel(b *testing.B, processors int,
 				return
 			}
 		}
-
 	})
 	opsPerSec := float64(b.N) / time.Since(start).Seconds()
 	b.ReportMetric(opsPerSec, "ops/s")
@@ -101,7 +100,7 @@ func OtterWriteParallel(b *testing.B, processors int) {
 			_, err := p.GetRateLimit(ctx, &gubernator.RateLimitReq{
 				CreatedAt: &createdAt,
 				UniqueKey: keys[index&mask],
-				Duration:  10_000,
+				Duration:  100_000,
 				Name:      b.Name(),
 			}, gubernator.RateLimitReqState{})
 			index++
@@ -135,7 +134,7 @@ func OtterRead(b *testing.B, concurrency int) {
 		keys = append(keys, key)
 		_, err := p.GetRateLimit(ctx, &gubernator.RateLimitReq{
 			CreatedAt: &createdAt,
-			Duration:  10_000,
+			Duration:  100_000,
 			UniqueKey: key,
 			Name:      key,
 		}, gubernator.RateLimitReqState{})
@@ -164,7 +163,7 @@ func OtterRead(b *testing.B, concurrency int) {
 			for i := 0; i < b.N; i++ {
 				_, err := p.GetRateLimit(ctx, &gubernator.RateLimitReq{
 					CreatedAt: &createdAt,
-					Duration:  10_000,
+					Duration:  100_000,
 					UniqueKey: keys[i],
 					Name:      b.Name(),
 				}, gubernator.RateLimitReqState{})
@@ -210,7 +209,7 @@ func OtterWrite(b *testing.B, concurrency int) {
 			for i := 0; i < b.N; i++ {
 				_, err := p.GetRateLimit(ctx, &gubernator.RateLimitReq{
 					CreatedAt: &createdAt,
-					Duration:  10_000,
+					Duration:  100_000,
 					UniqueKey: keys[i],
 					Name:      b.Name(),
 				}, gubernator.RateLimitReqState{})

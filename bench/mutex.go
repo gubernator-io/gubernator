@@ -32,7 +32,7 @@ func MutexReadParallel(b *testing.B, processors int) {
 		_, err := p.GetRateLimit(ctx, &gubernator.RateLimitReq{
 			CreatedAt: &createdAt,
 			Name:      b.Name(),
-			Duration:  10_000,
+			Duration:  100_000,
 			UniqueKey: k,
 		}, gubernator.RateLimitReqState{})
 		if err != nil {
@@ -59,7 +59,7 @@ func MutexReadParallel(b *testing.B, processors int) {
 			_, err := p.GetRateLimit(ctx, &gubernator.RateLimitReq{
 				CreatedAt: &createdAt,
 				UniqueKey: keys[index&mask],
-				Duration:  10_000,
+				Duration:  100_000,
 				Name:      b.Name(),
 			}, gubernator.RateLimitReqState{})
 			index++
@@ -99,7 +99,7 @@ func MutexWriteParallel(b *testing.B, processors int) {
 			_, err := p.GetRateLimit(ctx, &gubernator.RateLimitReq{
 				CreatedAt: &createdAt,
 				UniqueKey: keys[index&mask],
-				Duration:  10_000,
+				Duration:  100_000,
 				Name:      b.Name(),
 			}, gubernator.RateLimitReqState{})
 			index++
@@ -136,7 +136,7 @@ func MutexRead(b *testing.B, concurrency int) {
 		keys = append(keys, key)
 		_, err := p.GetRateLimit(ctx, &gubernator.RateLimitReq{
 			CreatedAt: &createdAt,
-			Duration:  10_000,
+			Duration:  100_000,
 			UniqueKey: key,
 			Name:      key,
 		}, gubernator.RateLimitReqState{})
@@ -168,7 +168,7 @@ func MutexRead(b *testing.B, concurrency int) {
 			for i := 0; i < b.N; i++ {
 				_, err := p.GetRateLimit(ctx, &gubernator.RateLimitReq{
 					CreatedAt: &createdAt,
-					Duration:  10_000,
+					Duration:  100_000,
 					UniqueKey: keys[i],
 					Name:      b.Name(),
 				}, gubernator.RateLimitReqState{})
@@ -218,7 +218,7 @@ func MutexWrite(b *testing.B, concurrency int) {
 				_, err := p.GetRateLimit(ctx, &gubernator.RateLimitReq{
 					CreatedAt: &createdAt,
 					UniqueKey: keys[i],
-					Duration:  10_000,
+					Duration:  100_000,
 					Name:      b.Name(),
 				}, gubernator.RateLimitReqState{})
 				if err != nil {

@@ -31,7 +31,7 @@ func HashiReadParallel(b *testing.B, processors int) {
 		_, err := p.GetRateLimit(ctx, &gubernator.RateLimitReq{
 			CreatedAt: &createdAt,
 			Name:      b.Name(),
-			Duration:  10_000,
+			Duration:  100_000,
 			UniqueKey: k,
 		}, gubernator.RateLimitReqState{})
 		if err != nil {
@@ -58,7 +58,7 @@ func HashiReadParallel(b *testing.B, processors int) {
 			_, err := p.GetRateLimit(ctx, &gubernator.RateLimitReq{
 				CreatedAt: &createdAt,
 				UniqueKey: keys[index&mask],
-				Duration:  10_000,
+				Duration:  100_000,
 				Name:      b.Name(),
 			}, gubernator.RateLimitReqState{})
 			index++
