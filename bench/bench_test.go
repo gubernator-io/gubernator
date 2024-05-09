@@ -31,23 +31,22 @@ func BenchmarkParallel(b *testing.B) {
 		})
 	}
 	for _, p := range benchCase {
-		b.Run(fmt.Sprintf("HashiRead_%d", p), func(b *testing.B) {
+		b.Run(fmt.Sprintf("Hashi%d", p), func(b *testing.B) {
 			bench.HashiReadParallel(b, p)
 		})
 	}
 	for _, p := range benchCase {
-		b.Run(fmt.Sprintf("MutexRead_%d", p), func(b *testing.B) {
+		b.Run(fmt.Sprintf("Mutex%d", p), func(b *testing.B) {
 			bench.MutexReadParallel(b, p)
 		})
 	}
-	for _, p := range benchCase {
-		b.Run(fmt.Sprintf("MutexWrite_%d", p), func(b *testing.B) {
-			bench.MutexWriteParallel(b, p)
-		})
-	}
+	//for _, p := range benchCase {
+	//	b.Run(fmt.Sprintf("MutexWrite_%d", p), func(b *testing.B) {
+	//		bench.MutexWriteParallel(b, p)
+	//	})
+	//}
 
 	k := bench.GenerateRandomKeys()
-	fmt.Printf("Keys: %d\n", len(k))
 	c := time.Now().UnixNano() / 1_000_000
 	w, err := bench.OtterPreLoad(b.Name(), k)
 	if err != nil {
@@ -61,21 +60,21 @@ func BenchmarkParallel(b *testing.B) {
 		})
 	}
 
+	//for _, p := range benchCase {
+	//	b.Run(fmt.Sprintf("OtterWrite_%d", p), func(b *testing.B) {
+	//		bench.OtterWriteParallel(b, p)
+	//	})
+	//}
 	for _, p := range benchCase {
-		b.Run(fmt.Sprintf("OtterWrite_%d", p), func(b *testing.B) {
-			bench.OtterWriteParallel(b, p)
-		})
-	}
-	for _, p := range benchCase {
-		b.Run(fmt.Sprintf("WorkerPoolRead_%d", p), func(b *testing.B) {
+		b.Run(fmt.Sprintf("WorkerPool%d", p), func(b *testing.B) {
 			bench.WorkerPoolReadParallel(b, p)
 		})
 	}
-	for _, p := range benchCase {
-		b.Run(fmt.Sprintf("WorkerPoolWrite_%d", p), func(b *testing.B) {
-			bench.WorkerPoolWriteParallel(b, p)
-		})
-	}
+	//for _, p := range benchCase {
+	//	b.Run(fmt.Sprintf("WorkerPoolWrite_%d", p), func(b *testing.B) {
+	//		bench.WorkerPoolWriteParallel(b, p)
+	//	})
+	//}
 }
 
 //func BenchmarkConcurrency(b *testing.B) {

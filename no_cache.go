@@ -15,6 +15,7 @@ func (o *NoCache) GetItem(key string) (*CacheItem, bool) {
 		Key: key,
 		Value: &TokenBucketItem{
 			CreatedAt: MillisecondNow() - 100,
+			Duration:  100_000,
 		},
 	}, true
 }
