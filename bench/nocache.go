@@ -30,6 +30,7 @@ func NoCacheParallel(b *testing.B, processors int) {
 			_, err := p.GetRateLimit(ctx, &gubernator.RateLimitReq{
 				CreatedAt: &createdAt,
 				UniqueKey: keys[index&mask],
+				Duration:  10_000,
 				Name:      b.Name(),
 			}, gubernator.RateLimitReqState{})
 			index++
@@ -72,6 +73,7 @@ func NoCache(b *testing.B, concurrency int) {
 				_, err := p.GetRateLimit(ctx, &gubernator.RateLimitReq{
 					CreatedAt: &createdAt,
 					UniqueKey: keys[i],
+					Duration:  10_000,
 					Name:      b.Name(),
 				}, gubernator.RateLimitReqState{})
 				if err != nil {

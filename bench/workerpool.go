@@ -34,6 +34,7 @@ func WorkerPoolReadParallel(b *testing.B, processors int) {
 	for _, k := range keys {
 		_, err := p.GetRateLimit(ctx, &gubernator.RateLimitReq{
 			CreatedAt: &createdAt,
+			Duration:  10_000,
 			Name:      b.Name(),
 			UniqueKey: k,
 		}, gubernator.RateLimitReqState{})
@@ -61,6 +62,7 @@ func WorkerPoolReadParallel(b *testing.B, processors int) {
 			_, err := p.GetRateLimit(ctx, &gubernator.RateLimitReq{
 				CreatedAt: &createdAt,
 				UniqueKey: keys[index&mask],
+				Duration:  10_000,
 				Name:      b.Name(),
 			}, gubernator.RateLimitReqState{})
 			index++
@@ -103,6 +105,7 @@ func WorkerPoolWriteParallel(b *testing.B, processors int) {
 				CreatedAt: &createdAt,
 				UniqueKey: keys[index&mask],
 				Name:      b.Name(),
+				Duration:  10_000,
 			}, gubernator.RateLimitReqState{})
 			index++
 			if err != nil {
@@ -142,6 +145,7 @@ func WorkerPoolRead(b *testing.B, concurrency int) {
 			CreatedAt: &createdAt,
 			UniqueKey: key,
 			Name:      key,
+			Duration:  10_000,
 		}, gubernator.RateLimitReqState{})
 		if err != nil {
 			b.Fatal(err)
@@ -170,6 +174,7 @@ func WorkerPoolRead(b *testing.B, concurrency int) {
 					CreatedAt: &createdAt,
 					UniqueKey: keys[i],
 					Name:      b.Name(),
+					Duration:  10_000,
 				}, gubernator.RateLimitReqState{})
 				if err != nil {
 					b.Error(err)
@@ -220,6 +225,7 @@ func WorkerPoolWrite(b *testing.B, concurrency int) {
 					CreatedAt: &createdAt,
 					UniqueKey: keys[i],
 					Name:      b.Name(),
+					Duration:  10_000,
 				}, gubernator.RateLimitReqState{})
 				if err != nil {
 					b.Error(err)
