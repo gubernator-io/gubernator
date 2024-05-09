@@ -22,43 +22,25 @@ import (
 	"container/list"
 	"sync/atomic"
 
-	"github.com/mailgun/holster/v4/clock"
 	"github.com/mailgun/holster/v4/setter"
-	"github.com/prometheus/client_golang/prometheus"
 )
 
 // LRUCache is an LRU cache that supports expiration and is not thread-safe
 // Be sure to use a mutex to prevent concurrent method calls.
+//
+// Deprecated: Use LRUMutexCache instead. This will be removed in v3
 type LRUCache struct {
 	cache     map[string]*list.Element
 	ll        *list.List
+	stats     CacheStats
 	cacheSize int
 	cacheLen  int64
 }
 
-// LRUCacheCollector provides prometheus metrics collector for LRUCache.
-// Register only one collector, add one or more caches to this collector.
-type LRUCacheCollector struct {
-	caches []Cache
-}
-
 var _ Cache = &LRUCache{}
-var _ prometheus.Collector = &LRUCacheCollector{}
-
-var metricCacheSize = prometheus.NewGauge(prometheus.GaugeOpts{
-	Name: "gubernator_cache_size",
-	Help: "The number of items in LRU Cache which holds the rate limits.",
-})
-var metricCacheAccess = prometheus.NewCounterVec(prometheus.CounterOpts{
-	Name: "gubernator_cache_access_count",
-	Help: "Cache access counts.  Label \"type\" = hit|miss.",
-}, []string{"type"})
-var metricCacheUnexpiredEvictions = prometheus.NewCounter(prometheus.CounterOpts{
-	Name: "gubernator_unexpired_evictions_count",
-	Help: "Count the number of cache items which were evicted while unexpired.",
-})
 
 // NewLRUCache creates a new Cache with a maximum size.
+// Deprecated: Use NewLRUMutexCache instead. This will be removed in v3
 func NewLRUCache(maxSize int) *LRUCache {
 	setter.SetDefault(&maxSize, 50_000)
 
@@ -69,10 +51,10 @@ func NewLRUCache(maxSize int) *LRUCache {
 	}
 }
 
-// Each is not thread-safe. Each() maintains a goroutine that iterates.
-// Other go routines cannot safely access the Cache while iterating.
-// It would be safer if this were done using an iterator or delegate pattern
-// that doesn't require a goroutine. May need to reassess functional requirements.
+// Each maintains a goroutine that iterates. Other go routines cannot safely
+// access the Cache while iterating. It would be safer if this were done
+// using an iterator or delegate pattern that doesn't require a goroutine.
+// May need to reassess functional requirements.
 func (c *LRUCache) Each() chan *CacheItem {
 	out := make(chan *CacheItem)
 	go func() {
@@ -84,7 +66,28 @@ func (c *LRUCache) Each() chan *CacheItem {
 	return out
 }
 
+// AddIfNotPresent adds a value to the cache. returns true if value was added to the cache,
+// false if it already exists in the cache
+func (c *LRUCache) AddIfNotPresent(item *CacheItem) bool {
+	// If the key already exist, set the new value
+	if ee, ok := c.cache[item.Key]; ok {
+		c.ll.MoveToFront(ee)
+		ee.Value = item
+		return true
+	}
+
+	ele := c.ll.PushFront(item)
+	c.cache[item.Key] = ele
+	if c.cacheSize != 0 && c.ll.Len() > c.cacheSize {
+		c.removeOldest()
+	}
+	atomic.StoreInt64(&c.cacheLen, int64(c.ll.Len()))
+	return false
+}
+
 // Add adds a value to the cache.
+// Deprecated: Gubernator algorithms now use AddIfNotExists.
+// This method will be removed in the next major version
 func (c *LRUCache) Add(item *CacheItem) bool {
 	// If the key already exist, set the new value
 	if ee, ok := c.cache[item.Key]; ok {
@@ -102,11 +105,6 @@ func (c *LRUCache) Add(item *CacheItem) bool {
 	return false
 }
 
-// MillisecondNow returns unix epoch in milliseconds
-func MillisecondNow() int64 {
-	return clock.Now().UnixNano() / 1000000
-}
-
 // GetItem returns the item stored in the cache
 func (c *LRUCache) GetItem(key string) (item *CacheItem, ok bool) {
 	if ele, hit := c.cache[key]; hit {
@@ -114,16 +112,16 @@ func (c *LRUCache) GetItem(key string) (item *CacheItem, ok bool) {
 
 		if entry.IsExpired() {
 			c.removeElement(ele)
-			metricCacheAccess.WithLabelValues("miss").Add(1)
+			atomic.AddInt64(&c.stats.Miss, 1)
 			return
 		}
 
-		metricCacheAccess.WithLabelValues("hit").Add(1)
+		atomic.AddInt64(&c.stats.Hit, 1)
 		c.ll.MoveToFront(ele)
 		return entry, true
 	}
 
-	metricCacheAccess.WithLabelValues("miss").Add(1)
+	atomic.AddInt64(&c.stats.Miss, 1)
 	return
 }
 
@@ -141,7 +139,7 @@ func (c *LRUCache) removeOldest() {
 		entry := ele.Value.(*CacheItem)
 
 		if MillisecondNow() < entry.ExpireAt {
-			metricCacheUnexpiredEvictions.Add(1)
+			atomic.AddInt64(&c.stats.UnexpiredEvictions, 1)
 		}
 
 		c.removeElement(ele)
@@ -177,38 +175,12 @@ func (c *LRUCache) Close() error {
 	return nil
 }
 
-func NewLRUCacheCollector() *LRUCacheCollector {
-	return &LRUCacheCollector{
-		caches: []Cache{},
-	}
-}
-
-// AddCache adds a Cache object to be tracked by the collector.
-func (collector *LRUCacheCollector) AddCache(cache Cache) {
-	collector.caches = append(collector.caches, cache)
-}
-
-// Describe fetches prometheus metrics to be registered
-func (collector *LRUCacheCollector) Describe(ch chan<- *prometheus.Desc) {
-	metricCacheSize.Describe(ch)
-	metricCacheAccess.Describe(ch)
-	metricCacheUnexpiredEvictions.Describe(ch)
-}
-
-// Collect fetches metric counts and gauges from the cache
-func (collector *LRUCacheCollector) Collect(ch chan<- prometheus.Metric) {
-	metricCacheSize.Set(collector.getSize())
-	metricCacheSize.Collect(ch)
-	metricCacheAccess.Collect(ch)
-	metricCacheUnexpiredEvictions.Collect(ch)
-}
-
-func (collector *LRUCacheCollector) getSize() float64 {
-	var size float64
-
-	for _, cache := range collector.caches {
-		size += float64(cache.Size())
-	}
-
-	return size
+// Stats returns the current status for the cache
+func (c *LRUCache) Stats() CacheStats {
+	var result CacheStats
+	result.UnexpiredEvictions = atomic.SwapInt64(&c.stats.UnexpiredEvictions, 0)
+	result.Miss = atomic.SwapInt64(&c.stats.Miss, 0)
+	result.Hit = atomic.SwapInt64(&c.stats.Hit, 0)
+	result.Size = atomic.LoadInt64(&c.cacheLen)
+	return result
 }

@@ -3,12 +3,12 @@ module github.com/gubernator-io/gubernator/v3
 go 1.22.0
 
 require (
-	github.com/OneOfOne/xxhash v1.2.8
 	github.com/davecgh/go-spew v1.1.1
 	github.com/duh-rpc/duh-go v0.0.2-0.20230929155108-5d641b0c008a
 	github.com/hashicorp/memberlist v0.5.0
 	github.com/mailgun/errors v0.1.5
 	github.com/mailgun/holster/v4 v4.19.0
+	github.com/maypok86/otter v1.2.1
 	github.com/miekg/dns v1.1.50
 	github.com/pkg/errors v0.9.1
 	github.com/prometheus/client_golang v1.13.0
@@ -40,7 +40,9 @@ require (
 	github.com/cespare/xxhash/v2 v2.2.0 // indirect
 	github.com/coreos/go-semver v0.3.0 // indirect
 	github.com/coreos/go-systemd/v22 v22.3.2 // indirect
+	github.com/dolthub/maphash v0.1.0 // indirect
 	github.com/felixge/httpsnoop v1.0.4 // indirect
+	github.com/gammazero/deque v0.2.1 // indirect
 	github.com/go-logr/logr v1.4.1 // indirect
 	github.com/go-logr/stdr v1.2.2 // indirect
 	github.com/gogo/protobuf v1.3.2 // indirect

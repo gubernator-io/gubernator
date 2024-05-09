@@ -74,11 +74,63 @@ func (d *Daemon) Start(ctx context.Context) error {
 
 	registry := prometheus.NewRegistry()
 
-	// The LRU cache for storing rate limits.
-	cacheCollector := NewLRUCacheCollector()
-	registry.MustRegister(cacheCollector)
+	// The cache for storing rate limits.
+	cacheCollector := NewCacheCollector()
+	if err := s.promRegister.Register(cacheCollector); err != nil {
+		return errors.Wrap(err, "during call to promRegister.Register()")
+	}
 
-	if err := SetupTLS(d.conf.TLS); err != nil {
+	cacheFactory := func(maxSize int) (Cache, error) {
+		// TODO(thrawn01): Make Otter the default in gubernator V3
+		switch s.conf.CacheProvider {
+		case "otter":
+			cache, err := NewOtterCache(maxSize)
+			if err != nil {
+				return nil, err
+			}
+			cacheCollector.AddCache(cache)
+			return cache, nil
+		case "default-lru", "":
+			cache := NewLRUMutexCache(maxSize)
+			cacheCollector.AddCache(cache)
+			return cache, nil
+		default:
+			return nil, errors.Errorf("'GUBER_CACHE_PROVIDER=%s' is invalid; "+
+				"choices are ['otter', 'default-lru']", s.conf.CacheProvider)
+		}
+	}
+
+	// Handler to collect duration and API access metrics for GRPC
+	s.statsHandler = NewGRPCStatsHandler()
+	_ = s.promRegister.Register(s.statsHandler)
+
+	var filters []otelgrpc.Option
+	// otelgrpc deprecated use of interceptors in v0.45.0 in favor of stats
+	// handlers to propagate trace context.
+	// However, stats handlers do not have a filter feature.
+	// See: https://github.com/open-telemetry/opentelemetry-go-contrib/issues/4575
+	// if s.conf.TraceLevel != tracing.DebugLevel {
+	// 	filters = []otelgrpc.Option{
+	// 		otelgrpc.WithInterceptorFilter(TraceLevelInfoFilter),
+	// 	}
+	// }
+
+	opts := []grpc.ServerOption{
+		grpc.StatsHandler(s.statsHandler),
+		grpc.MaxRecvMsgSize(1024 * 1024),
+
+		// OpenTelemetry instrumentation on gRPC endpoints.
+		grpc.StatsHandler(otelgrpc.NewServerHandler(filters...)),
+	}
+
+	if s.conf.GRPCMaxConnectionAgeSeconds > 0 {
+		opts = append(opts, grpc.KeepaliveParams(keepalive.ServerParameters{
+			MaxConnectionAge:      time.Second * time.Duration(s.conf.GRPCMaxConnectionAgeSeconds),
+			MaxConnectionAgeGrace: time.Second * time.Duration(s.conf.GRPCMaxConnectionAgeSeconds),
+		}))
+	}
+
+	if err := SetupTLS(s.conf.TLS); err != nil {
 		return err
 	}
 

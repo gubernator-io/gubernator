@@ -2280,8 +2280,14 @@ func waitForIdle(timeout clock.Duration, daemons ...*guber.Daemon) error {
 				if err != nil {
 					return err
 				}
-				ggql := metrics["gubernator_global_queue_length"]
-				gsql := metrics["gubernator_global_send_queue_length"]
+				ggql, ok := metrics["gubernator_global_queue_length"]
+				if !ok {
+					return errors.New("gubernator_global_queue_length not found")
+				}
+				gsql, ok := metrics["gubernator_global_send_queue_length"]
+				if !ok {
+					return errors.New("gubernator_global_send_queue_length not found")
+				}
 
 				if ggql.Value == 0 && gsql.Value == 0 {
 					return nil
@@ -2321,7 +2327,9 @@ func getPeerCounters(t *testing.T, peers []*guber.Daemon, name string) map[strin
 	return counters
 }
 
-func sendHit(t *testing.T, d *guber.Daemon, req *guber.RateLimitRequest, expectStatus guber.Status, expectRemaining int64) {
+func sendHit(t *testing.T, d *guber.Daemon, req *guber.RateLimitReq, expectStatus guber.Status, expectRemaining int64) {
+	t.Helper()
+
 	if req.Hits != 0 {
 		t.Logf("Sending %d hits to peer %s", req.Hits, d.InstanceID)
 	}

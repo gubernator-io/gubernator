@@ -70,8 +70,9 @@ func GetRandomDaemon(dc string) *gubernator.Daemon {
 	}
 
 	if len(local) == 0 {
-		panic(fmt.Sprintf("failed to find random peer for dc '%s'", dc))
+		panic(fmt.Sprintf("failed to find random daemon for dc '%s'", dc))
 	}
+
 	return local[rand.Intn(len(local))]
 }
 
@@ -180,6 +181,7 @@ func StartWith(localPeers []gubernator.PeerInfo) error {
 			HTTPListenAddress: peer.HTTPAddress,
 			AdvertiseAddress:  peer.HTTPAddress,
 			DataCenter:        peer.DataCenter,
+			CacheProvider:     "otter",
 			Behaviors: gubernator.BehaviorConfig{
 				// Suitable for testing but not production
 				GlobalSyncWait: clock.Millisecond * 50,
