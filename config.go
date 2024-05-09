@@ -80,7 +80,7 @@ type Config struct {
 	Behaviors BehaviorConfig
 
 	// (Optional) The cache implementation
-	CacheFactory func(maxSize int) Cache
+	CacheFactory func(maxSize int) (Cache, error)
 
 	// (Optional) A persistent store implementation. Allows the implementor the ability to store the rate limits this
 	// instance of gubernator owns. It's up to the implementor to decide what rate limits to persist.
@@ -141,8 +141,8 @@ func (c *Config) SetDefaults() error {
 	setter.SetDefault(&c.Logger, logrus.New().WithField("category", "gubernator"))
 
 	if c.CacheFactory == nil {
-		c.CacheFactory = func(maxSize int) Cache {
-			return NewLRUCache(maxSize)
+		c.CacheFactory = func(maxSize int) (Cache, error) {
+			return NewOtterCache(maxSize)
 		}
 	}
 

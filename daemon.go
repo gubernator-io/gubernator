@@ -90,16 +90,21 @@ func (s *Daemon) Start(ctx context.Context) error {
 
 	s.promRegister = prometheus.NewRegistry()
 
-	// The LRU cache for storing rate limits.
-	cacheCollector := NewLRUCacheCollector()
+	// The cache for storing rate limits.
+	cacheCollector := NewCacheCollector()
 	if err := s.promRegister.Register(cacheCollector); err != nil {
 		return errors.Wrap(err, "during call to promRegister.Register()")
 	}
 
-	cacheFactory := func(maxSize int) Cache {
-		cache := NewLRUCache(maxSize)
+	cacheFactory := func(maxSize int) (Cache, error) {
+		//cache := NewLRUCache(maxSize)
+		// TODO: Enable Otter as default or provide a config option
+		cache, err := NewOtterCache(maxSize)
+		if err != nil {
+			return nil, err
+		}
 		cacheCollector.AddCache(cache)
-		return cache
+		return cache, nil
 	}
 
 	// Handler to collect duration and API access metrics for GRPC

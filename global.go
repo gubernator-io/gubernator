@@ -242,7 +242,7 @@ func (gm *globalManager) broadcastPeers(ctx context.Context, updates map[string]
 		// Get current rate limit state.
 		grlReq := proto.Clone(update).(*RateLimitReq)
 		grlReq.Hits = 0
-		status, err := gm.instance.workerPool.GetRateLimit(ctx, grlReq, reqState)
+		status, err := gm.instance.cache.GetRateLimit(ctx, grlReq, reqState)
 		if err != nil {
 			gm.log.WithError(err).Error("while retrieving rate limit status")
 			continue

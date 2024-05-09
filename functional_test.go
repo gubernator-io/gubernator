@@ -2294,6 +2294,8 @@ func getPeerCounters(t *testing.T, peers []*guber.Daemon, name string) map[strin
 }
 
 func sendHit(t *testing.T, d *guber.Daemon, req *guber.RateLimitReq, expectStatus guber.Status, expectRemaining int64) {
+	t.Helper()
+
 	if req.Hits != 0 {
 		t.Logf("Sending %d hits to peer %s", req.Hits, d.InstanceID)
 	}

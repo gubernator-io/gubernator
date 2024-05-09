@@ -78,7 +78,7 @@ func TestCLI(t *testing.T) {
 			time.Sleep(time.Second * 1)
 
 			err = c.Process.Signal(syscall.SIGTERM)
-			require.NoError(t, err)
+			require.NoError(t, err, out.String())
 
 			<-waitCh
 			assert.Contains(t, out.String(), tt.contains)

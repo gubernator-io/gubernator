@@ -20,6 +20,7 @@ package gubernator
 
 import (
 	"container/list"
+	"sync"
 	"sync/atomic"
 
 	"github.com/mailgun/holster/v4/clock"
@@ -32,18 +33,19 @@ import (
 type LRUCache struct {
 	cache     map[string]*list.Element
 	ll        *list.List
+	mu        sync.Mutex
 	cacheSize int
 	cacheLen  int64
 }
 
-// LRUCacheCollector provides prometheus metrics collector for LRUCache.
+// CacheCollector provides prometheus metrics collector for LRUCache.
 // Register only one collector, add one or more caches to this collector.
-type LRUCacheCollector struct {
+type CacheCollector struct {
 	caches []Cache
 }
 
 var _ Cache = &LRUCache{}
-var _ prometheus.Collector = &LRUCacheCollector{}
+var _ prometheus.Collector = &CacheCollector{}
 
 var metricCacheSize = prometheus.NewGauge(prometheus.GaugeOpts{
 	Name: "gubernator_cache_size",
@@ -86,6 +88,9 @@ func (c *LRUCache) Each() chan *CacheItem {
 
 // Add adds a value to the cache.
 func (c *LRUCache) Add(item *CacheItem) bool {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
 	// If the key already exist, set the new value
 	if ee, ok := c.cache[item.Key]; ok {
 		c.ll.MoveToFront(ee)
@@ -109,6 +114,8 @@ func MillisecondNow() int64 {
 
 // GetItem returns the item stored in the cache
 func (c *LRUCache) GetItem(key string) (item *CacheItem, ok bool) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
 	if ele, hit := c.cache[key]; hit {
 		entry := ele.Value.(*CacheItem)
 
@@ -162,6 +169,9 @@ func (c *LRUCache) Size() int64 {
 
 // UpdateExpiration updates the expiration time for the key
 func (c *LRUCache) UpdateExpiration(key string, expireAt int64) bool {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
 	if ele, hit := c.cache[key]; hit {
 		entry := ele.Value.(*CacheItem)
 		entry.ExpireAt = expireAt
@@ -177,33 +187,33 @@ func (c *LRUCache) Close() error {
 	return nil
 }
 
-func NewLRUCacheCollector() *LRUCacheCollector {
-	return &LRUCacheCollector{
+func NewCacheCollector() *CacheCollector {
+	return &CacheCollector{
 		caches: []Cache{},
 	}
 }
 
 // AddCache adds a Cache object to be tracked by the collector.
-func (collector *LRUCacheCollector) AddCache(cache Cache) {
+func (collector *CacheCollector) AddCache(cache Cache) {
 	collector.caches = append(collector.caches, cache)
 }
 
 // Describe fetches prometheus metrics to be registered
-func (collector *LRUCacheCollector) Describe(ch chan<- *prometheus.Desc) {
+func (collector *CacheCollector) Describe(ch chan<- *prometheus.Desc) {
 	metricCacheSize.Describe(ch)
 	metricCacheAccess.Describe(ch)
 	metricCacheUnexpiredEvictions.Describe(ch)
 }
 
 // Collect fetches metric counts and gauges from the cache
-func (collector *LRUCacheCollector) Collect(ch chan<- prometheus.Metric) {
+func (collector *CacheCollector) Collect(ch chan<- prometheus.Metric) {
 	metricCacheSize.Set(collector.getSize())
 	metricCacheSize.Collect(ch)
 	metricCacheAccess.Collect(ch)
 	metricCacheUnexpiredEvictions.Collect(ch)
 }
 
-func (collector *LRUCacheCollector) getSize() float64 {
+func (collector *CacheCollector) getSize() float64 {
 	var size float64
 
 	for _, cache := range collector.caches {

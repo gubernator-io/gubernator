@@ -45,12 +45,12 @@ const (
 type V1Instance struct {
 	UnimplementedV1Server
 	UnimplementedPeersV1Server
-	global     *globalManager
-	peerMutex  sync.RWMutex
-	log        FieldLogger
-	conf       Config
-	isClosed   bool
-	workerPool *WorkerPool
+	global    *globalManager
+	cache     CacheManager
+	peerMutex sync.RWMutex
+	log       FieldLogger
+	conf      Config
+	isClosed  bool
 }
 
 type RateLimitReqState struct {
@@ -83,14 +83,6 @@ var (
 		Name: "gubernator_check_error_counter",
 		Help: "The number of errors while checking rate limits.",
 	}, []string{"error"})
-	metricCommandCounter = prometheus.NewCounterVec(prometheus.CounterOpts{
-		Name: "gubernator_command_counter",
-		Help: "The count of commands processed by each worker in WorkerPool.",
-	}, []string{"worker", "method"})
-	metricWorkerQueue = prometheus.NewGaugeVec(prometheus.GaugeOpts{
-		Name: "gubernator_worker_queue_length",
-		Help: "The count of requests queued up in WorkerPool.",
-	}, []string{"method", "worker"})
 
 	// Batch behavior.
 	metricBatchSendRetries = prometheus.NewCounterVec(prometheus.CounterOpts{
@@ -126,7 +118,10 @@ func NewV1Instance(conf Config) (s *V1Instance, err error) {
 		conf: conf,
 	}
 
-	s.workerPool = NewWorkerPool(&conf)
+	s.cache, err = NewCacheManager(conf)
+	if err != nil {
+		return nil, fmt.Errorf("during NewCacheManager(): %w", err)
+	}
 	s.global = newGlobalManager(conf.Behaviors, s)
 
 	// Register our instance with all GRPC servers
@@ -140,9 +135,9 @@ func NewV1Instance(conf Config) (s *V1Instance, err error) {
 	}
 
 	// Load the cache.
-	err = s.workerPool.Load(ctx)
+	err = s.cache.Load(ctx)
 	if err != nil {
-		return nil, errors.Wrap(err, "Error in workerPool.Load")
+		return nil, errors.Wrap(err, "Error in CacheManager.Load")
 	}
 
 	return s, nil
@@ -158,19 +153,19 @@ func (s *V1Instance) Close() (err error) {
 	s.global.Close()
 
 	if s.conf.Loader != nil {
-		err = s.workerPool.Store(ctx)
+		err = s.cache.Store(ctx)
 		if err != nil {
 			s.log.WithError(err).
-				Error("Error in workerPool.Store")
-			return errors.Wrap(err, "Error in workerPool.Store")
+				Error("Error in CacheManager.Store")
+			return errors.Wrap(err, "Error in CacheManager.Store")
 		}
 	}
 
-	err = s.workerPool.Close()
+	err = s.cache.Close()
 	if err != nil {
 		s.log.WithError(err).
-			Error("Error in workerPool.Close")
-		return errors.Wrap(err, "Error in workerPool.Close")
+			Error("Error in CacheManager.Close")
+		return errors.Wrap(err, "Error in CacheManager.Close")
 	}
 
 	s.isClosed = true
@@ -449,9 +444,9 @@ func (s *V1Instance) UpdatePeerGlobals(ctx context.Context, r *UpdatePeerGlobals
 				CreatedAt: now,
 			}
 		}
-		err := s.workerPool.AddCacheItem(ctx, g.Key, item)
+		err := s.cache.AddCacheItem(ctx, g.Key, item)
 		if err != nil {
-			return nil, errors.Wrap(err, "Error in workerPool.AddCacheItem")
+			return nil, errors.Wrap(err, "Error in CacheManager.AddCacheItem")
 		}
 	}
 
@@ -595,9 +590,9 @@ func (s *V1Instance) getLocalRateLimit(ctx context.Context, r *RateLimitReq, req
 	defer func() { tracing.EndScope(ctx, err) }()
 	defer prometheus.NewTimer(metricFuncTimeDuration.WithLabelValues("V1Instance.getLocalRateLimit")).ObserveDuration()
 
-	resp, err := s.workerPool.GetRateLimit(ctx, r, reqState)
+	resp, err := s.cache.GetRateLimit(ctx, r, reqState)
 	if err != nil {
-		return nil, errors.Wrap(err, "during workerPool.GetRateLimit")
+		return nil, errors.Wrap(err, "during CacheManager.GetRateLimit")
 	}
 
 	// If global behavior, then broadcast update to all peers.
@@ -742,12 +737,10 @@ func (s *V1Instance) Describe(ch chan<- *prometheus.Desc) {
 	metricBatchSendDuration.Describe(ch)
 	metricBatchSendRetries.Describe(ch)
 	metricCheckErrorCounter.Describe(ch)
-	metricCommandCounter.Describe(ch)
 	metricConcurrentChecks.Describe(ch)
 	metricFuncTimeDuration.Describe(ch)
 	metricGetRateLimitCounter.Describe(ch)
 	metricOverLimitCounter.Describe(ch)
-	metricWorkerQueue.Describe(ch)
 	s.global.metricBroadcastDuration.Describe(ch)
 	s.global.metricGlobalQueueLength.Describe(ch)
 	s.global.metricGlobalSendDuration.Describe(ch)
@@ -760,12 +753,10 @@ func (s *V1Instance) Collect(ch chan<- prometheus.Metric) {
 	metricBatchSendDuration.Collect(ch)
 	metricBatchSendRetries.Collect(ch)
 	metricCheckErrorCounter.Collect(ch)
-	metricCommandCounter.Collect(ch)
 	metricConcurrentChecks.Collect(ch)
 	metricFuncTimeDuration.Collect(ch)
 	metricGetRateLimitCounter.Collect(ch)
 	metricOverLimitCounter.Collect(ch)
-	metricWorkerQueue.Collect(ch)
 	s.global.metricBroadcastDuration.Collect(ch)
 	s.global.metricGlobalQueueLength.Collect(ch)
 	s.global.metricGlobalSendDuration.Collect(ch)
