@@ -16,7 +16,9 @@ limitations under the License.
 
 package gubernator
 
-import "context"
+import (
+	"context"
+)
 
 // PERSISTENT STORE DETAILS
 
@@ -26,20 +28,23 @@ import "context"
 // and `Get()` to keep the in memory cache and persistent store up to date with the latest ratelimit data.
 // Both interfaces can be implemented simultaneously to ensure data is always saved to persistent storage.
 
+// LeakyBucketItem is 40 bytes aligned in size
 type LeakyBucketItem struct {
-	Limit     int64
-	Duration  int64
-	Remaining float64
-	UpdatedAt int64
-	Burst     int64
+	Limit     int64   // 8 bytes
+	Duration  int64   // 8 bytes
+	Remaining float64 // 8 bytes
+	UpdatedAt int64   // 8 bytes
+	Burst     int64   // 8 bytes
 }
 
+// TokenBucketItem is 40 bytes aligned in size
 type TokenBucketItem struct {
-	Status    Status
-	Limit     int64
-	Duration  int64
-	Remaining int64
-	CreatedAt int64
+	Limit     int64  // 8 bytes
+	Duration  int64  // 8 bytes
+	Remaining int64  // 8 bytes
+	CreatedAt int64  // 8 bytes
+	Status    Status // 4 bytes
+	// 4 bytes of padding
 }
 
 // Store interface allows implementors to off load storage of all or a subset of ratelimits to
@@ -47,18 +52,18 @@ type TokenBucketItem struct {
 // to maximize performance of gubernator.
 // Implementations MUST be threadsafe.
 type Store interface {
-	// Called by gubernator *after* a rate limit item is updated. It's up to the store to
+	// OnChange is called by gubernator *after* a rate limit item is updated. It's up to the store to
 	// decide if this rate limit item should be persisted in the store. It's up to the
 	// store to expire old rate limit items. The CacheItem represents the current state of
 	// the rate limit item *after* the RateLimitRequest has been applied.
 	OnChange(ctx context.Context, r *RateLimitRequest, item *CacheItem)
 
-	// Called by gubernator when a rate limit is missing from the cache. It's up to the store
+	// Get is called by gubernator when a rate limit is missing from the cache. It's up to the store
 	// to decide if this request is fulfilled. Should return true if the request is fulfilled
 	// and false if the request is not fulfilled or doesn't exist in the store.
 	Get(ctx context.Context, r *RateLimitRequest) (*CacheItem, bool)
 
-	// Called by gubernator when an existing rate limit should be removed from the store.
+	// Remove ic called by gubernator when an existing rate limit should be removed from the store.
 	// NOTE: This is NOT called when an rate limit expires from the cache, store implementors
 	// must expire rate limits in the store.
 	Remove(ctx context.Context, key string)

@@ -18,12 +18,23 @@ package gubernator
 
 import (
 	"context"
+	"errors"
 
 	"github.com/mailgun/holster/v4/clock"
-	"github.com/sirupsen/logrus"
-	"go.opentelemetry.io/otel/attribute"
+	"github.com/prometheus/client_golang/prometheus"
 	"go.opentelemetry.io/otel/trace"
 )
+
+var errAlreadyExistsInCache = errors.New("already exists in cache")
+
+type rateContext struct {
+	context.Context
+	ReqState  RateLimitReqState
+	Request   *RateLimitReq
+	CacheItem *CacheItem
+	Store     Store
+	Cache     Cache
+}
 
 // ### NOTE ###
 // The both token and leaky follow the same semantic which allows for requests of more than the limit
@@ -33,407 +44,426 @@ import (
 // with 100 emails and the request will succeed. You can override this default behavior with `DRAIN_OVER_LIMIT`
 
 // Implements token bucket algorithm for rate limiting. https://en.wikipedia.org/wiki/Token_bucket
-func tokenBucket(ctx context.Context, s Store, c Cache, r *RateLimitRequest, reqState RateLimitContext) (resp *RateLimitResponse, err error) {
-	// Get rate limit from cache.
-	hashKey := r.HashKey()
-	item, ok := c.GetItem(hashKey)
+func tokenBucket(ctx rateContext) (resp *RateLimitResp, err error) {
+	tokenBucketTimer := prometheus.NewTimer(metricFuncTimeDuration.WithLabelValues("tokenBucket"))
+	defer tokenBucketTimer.ObserveDuration()
+	var ok bool
 
-	if s != nil && !ok {
-		// Cache miss.
-		// Check our store for the item.
-		if item, ok = s.Get(ctx, r); ok {
-			c.Add(item)
+	// Get rate limit from cache
+	hashKey := ctx.Request.HashKey()
+	ctx.CacheItem, ok = ctx.Cache.GetItem(hashKey)
+
+	// If not in the cache, check the store if provided
+	if ctx.Store != nil && !ok {
+		if ctx.CacheItem, ok = ctx.Store.Get(ctx, ctx.Request); ok {
+			if !ctx.Cache.AddIfNotPresent(ctx.CacheItem) {
+				// Someone else added a new token bucket item to the cache for this
+				// rate limit before we did, so we retry by calling ourselves recursively.
+				return tokenBucket(ctx)
+			}
 		}
 	}
 
-	// Sanity checks.
-	if ok {
-		if item.Value == nil {
-			msgPart := "tokenBucket: Invalid cache item; Value is nil"
-			trace.SpanFromContext(ctx).AddEvent(msgPart, trace.WithAttributes(
-				attribute.String("hashKey", hashKey),
-				attribute.String("key", r.UniqueKey),
-				attribute.String("name", r.Name),
-			))
-			logrus.Error(msgPart)
-			ok = false
-		} else if item.Key != hashKey {
-			msgPart := "tokenBucket: Invalid cache item; key mismatch"
-			trace.SpanFromContext(ctx).AddEvent(msgPart, trace.WithAttributes(
-				attribute.String("itemKey", item.Key),
-				attribute.String("hashKey", hashKey),
-				attribute.String("name", r.Name),
-			))
-			logrus.Error(msgPart)
-			ok = false
+	// If no item was found, or the item is expired.
+	if !ok || ctx.CacheItem.IsExpired() {
+		rl, err := initTokenBucketItem(ctx)
+		if err != nil && errors.Is(err, errAlreadyExistsInCache) {
+			// Someone else added a new token bucket item to the cache for this
+			// rate limit before we did, so we retry by calling ourselves recursively.
+			return tokenBucket(ctx)
 		}
+		return rl, err
 	}
 
-	if ok {
-		// Item found in cache or store.
-		if HasBehavior(r.Behavior, Behavior_RESET_REMAINING) {
-			c.Remove(hashKey)
+	// Gain exclusive rights to this item while we calculate the rate limit
+	ctx.CacheItem.mutex.Lock()
 
-			if s != nil {
-				s.Remove(ctx, hashKey)
-			}
-			return &RateLimitResponse{
-				Status:    Status_UNDER_LIMIT,
-				Limit:     r.Limit,
-				Remaining: r.Limit,
-				ResetTime: 0,
-			}, nil
+	t, ok := ctx.CacheItem.Value.(*TokenBucketItem)
+	if !ok {
+		// Client switched algorithms; perhaps due to a migration?
+		ctx.Cache.Remove(hashKey)
+		if ctx.Store != nil {
+			ctx.Store.Remove(ctx, hashKey)
 		}
-		t, ok := item.Value.(*TokenBucketItem)
-		if !ok {
-			// Client switched algorithms; perhaps due to a migration?
-			trace.SpanFromContext(ctx).AddEvent("Client switched algorithms; perhaps due to a migration?")
-
-			c.Remove(hashKey)
-
-			if s != nil {
-				s.Remove(ctx, hashKey)
-			}
-
-			return tokenBucketNewItem(ctx, s, c, r, reqState)
+		// Tell init to create a new cache item
+		ctx.CacheItem.mutex.Unlock()
+		ctx.CacheItem = nil
+		rl, err := initTokenBucketItem(ctx)
+		if err != nil && errors.Is(err, errAlreadyExistsInCache) {
+			return tokenBucket(ctx)
 		}
+		return rl, err
+	}
 
-		// Update the limit if it changed.
-		if t.Limit != r.Limit {
-			// Add difference to remaining.
-			t.Remaining += r.Limit - t.Limit
-			if t.Remaining < 0 {
-				t.Remaining = 0
-			}
-			t.Limit = r.Limit
+	defer ctx.CacheItem.mutex.Unlock()
+
+	if HasBehavior(ctx.Request.Behavior, Behavior_RESET_REMAINING) {
+		t.Remaining = ctx.Request.Limit
+		t.Limit = ctx.Request.Limit
+		t.Status = Status_UNDER_LIMIT
+
+		if ctx.Store != nil {
+			ctx.Store.OnChange(ctx, ctx.Request, ctx.CacheItem)
 		}
 
-		rl := &RateLimitResponse{
-			Status:    t.Status,
-			Limit:     r.Limit,
-			Remaining: t.Remaining,
-			ResetTime: item.ExpireAt,
-		}
+		return &RateLimitResp{
+			Status:    Status_UNDER_LIMIT,
+			Limit:     ctx.Request.Limit,
+			Remaining: ctx.Request.Limit,
+			ResetTime: 0,
+		}, nil
+	}
 
-		// If the duration config changed, update the new ExpireAt.
-		if t.Duration != r.Duration {
-			span := trace.SpanFromContext(ctx)
-			span.AddEvent("Duration changed")
-			expire := t.CreatedAt + r.Duration
-			if HasBehavior(r.Behavior, Behavior_DURATION_IS_GREGORIAN) {
-				expire, err = GregorianExpiration(clock.Now(), r.Duration)
-				if err != nil {
-					return nil, err
-				}
-			}
-
-			// If our new duration means we are currently expired.
-			createdAt := *r.CreatedAt
-			if expire <= createdAt {
-				// Renew item.
-				span.AddEvent("Limit has expired")
-				expire = createdAt + r.Duration
-				t.CreatedAt = createdAt
-				t.Remaining = t.Limit
-			}
-
-			item.ExpireAt = expire
-			t.Duration = r.Duration
-			rl.ResetTime = expire
-		}
-
-		if s != nil && reqState.IsOwner {
-			defer func() {
-				s.OnChange(ctx, r, item)
-			}()
-		}
-
-		// Client is only interested in retrieving the current status or
-		// updating the rate limit config.
-		if r.Hits == 0 {
-			return rl, nil
-		}
-
-		// If we are already at the limit.
-		if rl.Remaining == 0 && r.Hits > 0 {
-			trace.SpanFromContext(ctx).AddEvent("Already over the limit")
-			if reqState.IsOwner {
-				metricOverLimitCounter.Add(1)
-			}
-			rl.Status = Status_OVER_LIMIT
-			t.Status = rl.Status
-			return rl, nil
-		}
-
-		// If requested hits takes the remainder.
-		if t.Remaining == r.Hits {
-			trace.SpanFromContext(ctx).AddEvent("At the limit")
+	// Update the limit if it changed.
+	if t.Limit != ctx.Request.Limit {
+		// Add difference to remaining.
+		t.Remaining += ctx.Request.Limit - t.Limit
+		if t.Remaining < 0 {
 			t.Remaining = 0
-			rl.Remaining = 0
-			return rl, nil
+		}
+		t.Limit = ctx.Request.Limit
+	}
+
+	rl := &RateLimitResp{
+		Status:    t.Status,
+		Limit:     ctx.Request.Limit,
+		Remaining: t.Remaining,
+		ResetTime: ctx.CacheItem.ExpireAt,
+	}
+
+	// If the duration config changed, update the new ExpireAt.
+	if t.Duration != ctx.Request.Duration {
+		span := trace.SpanFromContext(ctx)
+		span.AddEvent("Duration changed")
+		expire := t.CreatedAt + ctx.Request.Duration
+		if HasBehavior(ctx.Request.Behavior, Behavior_DURATION_IS_GREGORIAN) {
+			expire, err = GregorianExpiration(clock.Now(), ctx.Request.Duration)
+			if err != nil {
+				return nil, err
+			}
 		}
 
-		// If requested is more than available, then return over the limit
-		// without updating the cache.
-		if r.Hits > t.Remaining {
-			trace.SpanFromContext(ctx).AddEvent("Over the limit")
-			if reqState.IsOwner {
-				metricOverLimitCounter.Add(1)
-			}
-			rl.Status = Status_OVER_LIMIT
-			if HasBehavior(r.Behavior, Behavior_DRAIN_OVER_LIMIT) {
-				// DRAIN_OVER_LIMIT behavior drains the remaining counter.
-				t.Remaining = 0
-				rl.Remaining = 0
-			}
-			return rl, nil
+		// If our new duration means we are currently expired.
+		createdAt := *ctx.Request.CreatedAt
+		if expire <= createdAt {
+			// Renew item.
+			span.AddEvent("Limit has expired")
+			expire = createdAt + ctx.Request.Duration
+			t.CreatedAt = createdAt
+			t.Remaining = t.Limit
 		}
 
-		t.Remaining -= r.Hits
-		rl.Remaining = t.Remaining
+		ctx.CacheItem.ExpireAt = expire
+		t.Duration = ctx.Request.Duration
+		rl.ResetTime = expire
+	}
+
+	if ctx.Store != nil && ctx.ReqState.IsOwner {
+		defer func() {
+			ctx.Store.OnChange(ctx, ctx.Request, ctx.CacheItem)
+		}()
+	}
+
+	// Client is only interested in retrieving the current status or
+	// updating the rate limit config.
+	if ctx.Request.Hits == 0 {
 		return rl, nil
 	}
 
-	// Item is not found in cache or store, create new.
-	return tokenBucketNewItem(ctx, s, c, r, reqState)
+	// If we are already at the limit.
+	if rl.Remaining == 0 && ctx.Request.Hits > 0 {
+		trace.SpanFromContext(ctx).AddEvent("Already over the limit")
+		if ctx.ReqState.IsOwner {
+			metricOverLimitCounter.Add(1)
+		}
+		rl.Status = Status_OVER_LIMIT
+		t.Status = rl.Status
+		return rl, nil
+	}
+
+	// If requested hits takes the remainder.
+	if t.Remaining == ctx.Request.Hits {
+		trace.SpanFromContext(ctx).AddEvent("At the limit")
+		t.Remaining = 0
+		rl.Remaining = 0
+		return rl, nil
+	}
+
+	// If requested is more than available, then return over the limit
+	// without updating the cache.
+	if ctx.Request.Hits > t.Remaining {
+		trace.SpanFromContext(ctx).AddEvent("Over the limit")
+		if ctx.ReqState.IsOwner {
+			metricOverLimitCounter.Add(1)
+		}
+		rl.Status = Status_OVER_LIMIT
+		if HasBehavior(ctx.Request.Behavior, Behavior_DRAIN_OVER_LIMIT) {
+			// DRAIN_OVER_LIMIT behavior drains the remaining counter.
+			t.Remaining = 0
+			rl.Remaining = 0
+		}
+		return rl, nil
+	}
+
+	t.Remaining -= ctx.Request.Hits
+	rl.Remaining = t.Remaining
+	return rl, nil
 }
 
-// Called by tokenBucket() when adding a new item in the store.
-func tokenBucketNewItem(ctx context.Context, s Store, c Cache, r *RateLimitRequest, reqState RateLimitContext) (resp *RateLimitResponse, err error) {
-	createdAt := *r.CreatedAt
-	expire := createdAt + r.Duration
+// initTokenBucketItem will create a new item if the passed item is nil, else it will update the provided item.
+func initTokenBucketItem(ctx rateContext) (resp *RateLimitResp, err error) {
+	createdAt := *ctx.Request.CreatedAt
+	expire := createdAt + ctx.Request.Duration
 
-	t := &TokenBucketItem{
-		Limit:     r.Limit,
-		Duration:  r.Duration,
-		Remaining: r.Limit - r.Hits,
+	t := TokenBucketItem{
+		Limit:     ctx.Request.Limit,
+		Duration:  ctx.Request.Duration,
+		Remaining: ctx.Request.Limit - ctx.Request.Hits,
 		CreatedAt: createdAt,
 	}
 
 	// Add a new rate limit to the cache.
-	if HasBehavior(r.Behavior, Behavior_DURATION_IS_GREGORIAN) {
-		expire, err = GregorianExpiration(clock.Now(), r.Duration)
+	if HasBehavior(ctx.Request.Behavior, Behavior_DURATION_IS_GREGORIAN) {
+		expire, err = GregorianExpiration(clock.Now(), ctx.Request.Duration)
 		if err != nil {
 			return nil, err
 		}
 	}
 
-	item := &CacheItem{
-		Algorithm: Algorithm_TOKEN_BUCKET,
-		Key:       r.HashKey(),
-		Value:     t,
-		ExpireAt:  expire,
-	}
-
-	rl := &RateLimitResponse{
+	rl := &RateLimitResp{
 		Status:    Status_UNDER_LIMIT,
-		Limit:     r.Limit,
+		Limit:     ctx.Request.Limit,
 		Remaining: t.Remaining,
 		ResetTime: expire,
 	}
 
 	// Client could be requesting that we always return OVER_LIMIT.
-	if r.Hits > r.Limit {
+	if ctx.Request.Hits > ctx.Request.Limit {
 		trace.SpanFromContext(ctx).AddEvent("Over the limit")
-		if reqState.IsOwner {
+		if ctx.ReqState.IsOwner {
 			metricOverLimitCounter.Add(1)
 		}
 		rl.Status = Status_OVER_LIMIT
-		rl.Remaining = r.Limit
-		t.Remaining = r.Limit
+		rl.Remaining = ctx.Request.Limit
+		t.Remaining = ctx.Request.Limit
 	}
 
-	c.Add(item)
+	// If the cache item already exists, update it
+	if ctx.CacheItem != nil {
+		ctx.CacheItem.mutex.Lock()
+		ctx.CacheItem.Algorithm = ctx.Request.Algorithm
+		ctx.CacheItem.ExpireAt = expire
+		in, ok := ctx.CacheItem.Value.(*TokenBucketItem)
+		if !ok {
+			// Likely the store gave us the wrong cache item
+			ctx.CacheItem.mutex.Unlock()
+			ctx.CacheItem = nil
+			return initTokenBucketItem(ctx)
+		}
+		*in = t
+		ctx.CacheItem.mutex.Unlock()
+	} else {
+		// else create a new cache item and add it to the cache
+		ctx.CacheItem = &CacheItem{
+			Algorithm: Algorithm_TOKEN_BUCKET,
+			Key:       ctx.Request.HashKey(),
+			Value:     &t,
+			ExpireAt:  expire,
+		}
+		if !ctx.Cache.AddIfNotPresent(ctx.CacheItem) {
+			return rl, errAlreadyExistsInCache
+		}
+	}
 
-	if s != nil && reqState.IsOwner {
-		s.OnChange(ctx, r, item)
+	if ctx.Store != nil && ctx.ReqState.IsOwner {
+		ctx.Store.OnChange(ctx, ctx.Request, ctx.CacheItem)
 	}
 
 	return rl, nil
 }
 
 // Implements leaky bucket algorithm for rate limiting https://en.wikipedia.org/wiki/Leaky_bucket
-func leakyBucket(ctx context.Context, s Store, c Cache, r *RateLimitRequest, reqState RateLimitContext) (resp *RateLimitResponse, err error) {
-	if r.Burst == 0 {
-		r.Burst = r.Limit
-	}
+func leakyBucket(ctx rateContext) (resp *RateLimitResp, err error) {
+	leakyBucketTimer := prometheus.NewTimer(metricFuncTimeDuration.WithLabelValues("V1Instance.getRateLimit_leakyBucket"))
+	defer leakyBucketTimer.ObserveDuration()
+	var ok bool
 
-	createdAt := *r.CreatedAt
+	if ctx.Request.Burst == 0 {
+		ctx.Request.Burst = ctx.Request.Limit
+	}
 
 	// Get rate limit from cache.
-	hashKey := r.HashKey()
-	item, ok := c.GetItem(hashKey)
+	hashKey := ctx.Request.HashKey()
+	ctx.CacheItem, ok = ctx.Cache.GetItem(hashKey)
 
-	if s != nil && !ok {
-		// Cache miss.
-		// Check our store for the item.
-		if item, ok = s.Get(ctx, r); ok {
-			c.Add(item)
+	if ctx.Store != nil && !ok {
+		// Cache missed, check our store for the item.
+		if ctx.CacheItem, ok = ctx.Store.Get(ctx, ctx.Request); ok {
+			if !ctx.Cache.AddIfNotPresent(ctx.CacheItem) {
+				// Someone else added a new leaky bucket item to the cache for this
+				// rate limit before we did, so we retry by calling ourselves recursively.
+				return leakyBucket(ctx)
+			}
 		}
 	}
 
-	// Sanity checks.
-	if ok {
-		if item.Value == nil {
-			msgPart := "leakyBucket: Invalid cache item; Value is nil"
-			trace.SpanFromContext(ctx).AddEvent(msgPart, trace.WithAttributes(
-				attribute.String("hashKey", hashKey),
-				attribute.String("key", r.UniqueKey),
-				attribute.String("name", r.Name),
-			))
-			logrus.Error(msgPart)
-			ok = false
-		} else if item.Key != hashKey {
-			msgPart := "leakyBucket: Invalid cache item; key mismatch"
-			trace.SpanFromContext(ctx).AddEvent(msgPart, trace.WithAttributes(
-				attribute.String("itemKey", item.Key),
-				attribute.String("hashKey", hashKey),
-				attribute.String("name", r.Name),
-			))
-			logrus.Error(msgPart)
-			ok = false
+	// If no item was found, or the item is expired.
+	if !ok || ctx.CacheItem.IsExpired() {
+		rl, err := initLeakyBucketItem(ctx)
+		if err != nil && errors.Is(err, errAlreadyExistsInCache) {
+			// Someone else added a new leaky bucket item to the cache for this
+			// rate limit before we did, so we retry by calling ourselves recursively.
+			return leakyBucket(ctx)
 		}
+		return rl, err
 	}
 
-	if ok {
-		// Item found in cache or store.
+	// Gain exclusive rights to this item while we calculate the rate limit
+	ctx.CacheItem.mutex.Lock()
 
-		b, ok := item.Value.(*LeakyBucketItem)
-		if !ok {
-			// Client switched algorithms; perhaps due to a migration?
-			c.Remove(hashKey)
+	// Item found in cache or store.
+	t, ok := ctx.CacheItem.Value.(*LeakyBucketItem)
+	if !ok {
+		// Client switched algorithms; perhaps due to a migration?
+		ctx.Cache.Remove(hashKey)
+		if ctx.Store != nil {
+			ctx.Store.Remove(ctx, hashKey)
+		}
+		// Tell init to create a new cache item
+		ctx.CacheItem.mutex.Unlock()
+		ctx.CacheItem = nil
+		rl, err := initLeakyBucketItem(ctx)
+		if err != nil && errors.Is(err, errAlreadyExistsInCache) {
+			return leakyBucket(ctx)
+		}
+		return rl, err
+	}
 
-			if s != nil {
-				s.Remove(ctx, hashKey)
-			}
+	defer ctx.CacheItem.mutex.Unlock()
 
-			return leakyBucketNewItem(ctx, s, c, r, reqState)
+	if HasBehavior(ctx.Request.Behavior, Behavior_RESET_REMAINING) {
+		t.Remaining = float64(ctx.Request.Burst)
+	}
+
+	// Update burst, limit and duration if they changed
+	if t.Burst != ctx.Request.Burst {
+		if ctx.Request.Burst > int64(t.Remaining) {
+			t.Remaining = float64(ctx.Request.Burst)
+		}
+		t.Burst = ctx.Request.Burst
+	}
+
+	t.Limit = ctx.Request.Limit
+	t.Duration = ctx.Request.Duration
+
+	duration := ctx.Request.Duration
+	rate := float64(duration) / float64(ctx.Request.Limit)
+
+	if HasBehavior(ctx.Request.Behavior, Behavior_DURATION_IS_GREGORIAN) {
+		d, err := GregorianDuration(clock.Now(), ctx.Request.Duration)
+		if err != nil {
+			return nil, err
+		}
+		n := clock.Now()
+		expire, err := GregorianExpiration(n, ctx.Request.Duration)
+		if err != nil {
+			return nil, err
 		}
 
-		if HasBehavior(r.Behavior, Behavior_RESET_REMAINING) {
-			b.Remaining = float64(r.Burst)
+		// Calculate the rate using the entire duration of the gregorian interval
+		// IE: Minute = 60,000 milliseconds, etc.. etc..
+		rate = float64(d) / float64(ctx.Request.Limit)
+		// Update the duration to be the end of the gregorian interval
+		duration = expire - (n.UnixNano() / 1000000)
+	}
+
+	createdAt := *ctx.Request.CreatedAt
+	if ctx.Request.Hits != 0 {
+		ctx.CacheItem.ExpireAt = createdAt + duration
+	}
+
+	// Calculate how much leaked out of the bucket since the last time we leaked a hit
+	elapsed := createdAt - t.UpdatedAt
+	leak := float64(elapsed) / rate
+
+	if int64(leak) > 0 {
+		t.Remaining += leak
+		t.UpdatedAt = createdAt
+	}
+
+	if int64(t.Remaining) > t.Burst {
+		t.Remaining = float64(t.Burst)
+	}
+
+	rl := &RateLimitResp{
+		Limit:     t.Limit,
+		Remaining: int64(t.Remaining),
+		Status:    Status_UNDER_LIMIT,
+		ResetTime: createdAt + (t.Limit-int64(t.Remaining))*int64(rate),
+	}
+
+	// TODO: Feature missing: check for Duration change between item/request.
+
+	if ctx.Store != nil && ctx.ReqState.IsOwner {
+		defer func() {
+			ctx.Store.OnChange(ctx, ctx.Request, ctx.CacheItem)
+		}()
+	}
+
+	// If we are already at the limit
+	if int64(t.Remaining) == 0 && ctx.Request.Hits > 0 {
+		if ctx.ReqState.IsOwner {
+			metricOverLimitCounter.Add(1)
 		}
+		rl.Status = Status_OVER_LIMIT
+		return rl, nil
+	}
 
-		// Update burst, limit and duration if they changed
-		if b.Burst != r.Burst {
-			if r.Burst > int64(b.Remaining) {
-				b.Remaining = float64(r.Burst)
-			}
-			b.Burst = r.Burst
-		}
-
-		b.Limit = r.Limit
-		b.Duration = r.Duration
-
-		duration := r.Duration
-		rate := float64(duration) / float64(r.Limit)
-
-		if HasBehavior(r.Behavior, Behavior_DURATION_IS_GREGORIAN) {
-			d, err := GregorianDuration(clock.Now(), r.Duration)
-			if err != nil {
-				return nil, err
-			}
-			n := clock.Now()
-			expire, err := GregorianExpiration(n, r.Duration)
-			if err != nil {
-				return nil, err
-			}
-
-			// Calculate the rate using the entire duration of the gregorian interval
-			// IE: Minute = 60,000 milliseconds, etc.. etc..
-			rate = float64(d) / float64(r.Limit)
-			// Update the duration to be the end of the gregorian interval
-			duration = expire - (n.UnixNano() / 1000000)
-		}
-
-		if r.Hits != 0 {
-			c.UpdateExpiration(r.HashKey(), createdAt+duration)
-		}
-
-		// Calculate how much leaked out of the bucket since the last time we leaked a hit
-		elapsed := createdAt - b.UpdatedAt
-		leak := float64(elapsed) / rate
-
-		if int64(leak) > 0 {
-			b.Remaining += leak
-			b.UpdatedAt = createdAt
-		}
-
-		if int64(b.Remaining) > b.Burst {
-			b.Remaining = float64(b.Burst)
-		}
-
-		rl := &RateLimitResponse{
-			Limit:     b.Limit,
-			Remaining: int64(b.Remaining),
-			Status:    Status_UNDER_LIMIT,
-			ResetTime: createdAt + (b.Limit-int64(b.Remaining))*int64(rate),
-		}
-
-		// TODO: Feature missing: check for Duration change between item/request.
-
-		if s != nil && reqState.IsOwner {
-			defer func() {
-				s.OnChange(ctx, r, item)
-			}()
-		}
-
-		// If we are already at the limit
-		if int64(b.Remaining) == 0 && r.Hits > 0 {
-			if reqState.IsOwner {
-				metricOverLimitCounter.Add(1)
-			}
-			rl.Status = Status_OVER_LIMIT
-			return rl, nil
-		}
-
-		// If requested hits takes the remainder
-		if int64(b.Remaining) == r.Hits {
-			b.Remaining = 0
-			rl.Remaining = int64(b.Remaining)
-			rl.ResetTime = createdAt + (rl.Limit-rl.Remaining)*int64(rate)
-			return rl, nil
-		}
-
-		// If requested is more than available, then return over the limit
-		// without updating the bucket, unless `DRAIN_OVER_LIMIT` is set.
-		if r.Hits > int64(b.Remaining) {
-			if reqState.IsOwner {
-				metricOverLimitCounter.Add(1)
-			}
-			rl.Status = Status_OVER_LIMIT
-
-			// DRAIN_OVER_LIMIT behavior drains the remaining counter.
-			if HasBehavior(r.Behavior, Behavior_DRAIN_OVER_LIMIT) {
-				b.Remaining = 0
-				rl.Remaining = 0
-			}
-
-			return rl, nil
-		}
-
-		// Client is only interested in retrieving the current status
-		if r.Hits == 0 {
-			return rl, nil
-		}
-
-		b.Remaining -= float64(r.Hits)
-		rl.Remaining = int64(b.Remaining)
+	// If requested hits takes the remainder
+	if int64(t.Remaining) == ctx.Request.Hits {
+		t.Remaining = 0
+		rl.Remaining = int64(t.Remaining)
 		rl.ResetTime = createdAt + (rl.Limit-rl.Remaining)*int64(rate)
 		return rl, nil
 	}
 
-	return leakyBucketNewItem(ctx, s, c, r, reqState)
+	// If requested is more than available, then return over the limit
+	// without updating the bucket, unless `DRAIN_OVER_LIMIT` is set.
+	if ctx.Request.Hits > int64(t.Remaining) {
+		if ctx.ReqState.IsOwner {
+			metricOverLimitCounter.Add(1)
+		}
+		rl.Status = Status_OVER_LIMIT
+
+		// DRAIN_OVER_LIMIT behavior drains the remaining counter.
+		if HasBehavior(ctx.Request.Behavior, Behavior_DRAIN_OVER_LIMIT) {
+			t.Remaining = 0
+			rl.Remaining = 0
+		}
+
+		return rl, nil
+	}
+
+	// Client is only interested in retrieving the current status
+	if ctx.Request.Hits == 0 {
+		return rl, nil
+	}
+
+	t.Remaining -= float64(ctx.Request.Hits)
+	rl.Remaining = int64(t.Remaining)
+	rl.ResetTime = createdAt + (rl.Limit-rl.Remaining)*int64(rate)
+	return rl, nil
+
 }
 
 // Called by leakyBucket() when adding a new item in the store.
-func leakyBucketNewItem(ctx context.Context, s Store, c Cache, r *RateLimitRequest, reqState RateLimitContext) (resp *RateLimitResponse, err error) {
-	createdAt := *r.CreatedAt
-	duration := r.Duration
-	rate := float64(duration) / float64(r.Limit)
-	if HasBehavior(r.Behavior, Behavior_DURATION_IS_GREGORIAN) {
+func initLeakyBucketItem(ctx rateContext) (resp *RateLimitResp, err error) {
+	createdAt := *ctx.Request.CreatedAt
+	duration := ctx.Request.Duration
+	rate := float64(duration) / float64(ctx.Request.Limit)
+	if HasBehavior(ctx.Request.Behavior, Behavior_DURATION_IS_GREGORIAN) {
 		n := clock.Now()
-		expire, err := GregorianExpiration(n, r.Duration)
+		expire, err := GregorianExpiration(n, ctx.Request.Duration)
 		if err != nil {
 			return nil, err
 		}
@@ -444,23 +474,23 @@ func leakyBucketNewItem(ctx context.Context, s Store, c Cache, r *RateLimitReque
 
 	// Create a new leaky bucket
 	b := LeakyBucketItem{
-		Remaining: float64(r.Burst - r.Hits),
-		Limit:     r.Limit,
+		Remaining: float64(ctx.Request.Burst - ctx.Request.Hits),
+		Limit:     ctx.Request.Limit,
 		Duration:  duration,
 		UpdatedAt: createdAt,
-		Burst:     r.Burst,
+		Burst:     ctx.Request.Burst,
 	}
 
 	rl := RateLimitResponse{
 		Status:    Status_UNDER_LIMIT,
 		Limit:     b.Limit,
-		Remaining: r.Burst - r.Hits,
-		ResetTime: createdAt + (b.Limit-(r.Burst-r.Hits))*int64(rate),
+		Remaining: ctx.Request.Burst - ctx.Request.Hits,
+		ResetTime: createdAt + (b.Limit-(ctx.Request.Burst-ctx.Request.Hits))*int64(rate),
 	}
 
 	// Client could be requesting that we start with the bucket OVER_LIMIT
-	if r.Hits > r.Burst {
-		if reqState.IsOwner {
+	if ctx.Request.Hits > ctx.Request.Burst {
+		if ctx.ReqState.IsOwner {
 			metricOverLimitCounter.Add(1)
 		}
 		rl.Status = Status_OVER_LIMIT
@@ -469,17 +499,33 @@ func leakyBucketNewItem(ctx context.Context, s Store, c Cache, r *RateLimitReque
 		b.Remaining = 0
 	}
 
-	item := &CacheItem{
-		ExpireAt:  createdAt + duration,
-		Algorithm: r.Algorithm,
-		Key:       r.HashKey(),
-		Value:     &b,
+	if ctx.CacheItem != nil {
+		ctx.CacheItem.mutex.Lock()
+		ctx.CacheItem.Algorithm = ctx.Request.Algorithm
+		ctx.CacheItem.ExpireAt = createdAt + duration
+		in, ok := ctx.CacheItem.Value.(*LeakyBucketItem)
+		if !ok {
+			// Likely the store gave us the wrong cache item
+			ctx.CacheItem.mutex.Unlock()
+			ctx.CacheItem = nil
+			return initLeakyBucketItem(ctx)
+		}
+		*in = b
+		ctx.CacheItem.mutex.Unlock()
+	} else {
+		ctx.CacheItem = &CacheItem{
+			ExpireAt:  createdAt + duration,
+			Algorithm: ctx.Request.Algorithm,
+			Key:       ctx.Request.HashKey(),
+			Value:     &b,
+		}
+		if !ctx.Cache.AddIfNotPresent(ctx.CacheItem) {
+			return nil, errAlreadyExistsInCache
+		}
 	}
 
-	c.Add(item)
-
-	if s != nil && reqState.IsOwner {
-		s.OnChange(ctx, r, item)
+	if ctx.Store != nil && ctx.ReqState.IsOwner {
+		ctx.Store.OnChange(ctx, ctx.Request, ctx.CacheItem)
 	}
 
 	return &rl, nil

@@ -15,9 +15,10 @@ import (
 	"testing"
 	"time"
 
-	cli "github.com/gubernator-io/gubernator/v3/cmd/gubernator"
-	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	cli "github.com/gubernator-io/gubernator/v2/cmd/gubernator"
+	"github.com/stretchr/testify/assert"
 	"golang.org/x/net/proxy"
 )
 
@@ -77,9 +78,9 @@ func TestCLI(t *testing.T) {
 			time.Sleep(time.Second * 1)
 
 			err = c.Process.Signal(syscall.SIGTERM)
-			require.NoError(t, err)
 
 			<-waitCh
+			require.NoError(t, err, out.String())
 			assert.Contains(t, out.String(), tt.contains)
 		})
 	}
