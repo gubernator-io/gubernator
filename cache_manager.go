@@ -58,7 +58,14 @@ func (m *cacheManager) GetRateLimit(ctx context.Context, req *RateLimitReq, stat
 
 	switch req.Algorithm {
 	case Algorithm_TOKEN_BUCKET:
-		rlResponse, err = tokenBucket(ctx, m.conf.Store, m.cache, req, state)
+		rlResponse, err = tokenBucket(rateContext{
+			Store:      m.conf.Store,
+			Cache:      m.cache,
+			ReqState:   state,
+			Request:    req,
+			Context:    ctx,
+			InstanceID: m.conf.InstanceID,
+		})
 		if err != nil {
 			msg := "Error in tokenBucket"
 			countError(err, msg)

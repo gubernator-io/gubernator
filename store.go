@@ -16,7 +16,10 @@ limitations under the License.
 
 package gubernator
 
-import "context"
+import (
+	"context"
+	"sync"
+)
 
 // PERSISTENT STORE DETAILS
 
@@ -27,6 +30,7 @@ import "context"
 // Both interfaces can be implemented simultaneously to ensure data is always saved to persistent storage.
 
 type LeakyBucketItem struct {
+	mutex     sync.Mutex
 	Limit     int64
 	Duration  int64
 	Remaining float64
@@ -47,18 +51,18 @@ type TokenBucketItem struct {
 // to maximize performance of gubernator.
 // Implementations MUST be threadsafe.
 type Store interface {
-	// Called by gubernator *after* a rate limit item is updated. It's up to the store to
+	// OnChange is called by gubernator *after* a rate limit item is updated. It's up to the store to
 	// decide if this rate limit item should be persisted in the store. It's up to the
 	// store to expire old rate limit items. The CacheItem represents the current state of
 	// the rate limit item *after* the RateLimitReq has been applied.
 	OnChange(ctx context.Context, r *RateLimitReq, item *CacheItem)
 
-	// Called by gubernator when a rate limit is missing from the cache. It's up to the store
+	// Get is called by gubernator when a rate limit is missing from the cache. It's up to the store
 	// to decide if this request is fulfilled. Should return true if the request is fulfilled
 	// and false if the request is not fulfilled or doesn't exist in the store.
 	Get(ctx context.Context, r *RateLimitReq) (*CacheItem, bool)
 
-	// Called by gubernator when an existing rate limit should be removed from the store.
+	// Remove ic called by gubernator when an existing rate limit should be removed from the store.
 	// NOTE: This is NOT called when an rate limit expires from the cache, store implementors
 	// must expire rate limits in the store.
 	Remove(ctx context.Context, key string)
@@ -77,39 +81,40 @@ type Loader interface {
 	Save(chan *CacheItem) error
 }
 
-func NewMockStore() *MockStore {
-	ml := &MockStore{
-		Called:     make(map[string]int),
-		CacheItems: make(map[string]*CacheItem),
-	}
-	ml.Called["OnChange()"] = 0
-	ml.Called["Remove()"] = 0
-	ml.Called["Get()"] = 0
-	return ml
-}
-
-type MockStore struct {
-	Called     map[string]int
-	CacheItems map[string]*CacheItem
-}
-
-var _ Store = &MockStore{}
-
-func (ms *MockStore) OnChange(ctx context.Context, r *RateLimitReq, item *CacheItem) {
-	ms.Called["OnChange()"] += 1
-	ms.CacheItems[item.Key] = item
-}
-
-func (ms *MockStore) Get(ctx context.Context, r *RateLimitReq) (*CacheItem, bool) {
-	ms.Called["Get()"] += 1
-	item, ok := ms.CacheItems[r.HashKey()]
-	return item, ok
-}
-
-func (ms *MockStore) Remove(ctx context.Context, key string) {
-	ms.Called["Remove()"] += 1
-	delete(ms.CacheItems, key)
-}
+// TODO Remove
+//func NewMockStore() *MockStore {
+//	ml := &MockStore{
+//		Called:     make(map[string]int),
+//		CacheItems: make(map[string]*CacheItem),
+//	}
+//	ml.Called["OnChange()"] = 0
+//	ml.Called["Remove()"] = 0
+//	ml.Called["Get()"] = 0
+//	return ml
+//}
+//
+//type MockStore struct {
+//	Called     map[string]int
+//	CacheItems map[string]*CacheItem
+//}
+//
+//var _ Store = &MockStore{}
+//
+//func (ms *MockStore) OnChange(ctx context.Context, r *RateLimitReq, item *CacheItem) {
+//	ms.Called["OnChange()"] += 1
+//	ms.CacheItems[item.Key] = item
+//}
+//
+//func (ms *MockStore) Get(ctx context.Context, r *RateLimitReq) (*CacheItem, bool) {
+//	ms.Called["Get()"] += 1
+//	item, ok := ms.CacheItems[r.HashKey()]
+//	return item, ok
+//}
+//
+//func (ms *MockStore) Remove(ctx context.Context, key string) {
+//	ms.Called["Remove()"] += 1
+//	delete(ms.CacheItems, key)
+//}
 
 func NewMockLoader() *MockLoader {
 	ml := &MockLoader{

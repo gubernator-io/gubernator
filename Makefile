@@ -45,6 +45,9 @@ clean-proto: ## Clean the generated source files from the protobuf sources
 	@find . -name "*.pb.go" -type f -delete
 	@find . -name "*.pb.*.go" -type f -delete
 
+.PHONY: validate
+validate: lint test
+	go mod tidy && git diff --exit-code
 
 .PHONY: proto
 proto: ## Build protos

@@ -39,7 +39,7 @@ func BenchmarkCache(b *testing.B) {
 				cache, err := testCase.NewTestCache()
 				require.NoError(b, err)
 				expire := clock.Now().Add(time.Hour).UnixMilli()
-				keys := GenerateRandomKeys()
+				keys := GenerateRandomKeys(defaultNumKeys)
 
 				for _, key := range keys {
 					item := &gubernator.CacheItem{
@@ -64,7 +64,7 @@ func BenchmarkCache(b *testing.B) {
 				cache, err := testCase.NewTestCache()
 				require.NoError(b, err)
 				expire := clock.Now().Add(time.Hour).UnixMilli()
-				keys := GenerateRandomKeys()
+				keys := GenerateRandomKeys(defaultNumKeys)
 
 				mask := len(keys) - 1
 				b.ReportAllocs()
@@ -85,7 +85,7 @@ func BenchmarkCache(b *testing.B) {
 				cache, err := testCase.NewTestCache()
 				require.NoError(b, err)
 				expire := clock.Now().Add(time.Hour).UnixMilli()
-				keys := GenerateRandomKeys()
+				keys := GenerateRandomKeys(defaultNumKeys)
 
 				for _, key := range keys {
 					item := &gubernator.CacheItem{
@@ -129,7 +129,7 @@ func BenchmarkCache(b *testing.B) {
 				cache, err := testCase.NewTestCache()
 				require.NoError(b, err)
 				expire := clock.Now().Add(time.Hour).UnixMilli()
-				keys := GenerateRandomKeys()
+				keys := GenerateRandomKeys(defaultNumKeys)
 
 				var mutex sync.Mutex
 				var task func(key string)
@@ -172,11 +172,11 @@ func BenchmarkCache(b *testing.B) {
 	}
 }
 
-const cacheSize = 32768
+const defaultNumKeys = 32768
 
-func GenerateRandomKeys() []string {
-	keys := make([]string, 0, cacheSize)
-	for i := 0; i < cacheSize; i++ {
+func GenerateRandomKeys(size int) []string {
+	keys := make([]string, 0, size)
+	for i := 0; i < size; i++ {
 		keys = append(keys, gubernator.RandomString(20))
 	}
 	return keys

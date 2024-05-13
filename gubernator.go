@@ -420,12 +420,26 @@ func (s *V1Instance) getGlobalRateLimit(ctx context.Context, req *RateLimitReq) 
 func (s *V1Instance) UpdatePeerGlobals(ctx context.Context, r *UpdatePeerGlobalsReq) (*UpdatePeerGlobalsResp, error) {
 	defer prometheus.NewTimer(metricFuncTimeDuration.WithLabelValues("V1Instance.UpdatePeerGlobals")).ObserveDuration()
 	now := MillisecondNow()
+
 	for _, g := range r.Globals {
-		item := &CacheItem{
-			ExpireAt:  g.Status.ResetTime,
-			Algorithm: g.Algorithm,
-			Key:       g.Key,
+		item, _, err := s.cache.GetCacheItem(ctx, g.Key)
+		if err != nil {
+			return nil, err
 		}
+
+		if item == nil {
+			item = &CacheItem{
+				ExpireAt:  g.Status.ResetTime,
+				Algorithm: g.Algorithm,
+				Key:       g.Key,
+			}
+			err := s.cache.AddCacheItem(ctx, g.Key, item)
+			if err != nil {
+				return nil, fmt.Errorf("during CacheManager.AddCacheItem(): %w", err)
+			}
+		}
+
+		item.mutex.Lock()
 		switch g.Algorithm {
 		case Algorithm_LEAKY_BUCKET:
 			item.Value = &LeakyBucketItem{
@@ -444,12 +458,8 @@ func (s *V1Instance) UpdatePeerGlobals(ctx context.Context, r *UpdatePeerGlobals
 				CreatedAt: now,
 			}
 		}
-		err := s.cache.AddCacheItem(ctx, g.Key, item)
-		if err != nil {
-			return nil, errors.Wrap(err, "Error in CacheManager.AddCacheItem")
-		}
+		item.mutex.Unlock()
 	}
-
 	return &UpdatePeerGlobalsResp{}, nil
 }
 

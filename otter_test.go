@@ -65,13 +65,18 @@ func TestOtterCache(t *testing.T) {
 		}
 		cache.Add(item1)
 
-		// Update same key.
+		// Update same key is refused
 		item2 := &gubernator.CacheItem{
 			Key:      key,
 			Value:    "new value",
 			ExpireAt: expireAt,
 		}
-		cache.Add(item2)
+		assert.False(t, cache.Add(item2))
+
+		// Fetch and update the CacheItem
+		update, ok := cache.GetItem(key)
+		assert.True(t, ok)
+		update.Value = "new value"
 
 		// Verify.
 		verifyItem, ok := cache.GetItem(key)

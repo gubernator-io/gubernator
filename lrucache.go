@@ -119,11 +119,12 @@ func (c *LRUCache) GetItem(key string) (item *CacheItem, ok bool) {
 	if ele, hit := c.cache[key]; hit {
 		entry := ele.Value.(*CacheItem)
 
-		if entry.IsExpired() {
-			c.removeElement(ele)
-			metricCacheAccess.WithLabelValues("miss").Add(1)
-			return
-		}
+		// TODO(thrawn01): Remove
+		//if entry.IsExpired() {
+		//	c.removeElement(ele)
+		//	metricCacheAccess.WithLabelValues("miss").Add(1)
+		//	return
+		//}
 
 		metricCacheAccess.WithLabelValues("hit").Add(1)
 		c.ll.MoveToFront(ele)

@@ -37,9 +37,9 @@ func NewOtterCache(size int) (*OtterCache, error) {
 
 // Add adds a new CacheItem to the cache. The key must be provided via CacheItem.Key
 // returns true if the item was added to the cache; false if the item was too large
-// for the cache.
+// for the cache or already exists in the cache.
 func (o *OtterCache) Add(item *CacheItem) bool {
-	return o.cache.Set(item.Key, item)
+	return o.cache.SetIfAbsent(item.Key, item)
 }
 
 // GetItem returns an item in the cache that corresponds to the provided key
@@ -50,16 +50,17 @@ func (o *OtterCache) GetItem(key string) (*CacheItem, bool) {
 		return nil, false
 	}
 
-	if item.IsExpired() {
-		metricCacheAccess.WithLabelValues("miss").Add(1)
-		// If the item is expired, just return `nil`
-		//
-		// We avoid the explicit deletion of the expired item to avoid acquiring a mutex lock in otter.
-		// Explicit deletions in otter require a mutex, which can cause performance bottlenecks
-		// under high concurrency scenarios. By allowing the item to be evicted naturally by
-		// otter's eviction mechanism, we avoid impacting performance under high concurrency.
-		return nil, false
-	}
+	// TODO(thrawn01): Remove
+	//if item.IsExpired() {
+	//	metricCacheAccess.WithLabelValues("miss").Add(1)
+	//	// If the item is expired, just return `nil`
+	//	//
+	//	// We avoid the explicit deletion of the expired item to avoid acquiring a mutex lock in otter.
+	//	// Explicit deletions in otter require a mutex, which can cause performance bottlenecks
+	//	// under high concurrency scenarios. By allowing the item to be evicted naturally by
+	//	// otter's eviction mechanism, we avoid impacting performance under high concurrency.
+	//	return nil, false
+	//}
 	metricCacheAccess.WithLabelValues("hit").Add(1)
 	return item, true
 }

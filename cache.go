@@ -16,6 +16,8 @@ limitations under the License.
 
 package gubernator
 
+import "sync"
+
 type Cache interface {
 	Add(item *CacheItem) bool
 	UpdateExpiration(key string, expireAt int64) bool
@@ -27,6 +29,7 @@ type Cache interface {
 }
 
 type CacheItem struct {
+	mutex     sync.Mutex
 	Algorithm Algorithm
 	Key       string
 	Value     interface{}
@@ -41,6 +44,10 @@ type CacheItem struct {
 }
 
 func (item *CacheItem) IsExpired() bool {
+	// TODO(thrawn01): Eliminate the need for this mutex lock
+	item.mutex.Lock()
+	defer item.mutex.Unlock()
+
 	now := MillisecondNow()
 
 	// If the entry is invalidated

@@ -2252,8 +2252,14 @@ func waitForIdle(timeout clock.Duration, daemons ...*guber.Daemon) error {
 				if err != nil {
 					return err
 				}
-				ggql := metrics["gubernator_global_queue_length"]
-				gsql := metrics["gubernator_global_send_queue_length"]
+				ggql, ok := metrics["gubernator_global_queue_length"]
+				if !ok {
+					return errors.New("gubernator_global_queue_length not found")
+				}
+				gsql, ok := metrics["gubernator_global_send_queue_length"]
+				if !ok {
+					return errors.New("gubernator_global_send_queue_length not found")
+				}
 
 				if ggql.Value == 0 && gsql.Value == 0 {
 					return nil

@@ -53,6 +53,23 @@ func GetRandomPeer(dc string) gubernator.PeerInfo {
 	return local[rand.Intn(len(local))]
 }
 
+// GetRandomDaemon returns a random daemon from the cluster
+func GetRandomDaemon(dc string) *gubernator.Daemon {
+	var local []*gubernator.Daemon
+
+	for _, d := range daemons {
+		if d.PeerInfo.DataCenter == dc {
+			local = append(local, d)
+		}
+	}
+
+	if len(local) == 0 {
+		panic(fmt.Sprintf("failed to find random daemon for dc '%s'", dc))
+	}
+
+	return local[rand.Intn(len(local))]
+}
+
 // GetPeers returns a list of all peers in the cluster
 func GetPeers() []gubernator.PeerInfo {
 	return peers
