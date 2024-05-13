@@ -31,7 +31,7 @@ import (
 	"github.com/mailgun/holster/v4/tracing"
 	"github.com/sirupsen/logrus"
 	"go.opentelemetry.io/otel/sdk/resource"
-	semconv "go.opentelemetry.io/otel/semconv/v1.21.0"
+	semconv "go.opentelemetry.io/otel/semconv/v1.24.0"
 	"k8s.io/klog/v2"
 )
 
