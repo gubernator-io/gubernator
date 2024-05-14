@@ -14,7 +14,8 @@ type OtterCache struct {
 // NewOtterCache returns a new cache backed by otter. If size is 0, then
 // the cache is created with a default cache size.
 func NewOtterCache(size int) (*OtterCache, error) {
-	setter.SetDefault(&size, 150_000)
+	// Default is 500k bytes in size
+	setter.SetDefault(&size, 500_000)
 	b, err := otter.NewBuilder[string, *CacheItem](size)
 	if err != nil {
 		return nil, fmt.Errorf("during otter.NewBuilder(): %w", err)
@@ -24,6 +25,12 @@ func NewOtterCache(size int) (*OtterCache, error) {
 		if cause == otter.Size {
 			metricCacheUnexpiredEvictions.Add(1)
 		}
+	})
+
+	b.Cost(func(key string, value *CacheItem) uint32 {
+		// The total size of the CacheItem and Bucket item is 104 bytes.
+		// See cache.go:CacheItem definition for details.
+		return uint32(104 + len(value.Key))
 	})
 
 	cache, err := b.Build()

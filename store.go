@@ -28,20 +28,23 @@ import (
 // and `Get()` to keep the in memory cache and persistent store up to date with the latest ratelimit data.
 // Both interfaces can be implemented simultaneously to ensure data is always saved to persistent storage.
 
+// LeakyBucketItem is 40 bytes aligned in size
 type LeakyBucketItem struct {
-	Limit     int64
-	Duration  int64
-	Remaining float64
-	UpdatedAt int64
-	Burst     int64
+	Limit     int64   // 8 bytes
+	Duration  int64   // 8 bytes
+	Remaining float64 // 8 bytes
+	UpdatedAt int64   // 8 bytes
+	Burst     int64   // 8 bytes
 }
 
+// TokenBucketItem is 40 bytes aligned in size
 type TokenBucketItem struct {
-	Status    Status
-	Limit     int64
-	Duration  int64
-	Remaining int64
-	CreatedAt int64
+	Limit     int64  // 8 bytes
+	Duration  int64  // 8 bytes
+	Remaining int64  // 8 bytes
+	CreatedAt int64  // 8 bytes
+	Status    Status // 4 bytes
+	// 4 bytes of padding
 }
 
 // Store interface allows implementors to off load storage of all or a subset of ratelimits to

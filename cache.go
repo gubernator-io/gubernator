@@ -27,19 +27,23 @@ type Cache interface {
 	Close() error
 }
 
+// CacheItem is 64 bytes aligned in size
+// Since both TokenBucketItem and LeakyBucketItem both 40 bytes in size then a CacheItem with
+// the Value attached takes up 64 + 40 = 104 bytes of space. Not counting the size of the key.
 type CacheItem struct {
-	mutex     sync.Mutex
-	Algorithm Algorithm
-	Key       string
-	Value     interface{}
+	mutex sync.Mutex  // 8  bytes
+	Key   string      // 16 bytes
+	Value interface{} // 16 bytes
 
 	// Timestamp when rate limit expires in epoch milliseconds.
-	ExpireAt int64
+	ExpireAt int64 // 8 Bytes
 	// Timestamp when the cache should invalidate this rate limit. This is useful when used in conjunction with
 	// a persistent store to ensure our node has the most up to date info from the store. Ignored if set to `0`
 	// It is set by the persistent store implementation to indicate when the node should query the persistent store
 	// for the latest rate limit data.
-	InvalidAt int64
+	InvalidAt int64     // 8 bytes
+	Algorithm Algorithm // 4 bytes
+	// 4 Bytes of Padding
 }
 
 func (item *CacheItem) IsExpired() bool {

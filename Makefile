@@ -24,7 +24,7 @@ test: ## Run unit tests and measure code coverage
 
 .PHONY: bench
 bench: ## Run Go benchmarks
-	go test ./... -bench . -benchtime 5s -timeout 0 -run='^$$' -benchmem
+	go test ./... -bench . -timeout 6m -run='^$$' -benchmem
 
 .PHONY: docker
 docker: ## Build Docker image

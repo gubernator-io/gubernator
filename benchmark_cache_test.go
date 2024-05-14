@@ -12,6 +12,7 @@ import (
 )
 
 func BenchmarkCache(b *testing.B) {
+	const defaultNumKeys = 8192
 	testCases := []struct {
 		Name         string
 		NewTestCache func() (gubernator.Cache, error)
@@ -171,8 +172,6 @@ func BenchmarkCache(b *testing.B) {
 		})
 	}
 }
-
-const defaultNumKeys = 32768
 
 func GenerateRandomKeys(size int) []string {
 	keys := make([]string, 0, size)
