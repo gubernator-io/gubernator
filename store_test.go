@@ -150,8 +150,9 @@ func (ms *NoOpStore) Get(ctx context.Context, r *gubernator.RateLimitReq) (*gube
 // add items to the cache in parallel thus creating a race condition the code must then handle.
 func TestHighContentionFromStore(t *testing.T) {
 	const (
-		numGoroutines = 1_000
-		numKeys       = 400
+		// Increase these number to improve the chance of contention, but at the cost of test speed.
+		numGoroutines = 500
+		numKeys       = 100
 	)
 	store := &NoOpStore{}
 	srv := newV1Server(t, "localhost:0", gubernator.Config{

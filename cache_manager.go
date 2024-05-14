@@ -59,12 +59,11 @@ func (m *cacheManager) GetRateLimit(ctx context.Context, req *RateLimitReq, stat
 	switch req.Algorithm {
 	case Algorithm_TOKEN_BUCKET:
 		rlResponse, err = tokenBucket(rateContext{
-			Store:      m.conf.Store,
-			Cache:      m.cache,
-			ReqState:   state,
-			Request:    req,
-			Context:    ctx,
-			InstanceID: m.conf.InstanceID,
+			Store:    m.conf.Store,
+			Cache:    m.cache,
+			ReqState: state,
+			Request:  req,
+			Context:  ctx,
 		})
 		if err != nil {
 			msg := "Error in tokenBucket"
@@ -72,7 +71,13 @@ func (m *cacheManager) GetRateLimit(ctx context.Context, req *RateLimitReq, stat
 		}
 
 	case Algorithm_LEAKY_BUCKET:
-		rlResponse, err = leakyBucket(ctx, m.conf.Store, m.cache, req, state)
+		rlResponse, err = leakyBucket(rateContext{
+			Store:    m.conf.Store,
+			Cache:    m.cache,
+			ReqState: state,
+			Request:  req,
+			Context:  ctx,
+		})
 		if err != nil {
 			msg := "Error in leakyBucket"
 			countError(err, msg)

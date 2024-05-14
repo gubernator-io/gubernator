@@ -119,13 +119,6 @@ func (c *LRUCache) GetItem(key string) (item *CacheItem, ok bool) {
 	if ele, hit := c.cache[key]; hit {
 		entry := ele.Value.(*CacheItem)
 
-		// TODO(thrawn01): Remove
-		//if entry.IsExpired() {
-		//	c.removeElement(ele)
-		//	metricCacheAccess.WithLabelValues("miss").Add(1)
-		//	return
-		//}
-
 		metricCacheAccess.WithLabelValues("hit").Add(1)
 		c.ll.MoveToFront(ele)
 		return entry, true
@@ -166,19 +159,6 @@ func (c *LRUCache) removeElement(e *list.Element) {
 // Size returns the number of items in the cache.
 func (c *LRUCache) Size() int64 {
 	return atomic.LoadInt64(&c.cacheLen)
-}
-
-// UpdateExpiration updates the expiration time for the key
-func (c *LRUCache) UpdateExpiration(key string, expireAt int64) bool {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-
-	if ele, hit := c.cache[key]; hit {
-		entry := ele.Value.(*CacheItem)
-		entry.ExpireAt = expireAt
-		return true
-	}
-	return false
 }
 
 func (c *LRUCache) Close() error {

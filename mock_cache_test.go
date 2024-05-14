@@ -34,11 +34,6 @@ func (m *MockCache) Add(item *guber.CacheItem) bool {
 	return args.Bool(0)
 }
 
-func (m *MockCache) UpdateExpiration(key string, expireAt int64) bool {
-	args := m.Called(key, expireAt)
-	return args.Bool(0)
-}
-
 func (m *MockCache) GetItem(key string) (value *guber.CacheItem, ok bool) {
 	args := m.Called(key)
 	retval, _ := args.Get(0).(*guber.CacheItem)

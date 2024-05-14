@@ -20,7 +20,6 @@ import "sync"
 
 type Cache interface {
 	Add(item *CacheItem) bool
-	UpdateExpiration(key string, expireAt int64) bool
 	GetItem(key string) (value *CacheItem, ok bool)
 	Each() chan *CacheItem
 	Remove(key string)

@@ -18,7 +18,6 @@ package gubernator
 
 import (
 	"context"
-	"sync"
 )
 
 // PERSISTENT STORE DETAILS
@@ -30,7 +29,6 @@ import (
 // Both interfaces can be implemented simultaneously to ensure data is always saved to persistent storage.
 
 type LeakyBucketItem struct {
-	mutex     sync.Mutex
 	Limit     int64
 	Duration  int64
 	Remaining float64
@@ -80,41 +78,6 @@ type Loader interface {
 	// read until the channel is closed.
 	Save(chan *CacheItem) error
 }
-
-// TODO Remove
-//func NewMockStore() *MockStore {
-//	ml := &MockStore{
-//		Called:     make(map[string]int),
-//		CacheItems: make(map[string]*CacheItem),
-//	}
-//	ml.Called["OnChange()"] = 0
-//	ml.Called["Remove()"] = 0
-//	ml.Called["Get()"] = 0
-//	return ml
-//}
-//
-//type MockStore struct {
-//	Called     map[string]int
-//	CacheItems map[string]*CacheItem
-//}
-//
-//var _ Store = &MockStore{}
-//
-//func (ms *MockStore) OnChange(ctx context.Context, r *RateLimitReq, item *CacheItem) {
-//	ms.Called["OnChange()"] += 1
-//	ms.CacheItems[item.Key] = item
-//}
-//
-//func (ms *MockStore) Get(ctx context.Context, r *RateLimitReq) (*CacheItem, bool) {
-//	ms.Called["Get()"] += 1
-//	item, ok := ms.CacheItems[r.HashKey()]
-//	return item, ok
-//}
-//
-//func (ms *MockStore) Remove(ctx context.Context, key string) {
-//	ms.Called["Remove()"] += 1
-//	delete(ms.CacheItems, key)
-//}
 
 func NewMockLoader() *MockLoader {
 	ml := &MockLoader{

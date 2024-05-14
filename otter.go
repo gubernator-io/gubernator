@@ -50,31 +50,8 @@ func (o *OtterCache) GetItem(key string) (*CacheItem, bool) {
 		return nil, false
 	}
 
-	// TODO(thrawn01): Remove
-	//if item.IsExpired() {
-	//	metricCacheAccess.WithLabelValues("miss").Add(1)
-	//	// If the item is expired, just return `nil`
-	//	//
-	//	// We avoid the explicit deletion of the expired item to avoid acquiring a mutex lock in otter.
-	//	// Explicit deletions in otter require a mutex, which can cause performance bottlenecks
-	//	// under high concurrency scenarios. By allowing the item to be evicted naturally by
-	//	// otter's eviction mechanism, we avoid impacting performance under high concurrency.
-	//	return nil, false
-	//}
 	metricCacheAccess.WithLabelValues("hit").Add(1)
 	return item, true
-}
-
-// UpdateExpiration will update an item in the cache with a new expiration date.
-// returns true if the item exists in the cache and was updated.
-func (o *OtterCache) UpdateExpiration(key string, expireAt int64) bool {
-	item, ok := o.cache.Get(key)
-	if !ok {
-		return false
-	}
-
-	item.ExpireAt = expireAt
-	return true
 }
 
 // Each returns a channel which the call can use to iterate through
