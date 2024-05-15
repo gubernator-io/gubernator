@@ -34,6 +34,11 @@ func (m *MockCache) Add(item *guber.CacheItem) bool {
 	return args.Bool(0)
 }
 
+func (m *MockCache) AddIfNotPresent(item *guber.CacheItem) bool {
+	args := m.Called(item)
+	return args.Bool(0)
+}
+
 func (m *MockCache) GetItem(key string) (value *guber.CacheItem, ok bool) {
 	args := m.Called(key)
 	retval, _ := args.Get(0).(*guber.CacheItem)

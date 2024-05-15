@@ -174,6 +174,7 @@ func StartWith(localPeers []gubernator.PeerInfo) error {
 			GRPCListenAddress: peer.GRPCAddress,
 			HTTPListenAddress: peer.HTTPAddress,
 			DataCenter:        peer.DataCenter,
+			CacheProvider:     "otter",
 			Behaviors: gubernator.BehaviorConfig{
 				// Suitable for testing but not production
 				GlobalSyncWait: clock.Millisecond * 50,

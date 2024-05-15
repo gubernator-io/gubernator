@@ -97,14 +97,23 @@ func (s *Daemon) Start(ctx context.Context) error {
 	}
 
 	cacheFactory := func(maxSize int) (Cache, error) {
-		//cache := NewLRUCache(maxSize)
-		// TODO: Enable Otter as default or provide a config option
-		cache, err := NewOtterCache(maxSize)
-		if err != nil {
-			return nil, err
+		// TODO(thrawn01): Make Otter the default in gubernator V3
+		switch s.conf.CacheProvider {
+		case "otter":
+			cache, err := NewOtterCache(maxSize)
+			if err != nil {
+				return nil, err
+			}
+			cacheCollector.AddCache(cache)
+			return cache, nil
+		case "default-lru", "":
+			cache := NewLRUMutexCache(maxSize)
+			cacheCollector.AddCache(cache)
+			return cache, nil
+		default:
+			return nil, errors.Errorf("'GUBER_CACHE_PROVIDER=%s' is invalid; "+
+				"choices are ['otter', 'default-lru']", s.conf.CacheProvider)
 		}
-		cacheCollector.AddCache(cache)
-		return cache, nil
 	}
 
 	// Handler to collect duration and API access metrics for GRPC

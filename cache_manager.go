@@ -147,7 +147,14 @@ func (m *cacheManager) Load(ctx context.Context) error {
 		case <-ctx.Done():
 			return ctx.Err()
 		}
-		_ = m.cache.Add(item)
+	retry:
+		if !m.cache.AddIfNotPresent(item) {
+			cItem, ok := m.cache.GetItem(item.Key)
+			if !ok {
+				goto retry
+			}
+			cItem.Copy(item)
+		}
 	}
 }
 
@@ -160,6 +167,6 @@ func (m *cacheManager) GetCacheItem(_ context.Context, key string) (*CacheItem, 
 // AddCacheItem adds an item to the cache. The CacheItem.Key should be set correctly, else the item
 // will not be added to the cache correctly.
 func (m *cacheManager) AddCacheItem(_ context.Context, _ string, item *CacheItem) error {
-	_ = m.cache.Add(item)
+	_ = m.cache.AddIfNotPresent(item)
 	return nil
 }

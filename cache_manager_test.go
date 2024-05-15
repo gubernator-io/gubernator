@@ -76,7 +76,7 @@ func TestCacheManager(t *testing.T) {
 
 				// Mock Cache.
 				for _, item := range cacheItems {
-					mockCache.On("Add", item).Once().Return(false)
+					mockCache.On("AddIfNotPresent", item).Once().Return(true)
 				}
 
 				// Call code.

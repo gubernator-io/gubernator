@@ -26,6 +26,13 @@ func BenchmarkCache(b *testing.B) {
 			LockRequired: true,
 		},
 		{
+			Name: "LRUMutexCache",
+			NewTestCache: func() (gubernator.Cache, error) {
+				return gubernator.NewLRUMutexCache(0), nil
+			},
+			LockRequired: true,
+		},
+		{
 			Name: "OtterCache",
 			NewTestCache: func() (gubernator.Cache, error) {
 				return gubernator.NewOtterCache(0)
@@ -48,7 +55,7 @@ func BenchmarkCache(b *testing.B) {
 						Value:    "value:" + key,
 						ExpireAt: expire,
 					}
-					cache.Add(item)
+					cache.AddIfNotPresent(item)
 				}
 
 				mask := len(keys) - 1
@@ -78,7 +85,7 @@ func BenchmarkCache(b *testing.B) {
 						Value:    "value:" + keys[index&mask],
 						ExpireAt: expire,
 					}
-					cache.Add(item)
+					cache.AddIfNotPresent(item)
 				}
 			})
 
@@ -94,7 +101,7 @@ func BenchmarkCache(b *testing.B) {
 						Value:    "value:" + key,
 						ExpireAt: expire,
 					}
-					cache.Add(item)
+					cache.AddIfNotPresent(item)
 				}
 
 				var mutex sync.Mutex
@@ -144,7 +151,7 @@ func BenchmarkCache(b *testing.B) {
 							Value:    "value:" + key,
 							ExpireAt: expire,
 						}
-						cache.Add(item)
+						cache.AddIfNotPresent(item)
 					}
 				} else {
 					task = func(key string) {
@@ -153,7 +160,7 @@ func BenchmarkCache(b *testing.B) {
 							Value:    "value:" + key,
 							ExpireAt: expire,
 						}
-						cache.Add(item)
+						cache.AddIfNotPresent(item)
 					}
 				}
 

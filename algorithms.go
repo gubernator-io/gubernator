@@ -56,7 +56,7 @@ func tokenBucket(ctx rateContext) (resp *RateLimitResp, err error) {
 	// If not in the cache, check the store if provided
 	if ctx.Store != nil && !ok {
 		if ctx.CacheItem, ok = ctx.Store.Get(ctx, ctx.Request); ok {
-			if !ctx.Cache.Add(ctx.CacheItem) {
+			if !ctx.Cache.AddIfNotPresent(ctx.CacheItem) {
 				// Someone else added a new token bucket item to the cache for this
 				// rate limit before we did, so we retry by calling ourselves recursively.
 				return tokenBucket(ctx)
@@ -270,7 +270,7 @@ func initTokenBucketItem(ctx rateContext) (resp *RateLimitResp, err error) {
 			Value:     &t,
 			ExpireAt:  expire,
 		}
-		if !ctx.Cache.Add(ctx.CacheItem) {
+		if !ctx.Cache.AddIfNotPresent(ctx.CacheItem) {
 			return rl, errAlreadyExistsInCache
 		}
 	}
@@ -299,7 +299,7 @@ func leakyBucket(ctx rateContext) (resp *RateLimitResp, err error) {
 	if ctx.Store != nil && !ok {
 		// Cache missed, check our store for the item.
 		if ctx.CacheItem, ok = ctx.Store.Get(ctx, ctx.Request); ok {
-			if !ctx.Cache.Add(ctx.CacheItem) {
+			if !ctx.Cache.AddIfNotPresent(ctx.CacheItem) {
 				// Someone else added a new leaky bucket item to the cache for this
 				// rate limit before we did, so we retry by calling ourselves recursively.
 				return leakyBucket(ctx)
@@ -519,7 +519,7 @@ func initLeakyBucketItem(ctx rateContext) (resp *RateLimitResp, err error) {
 			Key:       ctx.Request.HashKey(),
 			Value:     &b,
 		}
-		if !ctx.Cache.Add(ctx.CacheItem) {
+		if !ctx.Cache.AddIfNotPresent(ctx.CacheItem) {
 			return nil, errAlreadyExistsInCache
 		}
 	}

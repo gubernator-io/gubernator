@@ -44,10 +44,15 @@ func NewOtterCache(size int) (*OtterCache, error) {
 	return o, nil
 }
 
-// Add adds a new CacheItem to the cache. The key must be provided via CacheItem.Key
-// returns true if the item was added to the cache; false if the item was too large
-// for the cache or already exists in the cache.
+// Add is a noop as it is deprecated
 func (o *OtterCache) Add(item *CacheItem) bool {
+	return false
+}
+
+// AddIfNotPresent adds a new CacheItem to the cache. The key must be provided via CacheItem.Key
+// returns true if the item was added to the cache; false if the item was too large
+// for the cache or if the key already exists in the cache.
+func (o *OtterCache) AddIfNotPresent(item *CacheItem) bool {
 	return o.cache.SetIfAbsent(item.Key, item)
 }
 
