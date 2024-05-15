@@ -24,6 +24,7 @@ type Cache interface {
 	Each() chan *CacheItem
 	Remove(key string)
 	Size() int64
+	Stats() CacheStats
 	Close() error
 }
 

@@ -55,6 +55,10 @@ func (m *MockCache) Size() int64 {
 	return int64(args.Int(0))
 }
 
+func (m *MockCache) Stats() guber.CacheStats {
+	return guber.CacheStats{}
+}
+
 func (m *MockCache) Close() error {
 	args := m.Called()
 	return args.Error(0)

@@ -27,10 +27,9 @@ import (
 	"github.com/gubernator-io/gubernator/v2"
 	"github.com/mailgun/holster/v4/clock"
 	"github.com/prometheus/client_golang/prometheus"
+	dto "github.com/prometheus/client_model/go"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-
-	dto "github.com/prometheus/client_model/go"
 )
 
 func TestLRUCache(t *testing.T) {

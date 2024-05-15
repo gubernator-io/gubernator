@@ -2,6 +2,7 @@ package gubernator
 
 import (
 	"fmt"
+	"sync/atomic"
 
 	"github.com/mailgun/holster/v4/setter"
 	"github.com/maypok86/otter"
@@ -9,6 +10,7 @@ import (
 
 type OtterCache struct {
 	cache otter.Cache[string, *CacheItem]
+	stats CacheStats
 }
 
 // NewOtterCache returns a new cache backed by otter. If size is 0, then
@@ -21,9 +23,11 @@ func NewOtterCache(size int) (*OtterCache, error) {
 		return nil, fmt.Errorf("during otter.NewBuilder(): %w", err)
 	}
 
+	o := &OtterCache{}
+
 	b.DeletionListener(func(key string, value *CacheItem, cause otter.DeletionCause) {
 		if cause == otter.Size {
-			metricCacheUnexpiredEvictions.Add(1)
+			atomic.AddInt64(&o.stats.UnexpiredEvictions, 1)
 		}
 	})
 
@@ -33,13 +37,11 @@ func NewOtterCache(size int) (*OtterCache, error) {
 		return uint32(104 + len(value.Key))
 	})
 
-	cache, err := b.Build()
+	o.cache, err = b.Build()
 	if err != nil {
 		return nil, fmt.Errorf("during otter.Builder.Build(): %w", err)
 	}
-	return &OtterCache{
-		cache: cache,
-	}, nil
+	return o, nil
 }
 
 // Add adds a new CacheItem to the cache. The key must be provided via CacheItem.Key
@@ -53,11 +55,11 @@ func (o *OtterCache) Add(item *CacheItem) bool {
 func (o *OtterCache) GetItem(key string) (*CacheItem, bool) {
 	item, ok := o.cache.Get(key)
 	if !ok {
-		metricCacheAccess.WithLabelValues("miss").Add(1)
+		atomic.AddInt64(&o.stats.Miss, 1)
 		return nil, false
 	}
 
-	metricCacheAccess.WithLabelValues("hit").Add(1)
+	atomic.AddInt64(&o.stats.Hit, 1)
 	return item, true
 }
 
@@ -87,6 +89,16 @@ func (o *OtterCache) Remove(key string) {
 // Size return the current number of items in the cache
 func (o *OtterCache) Size() int64 {
 	return int64(o.cache.Size())
+}
+
+// Stats returns the current cache stats and resets the values to zero
+func (o *OtterCache) Stats() CacheStats {
+	var result CacheStats
+	result.UnexpiredEvictions = atomic.SwapInt64(&o.stats.UnexpiredEvictions, 0)
+	result.Miss = atomic.SwapInt64(&o.stats.Miss, 0)
+	result.Hit = atomic.SwapInt64(&o.stats.Hit, 0)
+	result.Size = int64(o.cache.Size())
+	return result
 }
 
 // Close closes the cache and all associated background processes
