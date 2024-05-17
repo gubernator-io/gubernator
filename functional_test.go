@@ -743,11 +743,12 @@ func TestLeakyBucketGregorian(t *testing.T) {
 		},
 	}
 
-	// Truncate to the nearest minute
+	// Truncate to the nearest minute.
 	now := clock.Now()
-	now = now.Truncate(1 * time.Minute)
-	// So we don't start on the minute boundary
-	now = now.Add(time.Millisecond * 100)
+	trunc := now.Truncate(time.Hour)
+	trunc = now.Add(now.Sub(trunc))
+	clock.Advance(now.Sub(trunc))
+
 	name := t.Name()
 	key := guber.RandomString(10)
 
