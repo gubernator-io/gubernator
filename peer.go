@@ -51,10 +51,9 @@ type response struct {
 }
 
 type request struct {
-	reqState RateLimitContext
-	request  *RateLimitRequest
-	ctx      context.Context
-	resp     chan *response
+	request *RateLimitRequest
+	ctx     context.Context
+	resp    chan *response
 }
 
 type PeerConfig struct {

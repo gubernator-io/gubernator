@@ -750,7 +750,12 @@ func TestLeakyBucketGregorian(t *testing.T) {
 		},
 	}
 
+	// Truncate to the nearest minute.
 	now := clock.Now()
+	trunc := now.Truncate(time.Hour)
+	trunc = now.Add(now.Sub(trunc))
+	clock.Advance(now.Sub(trunc))
+
 	for _, test := range tests {
 		t.Run(test.Name, func(t *testing.T) {
 			var resp guber.CheckRateLimitsResponse
