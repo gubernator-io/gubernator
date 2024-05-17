@@ -29,8 +29,10 @@ var errAlreadyExistsInCache = errors.New("already exists in cache")
 
 type rateContext struct {
 	context.Context
-	ReqState  RateLimitReqState
-	Request   *RateLimitReq
+	// TODO(thrawn01): Roll this into `rateContext`
+	ReqState RateLimitContext
+
+	Request   *RateLimitRequest
 	CacheItem *CacheItem
 	Store     Store
 	Cache     Cache
@@ -44,7 +46,7 @@ type rateContext struct {
 // with 100 emails and the request will succeed. You can override this default behavior with `DRAIN_OVER_LIMIT`
 
 // Implements token bucket algorithm for rate limiting. https://en.wikipedia.org/wiki/Token_bucket
-func tokenBucket(ctx rateContext) (resp *RateLimitResp, err error) {
+func tokenBucket(ctx rateContext) (resp *RateLimitResponse, err error) {
 	tokenBucketTimer := prometheus.NewTimer(metricFuncTimeDuration.WithLabelValues("tokenBucket"))
 	defer tokenBucketTimer.ObserveDuration()
 	var ok bool
@@ -105,8 +107,7 @@ func tokenBucket(ctx rateContext) (resp *RateLimitResp, err error) {
 		if ctx.Store != nil {
 			ctx.Store.OnChange(ctx, ctx.Request, ctx.CacheItem)
 		}
-
-		return &RateLimitResp{
+		return &RateLimitResponse{
 			Status:    Status_UNDER_LIMIT,
 			Limit:     ctx.Request.Limit,
 			Remaining: ctx.Request.Limit,
@@ -124,7 +125,7 @@ func tokenBucket(ctx rateContext) (resp *RateLimitResp, err error) {
 		t.Limit = ctx.Request.Limit
 	}
 
-	rl := &RateLimitResp{
+	rl := &RateLimitResponse{
 		Status:    t.Status,
 		Limit:     ctx.Request.Limit,
 		Remaining: t.Remaining,
@@ -211,7 +212,7 @@ func tokenBucket(ctx rateContext) (resp *RateLimitResp, err error) {
 }
 
 // initTokenBucketItem will create a new item if the passed item is nil, else it will update the provided item.
-func initTokenBucketItem(ctx rateContext) (resp *RateLimitResp, err error) {
+func initTokenBucketItem(ctx rateContext) (resp *RateLimitResponse, err error) {
 	createdAt := *ctx.Request.CreatedAt
 	expire := createdAt + ctx.Request.Duration
 
@@ -230,7 +231,7 @@ func initTokenBucketItem(ctx rateContext) (resp *RateLimitResp, err error) {
 		}
 	}
 
-	rl := &RateLimitResp{
+	rl := &RateLimitResponse{
 		Status:    Status_UNDER_LIMIT,
 		Limit:     ctx.Request.Limit,
 		Remaining: t.Remaining,
@@ -283,7 +284,7 @@ func initTokenBucketItem(ctx rateContext) (resp *RateLimitResp, err error) {
 }
 
 // Implements leaky bucket algorithm for rate limiting https://en.wikipedia.org/wiki/Leaky_bucket
-func leakyBucket(ctx rateContext) (resp *RateLimitResp, err error) {
+func leakyBucket(ctx rateContext) (resp *RateLimitResponse, err error) {
 	leakyBucketTimer := prometheus.NewTimer(metricFuncTimeDuration.WithLabelValues("V1Instance.getRateLimit_leakyBucket"))
 	defer leakyBucketTimer.ObserveDuration()
 	var ok bool
@@ -395,7 +396,7 @@ func leakyBucket(ctx rateContext) (resp *RateLimitResp, err error) {
 		t.Remaining = float64(t.Burst)
 	}
 
-	rl := &RateLimitResp{
+	rl := &RateLimitResponse{
 		Limit:     t.Limit,
 		Remaining: int64(t.Remaining),
 		Status:    Status_UNDER_LIMIT,
@@ -457,7 +458,7 @@ func leakyBucket(ctx rateContext) (resp *RateLimitResp, err error) {
 }
 
 // Called by leakyBucket() when adding a new item in the store.
-func initLeakyBucketItem(ctx rateContext) (resp *RateLimitResp, err error) {
+func initLeakyBucketItem(ctx rateContext) (resp *RateLimitResponse, err error) {
 	createdAt := *ctx.Request.CreatedAt
 	duration := ctx.Request.Duration
 	rate := float64(duration) / float64(ctx.Request.Limit)

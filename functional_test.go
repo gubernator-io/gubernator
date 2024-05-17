@@ -2327,7 +2327,7 @@ func getPeerCounters(t *testing.T, peers []*guber.Daemon, name string) map[strin
 	return counters
 }
 
-func sendHit(t *testing.T, d *guber.Daemon, req *guber.RateLimitReq, expectStatus guber.Status, expectRemaining int64) {
+func sendHit(t *testing.T, d *guber.Daemon, req *guber.RateLimitRequest, expectStatus guber.Status, expectRemaining int64) {
 	t.Helper()
 
 	if req.Hits != 0 {

@@ -24,7 +24,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/gubernator-io/gubernator/v2"
+	"github.com/gubernator-io/gubernator/v3"
 	"github.com/mailgun/holster/v4/clock"
 	"github.com/prometheus/client_golang/prometheus"
 	dto "github.com/prometheus/client_model/go"
@@ -38,7 +38,7 @@ func TestLRUMutexCache(t *testing.T) {
 	expireAt := clock.Now().Add(1 * time.Hour).UnixMilli()
 
 	t.Run("Happy path", func(t *testing.T) {
-		cache := gubernator.NewLRUMutexCache(0)
+		cache := gubernator.NewLRUCache(0)
 
 		// Populate cache.
 		for i := 0; i < iterations; i++ {
@@ -72,7 +72,7 @@ func TestLRUMutexCache(t *testing.T) {
 	})
 
 	t.Run("Update an existing key", func(t *testing.T) {
-		cache := gubernator.NewLRUMutexCache(0)
+		cache := gubernator.NewLRUCache(0)
 		const key = "foobar"
 
 		// Add key.
@@ -102,7 +102,7 @@ func TestLRUMutexCache(t *testing.T) {
 	})
 
 	t.Run("Concurrent reads", func(t *testing.T) {
-		cache := gubernator.NewLRUMutexCache(0)
+		cache := gubernator.NewLRUCache(0)
 
 		// Populate cache.
 		for i := 0; i < iterations; i++ {
@@ -142,7 +142,7 @@ func TestLRUMutexCache(t *testing.T) {
 	})
 
 	t.Run("Concurrent writes", func(t *testing.T) {
-		cache := gubernator.NewLRUMutexCache(0)
+		cache := gubernator.NewLRUCache(0)
 		expireAt := clock.Now().Add(1 * time.Hour).UnixMilli()
 		var launchWg, doneWg sync.WaitGroup
 		launchWg.Add(1)
@@ -172,7 +172,7 @@ func TestLRUMutexCache(t *testing.T) {
 	})
 
 	t.Run("Concurrent reads and writes", func(t *testing.T) {
-		cache := gubernator.NewLRUMutexCache(0)
+		cache := gubernator.NewLRUCache(0)
 
 		// Populate cache.
 		for i := 0; i < iterations; i++ {
@@ -227,7 +227,7 @@ func TestLRUMutexCache(t *testing.T) {
 	})
 
 	t.Run("Collect metrics during concurrent reads/writes", func(t *testing.T) {
-		cache := gubernator.NewLRUMutexCache(0)
+		cache := gubernator.NewLRUCache(0)
 
 		// Populate cache.
 		for i := 0; i < iterations; i++ {
@@ -317,7 +317,7 @@ func TestLRUMutexCache(t *testing.T) {
 		err := promRegister.Register(cacheCollector)
 		require.NoError(t, err)
 
-		cache := gubernator.NewLRUMutexCache(10)
+		cache := gubernator.NewLRUCache(10)
 		cacheCollector.AddCache(cache)
 
 		// fill cache with short duration cache items
@@ -364,7 +364,7 @@ func TestLRUMutexCache(t *testing.T) {
 		err := promRegister.Register(cacheCollector)
 		require.NoError(t, err)
 
-		cache := gubernator.NewLRUMutexCache(10)
+		cache := gubernator.NewLRUCache(10)
 		cacheCollector.AddCache(cache)
 
 		// fill cache with long duration cache items
@@ -402,7 +402,7 @@ func TestLRUMutexCache(t *testing.T) {
 func BenchmarkLRUMutexCache(b *testing.B) {
 
 	b.Run("Sequential reads", func(b *testing.B) {
-		cache := gubernator.NewLRUMutexCache(b.N)
+		cache := gubernator.NewLRUCache(b.N)
 		expireAt := clock.Now().Add(1 * time.Hour).UnixMilli()
 
 		// Populate cache.
@@ -426,7 +426,7 @@ func BenchmarkLRUMutexCache(b *testing.B) {
 	})
 
 	b.Run("Sequential writes", func(b *testing.B) {
-		cache := gubernator.NewLRUMutexCache(0)
+		cache := gubernator.NewLRUCache(0)
 		expireAt := clock.Now().Add(1 * time.Hour).UnixMilli()
 
 		b.ReportAllocs()
@@ -444,7 +444,7 @@ func BenchmarkLRUMutexCache(b *testing.B) {
 	})
 
 	b.Run("Concurrent reads", func(b *testing.B) {
-		cache := gubernator.NewLRUMutexCache(b.N)
+		cache := gubernator.NewLRUCache(b.N)
 		expireAt := clock.Now().Add(1 * time.Hour).UnixMilli()
 
 		// Populate cache.
@@ -480,7 +480,7 @@ func BenchmarkLRUMutexCache(b *testing.B) {
 	})
 
 	b.Run("Concurrent writes", func(b *testing.B) {
-		cache := gubernator.NewLRUMutexCache(0)
+		cache := gubernator.NewLRUCache(0)
 		expireAt := clock.Now().Add(1 * time.Hour).UnixMilli()
 		var launchWg, doneWg sync.WaitGroup
 		launchWg.Add(1)
@@ -509,7 +509,7 @@ func BenchmarkLRUMutexCache(b *testing.B) {
 	})
 
 	b.Run("Concurrent reads and writes of existing keys", func(b *testing.B) {
-		cache := gubernator.NewLRUMutexCache(0)
+		cache := gubernator.NewLRUCache(0)
 		expireAt := clock.Now().Add(1 * time.Hour).UnixMilli()
 		var launchWg, doneWg sync.WaitGroup
 		launchWg.Add(1)
@@ -556,7 +556,7 @@ func BenchmarkLRUMutexCache(b *testing.B) {
 	})
 
 	b.Run("Concurrent reads and writes of non-existent keys", func(b *testing.B) {
-		cache := gubernator.NewLRUMutexCache(0)
+		cache := gubernator.NewLRUCache(0)
 		expireAt := clock.Now().Add(1 * time.Hour).UnixMilli()
 		var launchWg, doneWg sync.WaitGroup
 		launchWg.Add(1)

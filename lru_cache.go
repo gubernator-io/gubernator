@@ -1,5 +1,5 @@
 /*
-Modifications Copyright 2018-2022 Mailgun Technologies Inc
+Modifications Copyright 2024 Derrick Wippler
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -20,18 +20,17 @@ package gubernator
 
 import (
 	"container/list"
+	"sync"
 	"sync/atomic"
 
 	"github.com/mailgun/holster/v4/setter"
 )
 
-// LRUCache is an LRU cache that supports expiration and is not thread-safe
-// Be sure to use a mutex to prevent concurrent method calls.
-//
-// Deprecated: Use LRUMutexCache instead. This will be removed in v3
+// LRUCache is a mutex protected LRU cache that supports expiration and is thread-safe
 type LRUCache struct {
 	cache     map[string]*list.Element
 	ll        *list.List
+	mu        sync.Mutex
 	stats     CacheStats
 	cacheSize int
 	cacheLen  int64
@@ -40,7 +39,6 @@ type LRUCache struct {
 var _ Cache = &LRUCache{}
 
 // NewLRUCache creates a new Cache with a maximum size.
-// Deprecated: Use NewLRUMutexCache instead. This will be removed in v3
 func NewLRUCache(maxSize int) *LRUCache {
 	setter.SetDefault(&maxSize, 50_000)
 
@@ -51,13 +49,15 @@ func NewLRUCache(maxSize int) *LRUCache {
 	}
 }
 
-// Each maintains a goroutine that iterates. Other go routines cannot safely
-// access the Cache while iterating. It would be safer if this were done
-// using an iterator or delegate pattern that doesn't require a goroutine.
-// May need to reassess functional requirements.
+// Each maintains a goroutine that iterates over every item in the cache.
+// Other go routines operating on this cache will block until all items
+// are read from the returned channel.
 func (c *LRUCache) Each() chan *CacheItem {
 	out := make(chan *CacheItem)
 	go func() {
+		c.mu.Lock()
+		defer c.mu.Unlock()
+
 		for _, ele := range c.cache {
 			out <- ele.Value.(*CacheItem)
 		}
@@ -66,14 +66,15 @@ func (c *LRUCache) Each() chan *CacheItem {
 	return out
 }
 
-// AddIfNotPresent adds a value to the cache. returns true if value was added to the cache,
-// false if it already exists in the cache
+// AddIfNotPresent adds the item to the cache if it doesn't already exist.
+// Returns true if the item was added, false if the item already exists.
 func (c *LRUCache) AddIfNotPresent(item *CacheItem) bool {
-	// If the key already exist, set the new value
-	if ee, ok := c.cache[item.Key]; ok {
-		c.ll.MoveToFront(ee)
-		ee.Value = item
-		return true
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	// If the key already exist, do nothing
+	if _, ok := c.cache[item.Key]; ok {
+		return false
 	}
 
 	ele := c.ll.PushFront(item)
@@ -82,51 +83,30 @@ func (c *LRUCache) AddIfNotPresent(item *CacheItem) bool {
 		c.removeOldest()
 	}
 	atomic.StoreInt64(&c.cacheLen, int64(c.ll.Len()))
-	return false
-}
-
-// Add adds a value to the cache.
-// Deprecated: Gubernator algorithms now use AddIfNotExists.
-// This method will be removed in the next major version
-func (c *LRUCache) Add(item *CacheItem) bool {
-	// If the key already exist, set the new value
-	if ee, ok := c.cache[item.Key]; ok {
-		c.ll.MoveToFront(ee)
-		ee.Value = item
-		return true
-	}
-
-	ele := c.ll.PushFront(item)
-	c.cache[item.Key] = ele
-	if c.cacheSize != 0 && c.ll.Len() > c.cacheSize {
-		c.removeOldest()
-	}
-	atomic.StoreInt64(&c.cacheLen, int64(c.ll.Len()))
-	return false
+	return true
 }
 
 // GetItem returns the item stored in the cache
 func (c *LRUCache) GetItem(key string) (item *CacheItem, ok bool) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
 	if ele, hit := c.cache[key]; hit {
 		entry := ele.Value.(*CacheItem)
 
-		if entry.IsExpired() {
-			c.removeElement(ele)
-			atomic.AddInt64(&c.stats.Miss, 1)
-			return
-		}
-
-		atomic.AddInt64(&c.stats.Hit, 1)
+		c.stats.Hit++
 		c.ll.MoveToFront(ele)
 		return entry, true
 	}
 
-	atomic.AddInt64(&c.stats.Miss, 1)
+	c.stats.Miss++
 	return
 }
 
 // Remove removes the provided key from the cache.
 func (c *LRUCache) Remove(key string) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
 	if ele, hit := c.cache[key]; hit {
 		c.removeElement(ele)
 	}
@@ -139,7 +119,7 @@ func (c *LRUCache) removeOldest() {
 		entry := ele.Value.(*CacheItem)
 
 		if MillisecondNow() < entry.ExpireAt {
-			atomic.AddInt64(&c.stats.UnexpiredEvictions, 1)
+			c.stats.UnexpiredEvictions++
 		}
 
 		c.removeElement(ele)
@@ -158,16 +138,6 @@ func (c *LRUCache) Size() int64 {
 	return atomic.LoadInt64(&c.cacheLen)
 }
 
-// UpdateExpiration updates the expiration time for the key
-func (c *LRUCache) UpdateExpiration(key string, expireAt int64) bool {
-	if ele, hit := c.cache[key]; hit {
-		entry := ele.Value.(*CacheItem)
-		entry.ExpireAt = expireAt
-		return true
-	}
-	return false
-}
-
 func (c *LRUCache) Close() error {
 	c.cache = nil
 	c.ll = nil
@@ -177,10 +147,12 @@ func (c *LRUCache) Close() error {
 
 // Stats returns the current status for the cache
 func (c *LRUCache) Stats() CacheStats {
-	var result CacheStats
-	result.UnexpiredEvictions = atomic.SwapInt64(&c.stats.UnexpiredEvictions, 0)
-	result.Miss = atomic.SwapInt64(&c.stats.Miss, 0)
-	result.Hit = atomic.SwapInt64(&c.stats.Hit, 0)
-	result.Size = atomic.LoadInt64(&c.cacheLen)
-	return result
+	c.mu.Lock()
+	defer func() {
+		c.stats = CacheStats{}
+		c.mu.Unlock()
+	}()
+
+	c.stats.Size = atomic.LoadInt64(&c.cacheLen)
+	return c.stats
 }

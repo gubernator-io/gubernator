@@ -26,13 +26,6 @@ func BenchmarkCache(b *testing.B) {
 			LockRequired: true,
 		},
 		{
-			Name: "LRUMutexCache",
-			NewTestCache: func() (gubernator.Cache, error) {
-				return gubernator.NewLRUMutexCache(0), nil
-			},
-			LockRequired: true,
-		},
-		{
 			Name: "OtterCache",
 			NewTestCache: func() (gubernator.Cache, error) {
 				return gubernator.NewOtterCache(0)
