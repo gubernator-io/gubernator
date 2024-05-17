@@ -25,16 +25,9 @@ import (
 )
 
 type Cache interface {
-	// Add adds an item, or replaces an item in the cache
-	//
-	// Deprecated: Gubernator algorithms now use AddIfNotExists.
-	// TODO: Remove this method in v3
-	Add(item *CacheItem) bool
-
 	// AddIfNotPresent adds the item to the cache if it doesn't already exist.
 	// Returns true if the item was added, false if the item already exists.
 	AddIfNotPresent(item *CacheItem) bool
-
 	GetItem(key string) (value *CacheItem, ok bool)
 	Each() chan *CacheItem
 	Remove(key string)

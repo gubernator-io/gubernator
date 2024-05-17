@@ -414,7 +414,7 @@ func (s *Service) checkGlobalRateLimit(ctx context.Context, req *RateLimitReques
 
 // Update updates the local cache with a list of rate limit state from a peer
 // This method should only be called by a peer.
-func (s *Service) Update(ctx context.Context, r *UpdateRequest, resp *v1.Reply) (err error) {
+func (s *Service) Update(ctx context.Context, r *UpdateRequest, _ *v1.Reply) (err error) {
 	ctx = tracing.StartNamedScopeDebug(ctx, "Service.Update")
 	defer func() { tracing.EndScope(ctx, err) }()
 
@@ -423,18 +423,18 @@ func (s *Service) Update(ctx context.Context, r *UpdateRequest, resp *v1.Reply) 
 	for _, g := range r.Globals {
 		item, _, err := s.cache.GetCacheItem(ctx, g.Key)
 		if err != nil {
-			return nil, err
+			return err
 		}
 
 		if item == nil {
 			item = &CacheItem{
-				ExpireAt:  g.Status.ResetTime,
+				ExpireAt:  g.State.ResetTime,
 				Algorithm: g.Algorithm,
 				Key:       g.Key,
 			}
 			err := s.cache.AddCacheItem(ctx, g.Key, item)
 			if err != nil {
-				return nil, fmt.Errorf("during CacheManager.AddCacheItem(): %w", err)
+				return fmt.Errorf("during CacheManager.AddCacheItem(): %w", err)
 			}
 		}
 
@@ -459,7 +459,7 @@ func (s *Service) Update(ctx context.Context, r *UpdateRequest, resp *v1.Reply) 
 		}
 		item.mutex.Unlock()
 	}
-	return &UpdatePeerGlobalsResp{}, nil
+	return nil
 }
 
 // Forward is called by other peers when forwarding rate limits to this peer
@@ -586,9 +586,9 @@ func (s *Service) checkLocalRateLimit(ctx context.Context, r *RateLimitRequest, 
 	defer func() { tracing.EndScope(ctx, err) }()
 	defer prometheus.NewTimer(metricFuncTimeDuration.WithLabelValues("Service.checkLocalRateLimit")).ObserveDuration()
 
-	resp, err := s.cache.GetRateLimit(ctx, r, reqState)
+	resp, err := s.cache.CheckRateLimit(ctx, r, reqState)
 	if err != nil {
-		return nil, fmt.Errorf("during CacheManager.GetRateLimit: %w", err)
+		return nil, fmt.Errorf("during CacheManager.CheckRateLimit: %w", err)
 	}
 
 	// If global behavior, then broadcast update to all peers.

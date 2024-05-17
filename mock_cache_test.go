@@ -29,11 +29,6 @@ type MockCache struct {
 
 var _ guber.Cache = &MockCache{}
 
-func (m *MockCache) Add(item *guber.CacheItem) bool {
-	args := m.Called(item)
-	return args.Bool(0)
-}
-
 func (m *MockCache) AddIfNotPresent(item *guber.CacheItem) bool {
 	args := m.Called(item)
 	return args.Bool(0)

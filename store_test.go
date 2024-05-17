@@ -18,8 +18,6 @@ package gubernator_test
 
 import (
 	"context"
-	"fmt"
-	"net"
 	"sync"
 	"testing"
 
@@ -89,10 +87,10 @@ func TestLoader(t *testing.T) {
 type NoOpStore struct{}
 
 func (ms *NoOpStore) Remove(ctx context.Context, key string) {}
-func (ms *NoOpStore) OnChange(ctx context.Context, r *gubernator.RateLimitReq, item *gubernator.CacheItem) {
+func (ms *NoOpStore) OnChange(ctx context.Context, r *gubernator.RateLimitRequest, item *gubernator.CacheItem) {
 }
 
-func (ms *NoOpStore) Get(ctx context.Context, r *gubernator.RateLimitReq) (*gubernator.CacheItem, bool) {
+func (ms *NoOpStore) Get(ctx context.Context, r *gubernator.RateLimitRequest) (*gubernator.CacheItem, bool) {
 	return &gubernator.CacheItem{
 		Algorithm: gubernator.Algorithm_TOKEN_BUCKET,
 		Key:       r.HashKey(),
@@ -116,15 +114,17 @@ func TestHighContentionFromStore(t *testing.T) {
 		numKeys       = 100
 	)
 	store := &NoOpStore{}
-	srv := newV1Server(t, "localhost:0", gubernator.Config{
+	d, err := gubernator.SpawnDaemon(context.Background(), gubernator.DaemonConfig{
+		HTTPListenAddress: "localhost:0",
 		Behaviors: gubernator.BehaviorConfig{
+			// Suitable for testing but not production
 			GlobalSyncWait: clock.Millisecond * 50, // Suitable for testing but not production
 			GlobalTimeout:  clock.Second,
 		},
 		Store: store,
 	})
-	client, err := gubernator.DialV1Server(srv.listener.Addr().String(), nil)
 	require.NoError(t, err)
+	d.SetPeers([]gubernator.PeerInfo{{HTTPAddress: d.Config().HTTPListenAddress, IsOwner: true}})
 
 	keys := GenerateRandomKeys(numKeys)
 
@@ -132,13 +132,15 @@ func TestHighContentionFromStore(t *testing.T) {
 	var ready sync.WaitGroup
 	wg.Add(numGoroutines)
 	ready.Add(numGoroutines)
+	client := d.MustClient()
 
 	for i := 0; i < numGoroutines; i++ {
 		go func() {
 			ready.Wait()
 			for idx := 0; idx < numKeys; idx++ {
-				_, err := client.GetRateLimits(context.Background(), &gubernator.GetRateLimitsReq{
-					Requests: []*gubernator.RateLimitReq{
+				var resp gubernator.CheckRateLimitsResponse
+				err := client.CheckRateLimits(context.Background(), &gubernator.CheckRateLimitsRequest{
+					Requests: []*gubernator.RateLimitRequest{
 						{
 							Name:      keys[idx],
 							UniqueKey: "high_contention_",
@@ -148,7 +150,7 @@ func TestHighContentionFromStore(t *testing.T) {
 							Hits:      1,
 						},
 					},
-				})
+				}, &resp)
 				require.NoError(t, err)
 			}
 			wg.Done()
@@ -158,8 +160,9 @@ func TestHighContentionFromStore(t *testing.T) {
 	wg.Wait()
 
 	for idx := 0; idx < numKeys; idx++ {
-		resp, err := client.GetRateLimits(context.Background(), &gubernator.GetRateLimitsReq{
-			Requests: []*gubernator.RateLimitReq{
+		var resp gubernator.CheckRateLimitsResponse
+		err := d.MustClient().CheckRateLimits(context.Background(), &gubernator.CheckRateLimitsRequest{
+			Requests: []*gubernator.RateLimitRequest{
 				{
 					Name:      keys[idx],
 					UniqueKey: "high_contention_",
@@ -169,12 +172,12 @@ func TestHighContentionFromStore(t *testing.T) {
 					Hits:      0,
 				},
 			},
-		})
+		}, &resp)
 		require.NoError(t, err)
 		assert.Equal(t, int64(0), resp.Responses[0].Remaining)
 	}
 
-	assert.NoError(t, srv.Close())
+	assert.NoError(t, d.Close(context.Background()))
 }
 
 func TestStore(t *testing.T) {

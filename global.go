@@ -54,7 +54,7 @@ func newGlobalManager(conf BehaviorConfig, instance *Service) *globalManager {
 		}),
 		metricGlobalSendQueueLength: prometheus.NewGauge(prometheus.GaugeOpts{
 			Name: "gubernator_global_send_queue_length",
-			Help: "The count of requests queued up for global broadcast.  This is only used for GetRateLimit requests using global behavior.",
+			Help: "The count of requests queued up for global broadcast.  This is only used for CheckRateLimit requests using global behavior.",
 		}),
 		metricBroadcastDuration: prometheus.NewSummary(prometheus.SummaryOpts{
 			Name:       "gubernator_broadcast_duration",
@@ -63,7 +63,7 @@ func newGlobalManager(conf BehaviorConfig, instance *Service) *globalManager {
 		}),
 		metricGlobalQueueLength: prometheus.NewGauge(prometheus.GaugeOpts{
 			Name: "gubernator_global_queue_length",
-			Help: "The count of requests queued up for global broadcast.  This is only used for GetRateLimit requests using global behavior.",
+			Help: "The count of requests queued up for global broadcast.  This is only used for CheckRateLimit requests using global behavior.",
 		}),
 	}
 	gm.runAsyncHits()
@@ -242,7 +242,7 @@ func (gm *globalManager) broadcastPeers(ctx context.Context, updates map[string]
 	for _, update := range updates {
 		grlReq := proto.Clone(update).(*RateLimitRequest)
 		grlReq.Hits = 0
-		status, err := gm.instance.cache.GetRateLimit(ctx, grlReq, reqState)
+		state, err := gm.instance.cache.CheckRateLimit(ctx, grlReq, reqState)
 		if err != nil {
 			gm.log.WithError(err).Error("while retrieving rate limit status")
 			continue

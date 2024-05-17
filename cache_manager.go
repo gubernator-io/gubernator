@@ -24,7 +24,7 @@ import (
 )
 
 type CacheManager interface {
-	GetRateLimit(context.Context, *RateLimitReq, RateLimitReqState) (*RateLimitResp, error)
+	CheckRateLimit(context.Context, *RateLimitRequest, RateLimitContext) (*RateLimitResponse, error)
 	GetCacheItem(context.Context, string) (*CacheItem, bool, error)
 	AddCacheItem(context.Context, string, *CacheItem) error
 	Store(ctx context.Context) error
@@ -52,8 +52,8 @@ func NewCacheManager(conf Config) (CacheManager, error) {
 }
 
 // GetRateLimit fetches the item from the cache if it exists, and preforms the appropriate rate limit calculation
-func (m *cacheManager) GetRateLimit(ctx context.Context, req *RateLimitReq, state RateLimitReqState) (*RateLimitResp, error) {
-	var rlResponse *RateLimitResp
+func (m *cacheManager) CheckRateLimit(ctx context.Context, req *RateLimitRequest, state RateLimitContext) (*RateLimitResponse, error) {
+	var rlResponse *RateLimitResponse
 	var err error
 
 	switch req.Algorithm {

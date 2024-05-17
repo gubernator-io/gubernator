@@ -15,10 +15,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/stretchr/testify/require"
-
-	cli "github.com/gubernator-io/gubernator/v2/cmd/gubernator"
+	cli "github.com/gubernator-io/gubernator/v3/cmd/gubernator"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 	"golang.org/x/net/proxy"
 )
 
