@@ -330,7 +330,7 @@ func (s *V1Instance) asyncRequest(ctx context.Context, req *AsyncReq) {
 				WithField("key", req.Key).
 				Error("GetPeer() returned peer that is not connected")
 			countError(err, "Peer not connected")
-			err = errors.Wrapf(err, "GetPeer() keeps returning peers that are not connected for '%s'", req.Key)
+			err = fmt.Errorf("GetPeer() keeps returning peers that are not connected for '%s': %w", req.Key, err)
 			resp.Resp = &RateLimitResp{Error: err.Error()}
 			break
 		}
@@ -344,7 +344,7 @@ func (s *V1Instance) asyncRequest(ctx context.Context, req *AsyncReq) {
 						WithError(err).
 						WithField("key", req.Key).
 						Error("Error applying rate limit")
-					err = errors.Wrapf(err, "Error in getLocalRateLimit for '%s'", req.Key)
+					err = fmt.Errorf("during getLocalRateLimit() for '%s': %w", req.Key, err)
 					resp.Resp = &RateLimitResp{Error: err.Error()}
 				}
 				break
@@ -352,17 +352,18 @@ func (s *V1Instance) asyncRequest(ctx context.Context, req *AsyncReq) {
 		}
 
 		// Make an RPC call to the peer that owns this rate limit
-		r, err := req.Peer.GetPeerRateLimit(ctx, req.Req)
+		var r *RateLimitResp
+		r, err = req.Peer.GetPeerRateLimit(ctx, req.Req)
 		if err != nil {
 			if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
 				attempts++
 				metricBatchSendRetries.WithLabelValues(req.Req.Name).Inc()
 				req.Peer, err = s.GetPeer(ctx, req.Key)
 				if err != nil {
-					errPart := fmt.Sprintf("Error finding peer that owns rate limit '%s'", req.Key)
+					errPart := fmt.Sprintf("while finding peer that owns rate limit '%s'", req.Key)
 					s.log.WithContext(ctx).WithError(err).WithField("key", req.Key).Error(errPart)
-					countError(err, "Error in GetPeer")
-					err = errors.Wrap(err, errPart)
+					countError(err, "during GetPeer()")
+					err = fmt.Errorf("%s: %w", errPart, err)
 					resp.Resp = &RateLimitResp{Error: err.Error()}
 					break
 				}
@@ -371,7 +372,7 @@ func (s *V1Instance) asyncRequest(ctx context.Context, req *AsyncReq) {
 
 			// Not calling `countError()` because we expect the remote end to
 			// report this error.
-			err = errors.Wrap(err, fmt.Sprintf("Error while fetching rate limit '%s' from peer", req.Key))
+			err = fmt.Errorf("while fetching rate limit '%s' from peer: %w", req.Key, err)
 			resp.Resp = &RateLimitResp{Error: err.Error()}
 			break
 		}
