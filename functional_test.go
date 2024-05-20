@@ -2110,6 +2110,8 @@ func TestGlobalBehavior(t *testing.T) {
 				// Assert PeerCheckRateLimits endpoint called on owner
 				// for each non-owner that received hits.
 				// Used by global hits update.
+				// TODO(thrawn01): It is more important to verify the counts exist on each peer instead of how they got there. As the method of
+				//  how they got there is an implementation detail and can/will change. Also, this test flaps occasionally.
 				gprlCounters2 := getPeerCounters(t, cluster.GetDaemons(), "gubernator_http_handler_duration_count{path=\"/v1/peer.forward\"}")
 				for _, peer := range cluster.GetDaemons() {
 					expected := gprlCounters[peer.InstanceID]

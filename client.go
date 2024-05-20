@@ -32,7 +32,6 @@ import (
 	"github.com/mailgun/holster/v4/setter"
 	"github.com/pkg/errors"
 	"go.opentelemetry.io/otel/propagation"
-	"golang.org/x/net/http2"
 	"google.golang.org/protobuf/proto"
 )
 
@@ -67,7 +66,14 @@ type client struct {
 
 // NewClient creates a new instance of the Gubernator user client
 func NewClient(opts ClientOptions) (Client, error) {
-	setter.SetDefault(&opts.Client, &http.Client{})
+	setter.SetDefault(&opts.Client, &http.Client{
+		Transport: &http.Transport{
+			MaxConnsPerHost:     2_000,
+			MaxIdleConns:        2_000,
+			MaxIdleConnsPerHost: 2_000,
+			IdleConnTimeout:     60 * time.Second,
+		},
+	})
 
 	if len(opts.Endpoint) == 0 {
 		return nil, errors.New("opts.Endpoint is empty; must provide an address")
@@ -163,7 +169,14 @@ func (c *client) Close(_ context.Context) error {
 func WithNoTLS(address string) ClientOptions {
 	return ClientOptions{
 		Endpoint: fmt.Sprintf("http://%s", address),
-		Client:   &http.Client{},
+		Client: &http.Client{
+			Transport: &http.Transport{
+				MaxConnsPerHost:     2_000,
+				MaxIdleConns:        2_000,
+				MaxIdleConnsPerHost: 2_000,
+				IdleConnTimeout:     60 * time.Second,
+			},
+		},
 	}
 }
 
@@ -172,8 +185,12 @@ func WithTLS(tls *tls.Config, address string) ClientOptions {
 	return ClientOptions{
 		Endpoint: fmt.Sprintf("https://%s", address),
 		Client: &http.Client{
-			Transport: &http2.Transport{
-				TLSClientConfig: tls,
+			Transport: &http.Transport{
+				TLSClientConfig:     tls,
+				MaxConnsPerHost:     2_000,
+				MaxIdleConns:        2_000,
+				MaxIdleConnsPerHost: 2_000,
+				IdleConnTimeout:     60 * time.Second,
 			},
 		},
 	}
