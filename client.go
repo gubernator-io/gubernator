@@ -93,13 +93,13 @@ func NewPeerClient(opts ClientOptions) PeerClient {
 func (c *client) CheckRateLimits(ctx context.Context, req *CheckRateLimitsRequest, resp *CheckRateLimitsResponse) error {
 	payload, err := proto.Marshal(req)
 	if err != nil {
-		return duh.NewClientError(fmt.Errorf("while marshaling request payload: %w", err), nil)
+		return duh.NewClientError("while marshaling request payload: %w", err, nil)
 	}
 
 	r, err := http.NewRequestWithContext(ctx, http.MethodPost,
 		fmt.Sprintf("%s%s", c.opts.Endpoint, RPCRateLimitCheck), bytes.NewReader(payload))
 	if err != nil {
-		return duh.NewClientError(err, nil)
+		return duh.NewClientError("", err, nil)
 	}
 
 	r.Header.Set("Content-Type", duh.ContentTypeProtoBuf)
@@ -109,13 +109,13 @@ func (c *client) CheckRateLimits(ctx context.Context, req *CheckRateLimitsReques
 func (c *client) HealthCheck(ctx context.Context, resp *HealthCheckResponse) error {
 	payload, err := proto.Marshal(&HealthCheckRequest{})
 	if err != nil {
-		return duh.NewClientError(fmt.Errorf("while marshaling request payload: %w", err), nil)
+		return duh.NewClientError("while marshaling request payload: %w", err, nil)
 	}
 
 	r, err := http.NewRequestWithContext(ctx, http.MethodPost,
 		fmt.Sprintf("%s%s", c.opts.Endpoint, RPCHealthCheck), bytes.NewReader(payload))
 	if err != nil {
-		return duh.NewClientError(err, nil)
+		return duh.NewClientError("", err, nil)
 	}
 
 	r.Header.Set("Content-Type", duh.ContentTypeProtoBuf)
@@ -125,13 +125,13 @@ func (c *client) HealthCheck(ctx context.Context, resp *HealthCheckResponse) err
 func (c *client) Forward(ctx context.Context, req *ForwardRequest, resp *ForwardResponse) error {
 	payload, err := proto.Marshal(req)
 	if err != nil {
-		return duh.NewClientError(fmt.Errorf("while marshaling request payload: %w", err), nil)
+		return duh.NewClientError("while marshaling request payload: %w", err, nil)
 	}
 
 	r, err := http.NewRequestWithContext(ctx, http.MethodPost,
 		fmt.Sprintf("%s%s", c.opts.Endpoint, RPCPeerForward), bytes.NewReader(payload))
 	if err != nil {
-		return duh.NewClientError(err, nil)
+		return duh.NewClientError("", err, nil)
 	}
 
 	c.prop.Inject(ctx, propagation.HeaderCarrier(r.Header))
@@ -142,12 +142,12 @@ func (c *client) Forward(ctx context.Context, req *ForwardRequest, resp *Forward
 func (c *client) Update(ctx context.Context, req *UpdateRequest) error {
 	payload, err := proto.Marshal(req)
 	if err != nil {
-		return duh.NewClientError(fmt.Errorf("while marshaling request payload: %w", err), nil)
+		return duh.NewClientError("while marshaling request payload: %w", err, nil)
 	}
 	r, err := http.NewRequestWithContext(ctx, http.MethodPost,
 		fmt.Sprintf("%s%s", c.opts.Endpoint, RPCPeerUpdate), bytes.NewReader(payload))
 	if err != nil {
-		return duh.NewClientError(err, nil)
+		return duh.NewClientError("", err, nil)
 	}
 
 	r.Header.Set("Content-Type", duh.ContentTypeProtoBuf)
@@ -227,10 +227,10 @@ func RandomPeer(peers []PeerInfo) PeerInfo {
 // RandomString returns a random alpha string of 'n' length
 func RandomString(n int) string {
 	const alphanumeric = "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz"
-	var bytes = make([]byte, n)
-	_, _ = crand.Read(bytes)
-	for i, b := range bytes {
-		bytes[i] = alphanumeric[b%byte(len(alphanumeric))]
+	var buf = make([]byte, n)
+	_, _ = crand.Read(buf)
+	for i, b := range buf {
+		buf[i] = alphanumeric[b%byte(len(alphanumeric))]
 	}
-	return string(bytes)
+	return string(buf)
 }

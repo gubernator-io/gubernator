@@ -21,7 +21,8 @@ tidy:
 
 .PHONY: validate
 validate: tidy lint test bench
-	echo $$?
+	@echo
+	@echo "\033[32mEVERYTHING PASSED!\033[0m"
 
 .PHONY: test
 test: ## Run unit tests and measure code coverage
