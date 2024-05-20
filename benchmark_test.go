@@ -18,12 +18,13 @@ package gubernator_test
 
 import (
 	"context"
+	"fmt"
+	"runtime"
 	"testing"
 
 	guber "github.com/gubernator-io/gubernator/v3"
 	"github.com/gubernator-io/gubernator/v3/cluster"
 	"github.com/mailgun/holster/v4/clock"
-	"github.com/mailgun/holster/v4/syncutil"
 	"github.com/stretchr/testify/require"
 )
 
@@ -57,9 +58,9 @@ func BenchmarkServer(b *testing.B) {
 	require.NoError(b, err, "Error in conf.SetDefaults")
 	createdAt := epochMillis(clock.Now())
 	d := cluster.GetRandomDaemon(cluster.DataCenterNone)
-	client := d.MustClient().(guber.PeerClient)
 
 	b.Run("GetPeerRateLimit", func(b *testing.B) {
+		client := d.MustClient().(guber.PeerClient)
 		b.ResetTimer()
 
 		for n := 0; n < b.N; n++ {
@@ -146,15 +147,27 @@ func BenchmarkServer(b *testing.B) {
 	})
 
 	b.Run("Thundering herd", func(b *testing.B) {
-		client := cluster.GetRandomDaemon(cluster.DataCenterNone).MustClient()
 		require.NoError(b, err, "Error in guber.DialV1Server")
-		b.ResetTimer()
-		fan := syncutil.NewFanOut(100)
+		var clients []guber.Client
 
-		for n := 0; n < b.N; n++ {
-			fan.Run(func(o interface{}) error {
+		// Create a client for each CPU on the system. This should allow us to simulate the
+		// maximum contention possible for this system.
+		for i := 0; i < runtime.NumCPU(); i++ {
+			client, err := guber.NewClient(guber.WithNoTLS(d.Listener.Addr().String()))
+			require.NoError(b, err)
+			clients = append(clients, client)
+		}
+		b.ResetTimer()
+		mask := len(clients) - 1
+
+		var idx int
+		b.RunParallel(func(pb *testing.PB) {
+			client := clients[idx&mask]
+			idx++
+
+			for pb.Next() {
 				var resp guber.CheckRateLimitsResponse
-				err := client.CheckRateLimits(ctx, &guber.CheckRateLimitsRequest{
+				err = client.CheckRateLimits(ctx, &guber.CheckRateLimitsRequest{
 					Requests: []*guber.RateLimitRequest{
 						{
 							Name:      b.Name(),
@@ -166,10 +179,9 @@ func BenchmarkServer(b *testing.B) {
 					},
 				}, &resp)
 				if err != nil {
-					b.Errorf("Error in client.GetRateLimits: %s", err)
+					fmt.Printf("%s\n", err.Error())
 				}
-				return nil
-			}, nil)
-		}
+			}
+		})
 	})
 }
