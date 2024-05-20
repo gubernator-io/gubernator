@@ -31,7 +31,6 @@ import (
 	"github.com/sirupsen/logrus"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-	"golang.org/x/net/http2"
 )
 
 func spawnDaemon(t *testing.T, conf gubernator.DaemonConfig) *gubernator.Daemon {
@@ -268,7 +267,7 @@ func TestTLSClusterWithClientAuthentication(t *testing.T) {
 
 	config := d2.Config()
 	client := &http.Client{
-		Transport: &http2.Transport{
+		Transport: &http.Transport{
 			TLSClientConfig: config.ClientTLS(),
 		},
 	}

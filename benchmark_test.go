@@ -19,6 +19,7 @@ package gubernator_test
 import (
 	"context"
 	"fmt"
+	"math/rand"
 	"runtime"
 	"testing"
 
@@ -59,7 +60,7 @@ func BenchmarkServer(b *testing.B) {
 	createdAt := epochMillis(clock.Now())
 	d := cluster.GetRandomDaemon(cluster.DataCenterNone)
 
-	b.Run("GetPeerRateLimit", func(b *testing.B) {
+	b.Run("Forward", func(b *testing.B) {
 		client := d.MustClient().(guber.PeerClient)
 		b.ResetTimer()
 
@@ -84,9 +85,9 @@ func BenchmarkServer(b *testing.B) {
 		}
 	})
 
-	b.Run("GetRateLimits batching", func(b *testing.B) {
+	b.Run("CheckRateLimits batching", func(b *testing.B) {
 		client := cluster.GetRandomDaemon(cluster.DataCenterNone).MustClient()
-		require.NoError(b, err, "Error in guber.DialV1Server")
+		require.NoError(b, err)
 		b.ResetTimer()
 
 		for n := 0; n < b.N; n++ {
@@ -108,9 +109,9 @@ func BenchmarkServer(b *testing.B) {
 		}
 	})
 
-	b.Run("GetRateLimits global", func(b *testing.B) {
+	b.Run("CheckRateLimits global", func(b *testing.B) {
 		client := cluster.GetRandomDaemon(cluster.DataCenterNone).MustClient()
-		require.NoError(b, err, "Error in guber.DialV1Server")
+		require.NoError(b, err)
 		b.ResetTimer()
 
 		for n := 0; n < b.N; n++ {
@@ -128,14 +129,14 @@ func BenchmarkServer(b *testing.B) {
 				},
 			}, &resp)
 			if err != nil {
-				b.Errorf("Error in client.GetRateLimits: %s", err)
+				b.Errorf("Error in client.CheckRateLimits: %s", err)
 			}
 		}
 	})
 
 	b.Run("HealthCheck", func(b *testing.B) {
 		client := cluster.GetRandomDaemon(cluster.DataCenterNone).MustClient()
-		require.NoError(b, err, "Error in guber.DialV1Server")
+		require.NoError(b, err)
 		b.ResetTimer()
 
 		for n := 0; n < b.N; n++ {
@@ -146,8 +147,7 @@ func BenchmarkServer(b *testing.B) {
 		}
 	})
 
-	b.Run("Thundering herd", func(b *testing.B) {
-		require.NoError(b, err, "Error in guber.DialV1Server")
+	b.Run("Concurrency CheckRateLimits", func(b *testing.B) {
 		var clients []guber.Client
 
 		// Create a client for each CPU on the system. This should allow us to simulate the
@@ -157,29 +157,65 @@ func BenchmarkServer(b *testing.B) {
 			require.NoError(b, err)
 			clients = append(clients, client)
 		}
-		b.ResetTimer()
-		mask := len(clients) - 1
 
+		keys := GenerateRandomKeys(8_000)
+		keyMask := len(keys) - 1
+		clientMask := len(clients) - 1
 		var idx int
+
+		b.ResetTimer()
 		b.RunParallel(func(pb *testing.PB) {
-			client := clients[idx&mask]
+			client := clients[idx&clientMask]
 			idx++
 
 			for pb.Next() {
+				keyIdx := int(rand.Uint32() & uint32(clientMask))
 				var resp guber.CheckRateLimitsResponse
 				err = client.CheckRateLimits(ctx, &guber.CheckRateLimitsRequest{
 					Requests: []*guber.RateLimitRequest{
 						{
 							Name:      b.Name(),
-							UniqueKey: guber.RandomString(10),
-							Limit:     10,
-							Duration:  guber.Second * 5,
+							UniqueKey: keys[keyIdx&keyMask],
+							Behavior:  guber.Behavior_GLOBAL,
+							Duration:  guber.Minute,
+							Limit:     100,
 							Hits:      1,
 						},
 					},
 				}, &resp)
 				if err != nil {
 					fmt.Printf("%s\n", err.Error())
+				}
+			}
+		})
+
+		for _, client := range clients {
+			_ = client.Close(context.Background())
+		}
+	})
+
+	b.Run("Concurrency HealthCheck", func(b *testing.B) {
+		var clients []guber.Client
+
+		// Create a client for each CPU on the system. This should allow us to simulate the
+		// maximum contention possible for this system.
+		for i := 0; i < runtime.NumCPU(); i++ {
+			client, err := guber.NewClient(guber.WithNoTLS(d.Listener.Addr().String()))
+			require.NoError(b, err)
+			clients = append(clients, client)
+		}
+		mask := len(clients) - 1
+		var idx int
+
+		b.ResetTimer()
+		b.RunParallel(func(pb *testing.PB) {
+			client := clients[idx&mask]
+			idx++
+
+			for pb.Next() {
+				var resp guber.HealthCheckResponse
+				if err := client.HealthCheck(ctx, &resp); err != nil {
+					b.Errorf("Error in client.HealthCheck: %s", err)
 				}
 			}
 		})
