@@ -15,9 +15,13 @@ $(GOLANGCI_LINT): ## Download Go linter
 lint: $(GOLANGCI_LINT) ## Run Go linter
 	$(GOLANGCI_LINT) run -v -c .golangci.yml ./...
 
-.PHONY: validate
-validate: lint test
+.PHONY: tidy
+tidy:
 	go mod tidy && git diff --exit-code
+
+.PHONY: validate
+validate: tidy lint test bench
+	echo $$?
 
 .PHONY: test
 test: ## Run unit tests and measure code coverage
@@ -48,10 +52,6 @@ clean-proto: ## Clean the generated source files from the protobuf sources
 	@echo "==> Cleaning up the go generated files from proto"
 	@find . -name "*.pb.go" -type f -delete
 	@find . -name "*.pb.*.go" -type f -delete
-
-.PHONY: validate
-validate: lint test
-	go mod tidy && git diff --exit-code
 
 .PHONY: proto
 proto: ## Build protos
