@@ -4,7 +4,7 @@ go 1.22.0
 
 require (
 	github.com/davecgh/go-spew v1.1.1
-	github.com/duh-rpc/duh-go v0.0.2-0.20230929155108-5d641b0c008a
+	github.com/duh-rpc/duh-go v0.1.0
 	github.com/hashicorp/memberlist v0.5.0
 	github.com/mailgun/errors v0.1.5
 	github.com/mailgun/holster/v4 v4.19.0

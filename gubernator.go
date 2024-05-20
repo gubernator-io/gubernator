@@ -176,12 +176,12 @@ func (s *Service) CheckRateLimits(ctx context.Context, req *CheckRateLimitsReque
 	if len(req.Requests) > maxBatchSize {
 		metricCheckErrorCounter.WithLabelValues("Request too large").Add(1)
 		return duh.NewServiceError(duh.CodeBadRequest,
-			fmt.Errorf("CheckRateLimitsRequest.RateLimits list too large; max size is '%d'", maxBatchSize), nil)
+			fmt.Sprintf("CheckRateLimitsRequest.RateLimits list too large; max size is '%d'", maxBatchSize), nil, nil)
 	}
 
 	if len(req.Requests) == 0 {
 		return duh.NewServiceError(duh.CodeBadRequest,
-			errors.New("CheckRateLimitsRequest.RateLimits list is empty; provide at least one rate limit"), nil)
+			"CheckRateLimitsRequest.RateLimits list is empty; provide at least one rate limit", nil, nil)
 	}
 
 	resp.Responses = make([]*RateLimitResponse, len(req.Requests))
@@ -471,7 +471,7 @@ func (s *Service) Forward(ctx context.Context, req *ForwardRequest, resp *Forwar
 	if len(req.Requests) > maxBatchSize {
 		metricCheckErrorCounter.WithLabelValues("Request too large").Add(1)
 		return duh.NewServiceError(duh.CodeBadRequest,
-			fmt.Errorf("'Forward.requests' list too large; max size is '%d'", maxBatchSize), nil)
+			fmt.Sprintf("'Forward.requests' list too large; max size is '%d'", maxBatchSize), nil, nil)
 	}
 
 	// Invoke each rate limit request.
