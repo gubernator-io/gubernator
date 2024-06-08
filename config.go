@@ -41,7 +41,6 @@ import (
 	"github.com/segmentio/fasthash/fnv1a"
 	"github.com/sirupsen/logrus"
 	etcd "go.etcd.io/etcd/client/v3"
-	"go.opentelemetry.io/contrib/instrumentation/google.golang.org/grpc/otelgrpc"
 )
 
 // BehaviorConfig controls the handling of rate limits in the cluster
@@ -753,27 +752,3 @@ func GetTracingLevel() tracing.Level {
 	}
 	return tracing.InfoLevel
 }
-
-// TraceLevelInfoFilter is used with otelgrpc.WithInterceptorFilter() to
-// reduce noise by filtering trace propagation on some gRPC methods.
-// otelgrpc deprecated use of interceptors in v0.45.0 in favor of stats
-// handlers to propagate trace context.
-// However, stats handlers do not have a filter feature.
-// See: https://github.com/open-telemetry/opentelemetry-go-contrib/issues/4575
-// var TraceLevelInfoFilter = otelgrpc.Filter(func(info *otelgrpc.InterceptorInfo) bool {
-// 	if info.UnaryServerInfo != nil {
-// 		if info.UnaryServerInfo.FullMethod == "/pb.gubernator.PeersV1/GetPeerRateLimits" {
-// 			return false
-// 		}
-// 		if info.UnaryServerInfo.FullMethod == "/pb.gubernator.V1/HealthCheck" {
-// 			return false
-// 		}
-// 	}
-// 	if info.Method == "/pb.gubernator.PeersV1/GetPeerRateLimits" {
-// 		return false
-// 	}
-// 	if info.Method == "/pb.gubernator.V1/HealthCheck" {
-// 		return false
-// 	}
-// 	return true
-// })
