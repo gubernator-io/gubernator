@@ -22,13 +22,13 @@ import (
 	"sort"
 	"testing"
 
-	guber "github.com/gubernator-io/gubernator/v2"
+	guber "github.com/gubernator-io/gubernator/v3"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
 )
 
-func TestGubernatorPool(t *testing.T) {
+func TestCacheManager(t *testing.T) {
 	ctx := context.Background()
 
 	testCases := []struct {
@@ -43,7 +43,7 @@ func TestGubernatorPool(t *testing.T) {
 		t.Run(testCase.name, func(t *testing.T) {
 			// Setup mock data.
 			const NumCacheItems = 100
-			cacheItems := []*guber.CacheItem{}
+			var cacheItems []*guber.CacheItem
 			for i := 0; i < NumCacheItems; i++ {
 				cacheItems = append(cacheItems, &guber.CacheItem{
 					Key:      fmt.Sprintf("Foobar%04d", i),
@@ -55,15 +55,16 @@ func TestGubernatorPool(t *testing.T) {
 			t.Run("Load()", func(t *testing.T) {
 				mockLoader := &MockLoader2{}
 				mockCache := &MockCache{}
-				conf := &guber.Config{
-					CacheFactory: func(maxSize int) guber.Cache {
-						return mockCache
+				conf := guber.Config{
+					CacheFactory: func(maxSize int) (guber.Cache, error) {
+						return mockCache, nil
 					},
 					Loader:  mockLoader,
 					Workers: testCase.workers,
 				}
 				assert.NoError(t, conf.SetDefaults())
-				chp := guber.NewWorkerPool(conf)
+				manager, err := guber.NewCacheManager(conf)
+				require.NoError(t, err)
 
 				// Mock Loader.
 				fakeLoadCh := make(chan *guber.CacheItem, NumCacheItems)
@@ -75,35 +76,36 @@ func TestGubernatorPool(t *testing.T) {
 
 				// Mock Cache.
 				for _, item := range cacheItems {
-					mockCache.On("Add", item).Once().Return(false)
+					mockCache.On("AddIfNotPresent", item).Once().Return(true)
 				}
 
 				// Call code.
-				err := chp.Load(ctx)
+				err = manager.Load(ctx)
 
 				// Verify.
-				require.NoError(t, err, "Error in chp.Load")
+				require.NoError(t, err, "Error in manager.Load")
 			})
 
 			t.Run("Store()", func(t *testing.T) {
 				mockLoader := &MockLoader2{}
 				mockCache := &MockCache{}
-				conf := &guber.Config{
-					CacheFactory: func(maxSize int) guber.Cache {
-						return mockCache
+				conf := guber.Config{
+					CacheFactory: func(maxSize int) (guber.Cache, error) {
+						return mockCache, nil
 					},
 					Loader:  mockLoader,
 					Workers: testCase.workers,
 				}
 				require.NoError(t, conf.SetDefaults())
-				chp := guber.NewWorkerPool(conf)
+				chp, err := guber.NewCacheManager(conf)
+				require.NoError(t, err)
 
 				// Mock Loader.
 				mockLoader.On("Save", mock.Anything).Once().Return(nil).
 					Run(func(args mock.Arguments) {
 						// Verify items sent over the channel passed to Save().
 						saveCh := args.Get(0).(chan *guber.CacheItem)
-						savedItems := []*guber.CacheItem{}
+						var savedItems []*guber.CacheItem
 						for item := range saveCh {
 							savedItems = append(savedItems, item)
 						}
@@ -124,7 +126,7 @@ func TestGubernatorPool(t *testing.T) {
 				mockCache.On("Each").Times(testCase.workers).Return(eachCh)
 
 				// Call code.
-				err := chp.Store(ctx)
+				err = chp.Store(ctx)
 
 				// Verify.
 				require.NoError(t, err, "Error in chp.Store")

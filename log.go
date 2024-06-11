@@ -1,7 +1,10 @@
 package gubernator
 
 import (
+	"bufio"
 	"context"
+	"io"
+	"sync"
 	"time"
 
 	"github.com/sirupsen/logrus"
@@ -31,4 +34,44 @@ type FieldLogger interface {
 	Warn(args ...interface{})
 	Warning(args ...interface{})
 	Error(args ...interface{})
+}
+
+type logAdaptor struct {
+	writer *io.PipeWriter
+	closer func()
+}
+
+func (l *logAdaptor) Write(p []byte) (n int, err error) {
+	return l.writer.Write(p)
+}
+
+func (l *logAdaptor) Close() error {
+	l.closer()
+	return nil
+}
+
+func newLogAdaptor(log FieldLogger) *logAdaptor {
+	reader, writer := io.Pipe()
+	var wg sync.WaitGroup
+	wg.Add(1)
+
+	go func() {
+		scanner := bufio.NewScanner(reader)
+		for scanner.Scan() {
+			log.Info(scanner.Text())
+		}
+		if err := scanner.Err(); err != nil {
+			log.Errorf("Error while reading from Writer: %s", err)
+		}
+		_ = reader.Close()
+		wg.Done()
+	}()
+
+	return &logAdaptor{
+		writer: writer,
+		closer: func() {
+			_ = writer.Close()
+			wg.Wait()
+		},
+	}
 }

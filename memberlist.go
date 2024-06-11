@@ -17,15 +17,12 @@ limitations under the License.
 package gubernator
 
 import (
-	"bufio"
 	"bytes"
 	"context"
 	"encoding/base64"
 	"encoding/gob"
 	"encoding/json"
-	"io"
 	"net"
-	"runtime"
 	"strconv"
 	"strings"
 
@@ -38,6 +35,7 @@ import (
 )
 
 type MemberListPool struct {
+	logAdaptor *logAdaptor
 	log        FieldLogger
 	memberList *ml.Memberlist
 	conf       MemberListPoolConfig
@@ -143,8 +141,8 @@ func NewMemberListPool(ctx context.Context, conf MemberListPoolConfig) (*MemberL
 	if conf.NodeName != "" {
 		config.Name = conf.NodeName
 	}
-
-	config.LogOutput = newLogWriter(m.log)
+	m.logAdaptor = newLogAdaptor(m.log)
+	config.LogOutput = m.logAdaptor
 
 	// Create and set member list
 	memberList, err := ml.Create(config)
@@ -197,6 +195,7 @@ func (m *MemberListPool) Close() {
 	if err != nil {
 		m.log.Warn(errors.Wrap(err, "while leaving member-list"))
 	}
+	_ = m.logAdaptor.Close()
 }
 
 type memberListEventHandler struct {
@@ -266,7 +265,7 @@ func (e *memberListEventHandler) callOnUpdate() {
 	var peers []PeerInfo
 
 	for _, p := range e.peers {
-		if p.GRPCAddress == e.conf.Advertise.GRPCAddress {
+		if p.HTTPAddress == e.conf.Advertise.HTTPAddress {
 			p.IsOwner = true
 		}
 		peers = append(peers, p)
@@ -302,29 +301,9 @@ func unmarshallPeer(b []byte, ip string) (PeerInfo, error) {
 		if metadata.AdvertiseAddress == "" {
 			metadata.AdvertiseAddress = makeAddress(ip, metadata.GubernatorPort)
 		}
-		return PeerInfo{GRPCAddress: metadata.AdvertiseAddress, DataCenter: metadata.DataCenter}, nil
+		return PeerInfo{HTTPAddress: metadata.AdvertiseAddress, DataCenter: metadata.DataCenter}, nil
 	}
 	return peer, nil
-}
-
-func newLogWriter(log FieldLogger) *io.PipeWriter {
-	reader, writer := io.Pipe()
-
-	go func() {
-		scanner := bufio.NewScanner(reader)
-		for scanner.Scan() {
-			log.Info(scanner.Text())
-		}
-		if err := scanner.Err(); err != nil {
-			log.Errorf("Error while reading from Writer: %s", err)
-		}
-		reader.Close()
-	}()
-	runtime.SetFinalizer(writer, func(w *io.PipeWriter) {
-		writer.Close()
-	})
-
-	return writer
 }
 
 func splitAddress(addr string) (string, int, error) {

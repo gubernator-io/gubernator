@@ -259,17 +259,20 @@ func SetupTLS(conf *TLSConfig) error {
 	// If user asked for client auth
 	if conf.ClientAuth != tls.NoClientCert {
 		clientPool := x509.NewCertPool()
+		var certProvided bool
 		if conf.ClientAuthCaPEM != nil {
 			// If client auth CA was provided
 			clientPool.AppendCertsFromPEM(conf.ClientAuthCaPEM.Bytes())
+			certProvided = true
 
 		} else if conf.CaPEM != nil {
 			// else use the servers CA
 			clientPool.AppendCertsFromPEM(conf.CaPEM.Bytes())
+			certProvided = true
 		}
 
-		// error if neither was provided
-		if len(clientPool.Subjects()) == 0 { //nolint:all
+		// error if neither cert was provided
+		if !certProvided {
 			return errors.New("client auth enabled, but no CA's provided")
 		}
 

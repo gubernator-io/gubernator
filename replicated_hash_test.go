@@ -14,12 +14,13 @@ See the License for the specific language governing permissions and
 limitations under the License.
 */
 
-package gubernator
+package gubernator_test
 
 import (
 	"net"
 	"testing"
 
+	guber "github.com/gubernator-io/gubernator/v3"
 	"github.com/segmentio/fasthash/fnv1"
 	"github.com/segmentio/fasthash/fnv1a"
 	"github.com/stretchr/testify/assert"
@@ -29,27 +30,27 @@ func TestReplicatedConsistentHash(t *testing.T) {
 	hosts := []string{"a.svc.local", "b.svc.local", "c.svc.local"}
 
 	t.Run("Size", func(t *testing.T) {
-		hash := NewReplicatedConsistentHash(nil, defaultReplicas)
+		hash := guber.NewReplicatedConsistentHash(nil, guber.DefaultReplicas)
 
 		for _, h := range hosts {
-			hash.Add(&PeerClient{conf: PeerConfig{Info: PeerInfo{GRPCAddress: h}}})
+			hash.Add(&guber.Peer{Conf: guber.PeerConfig{Info: guber.PeerInfo{HTTPAddress: h}}})
 		}
 
 		assert.Equal(t, len(hosts), hash.Size())
 	})
 
 	t.Run("Host", func(t *testing.T) {
-		hash := NewReplicatedConsistentHash(nil, defaultReplicas)
-		hostMap := map[string]*PeerClient{}
+		hash := guber.NewReplicatedConsistentHash(nil, guber.DefaultReplicas)
+		hostMap := make(map[string]*guber.Peer)
 
 		for _, h := range hosts {
-			peer := &PeerClient{conf: PeerConfig{Info: PeerInfo{GRPCAddress: h}}}
+			peer := &guber.Peer{Conf: guber.PeerConfig{Info: guber.PeerInfo{HTTPAddress: h}}}
 			hash.Add(peer)
 			hostMap[h] = peer
 		}
 
 		for host, peer := range hostMap {
-			assert.Equal(t, peer, hash.GetByPeerInfo(PeerInfo{GRPCAddress: host}))
+			assert.Equal(t, peer, hash.GetByPeerInfo(guber.PeerInfo{HTTPAddress: host}))
 		}
 	})
 
@@ -62,7 +63,7 @@ func TestReplicatedConsistentHash(t *testing.T) {
 
 		for _, tc := range []struct {
 			name            string
-			inHashFunc      HashString64
+			inHashFunc      guber.HashString64
 			outDistribution map[string]int
 		}{{
 			name: "default",
@@ -83,17 +84,17 @@ func TestReplicatedConsistentHash(t *testing.T) {
 			},
 		}} {
 			t.Run(tc.name, func(t *testing.T) {
-				hash := NewReplicatedConsistentHash(tc.inHashFunc, defaultReplicas)
+				hash := guber.NewReplicatedConsistentHash(tc.inHashFunc, guber.DefaultReplicas)
 				distribution := make(map[string]int)
 
 				for _, h := range hosts {
-					hash.Add(&PeerClient{conf: PeerConfig{Info: PeerInfo{GRPCAddress: h}}})
+					hash.Add(&guber.Peer{Conf: guber.PeerConfig{Info: guber.PeerInfo{HTTPAddress: h}}})
 					distribution[h] = 0
 				}
 
 				for i := range strings {
 					peer, _ := hash.Get(strings[i])
-					distribution[peer.Info().GRPCAddress]++
+					distribution[peer.Info().HTTPAddress]++
 				}
 				assert.Equal(t, tc.outDistribution, distribution)
 			})
@@ -103,7 +104,7 @@ func TestReplicatedConsistentHash(t *testing.T) {
 }
 
 func BenchmarkReplicatedConsistantHash(b *testing.B) {
-	hashFuncs := map[string]HashString64{
+	hashFuncs := map[string]guber.HashString64{
 		"fasthash/fnv1a": fnv1a.HashString64,
 		"fasthash/fnv1":  fnv1.HashString64,
 	}
@@ -115,10 +116,10 @@ func BenchmarkReplicatedConsistantHash(b *testing.B) {
 				ips[i] = net.IPv4(byte(i>>24), byte(i>>16), byte(i>>8), byte(i)).String()
 			}
 
-			hash := NewReplicatedConsistentHash(hashFunc, defaultReplicas)
+			hash := guber.NewReplicatedConsistentHash(hashFunc, guber.DefaultReplicas)
 			hosts := []string{"a.svc.local", "b.svc.local", "c.svc.local"}
 			for _, h := range hosts {
-				hash.Add(&PeerClient{conf: PeerConfig{Info: PeerInfo{GRPCAddress: h}}})
+				hash.Add(&guber.Peer{Conf: guber.PeerConfig{Info: guber.PeerInfo{HTTPAddress: h}}})
 			}
 
 			b.ResetTimer()
