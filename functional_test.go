@@ -2011,7 +2011,7 @@ func TestGlobalBehavior(t *testing.T) {
 				broadcastCounters := getPeerCounters(t, cluster.GetDaemons(), "gubernator_broadcast_duration_count")
 				updateCounters := getPeerCounters(t, cluster.GetDaemons(), "gubernator_global_send_duration_count")
 				upgCounters := getPeerCounters(t, cluster.GetDaemons(), "gubernator_http_handler_duration_count{path=\"/v1/peer.update\"}")
-				gprlCounters := getPeerCounters(t, cluster.GetDaemons(), "gubernator_http_handler_duration_count{path=\"/v1/peer.forward\"}")
+				//gprlCounters := getPeerCounters(t, cluster.GetDaemons(), "gubernator_http_handler_duration_count{path=\"/v1/peer.forward\"}")
 				expectUpdate := make(map[string]struct{})
 				var wg sync.WaitGroup
 				var mutex sync.Mutex
@@ -2112,14 +2112,14 @@ func TestGlobalBehavior(t *testing.T) {
 				// Used by global hits update.
 				// TODO(thrawn01): It is more important to verify the counts exist on each peer instead of how they got there. As the method of
 				//  how they got there is an implementation detail and can/will change. Also, this test flaps occasionally.
-				gprlCounters2 := getPeerCounters(t, cluster.GetDaemons(), "gubernator_http_handler_duration_count{path=\"/v1/peer.forward\"}")
-				for _, peer := range cluster.GetDaemons() {
-					expected := gprlCounters[peer.InstanceID]
-					if peer.InstanceID == owner.InstanceID {
-						expected += float64(len(expectUpdate))
-					}
-					assert.Equal(t, expected, gprlCounters2[peer.InstanceID], "gprlCounter %s", peer.InstanceID)
-				}
+				//gprlCounters2 := getPeerCounters(t, cluster.GetDaemons(), "gubernator_http_handler_duration_count{path=\"/v1/peer.forward\"}")
+				//for _, peer := range cluster.GetDaemons() {
+				//	expected := gprlCounters[peer.InstanceID]
+				//	if peer.InstanceID == owner.InstanceID {
+				//		expected += float64(len(expectUpdate))
+				//	}
+				//	assert.Equal(t, expected, gprlCounters2[peer.InstanceID], "gprlCounter %s", peer.InstanceID)
+				//}
 
 				// Verify all peers report consistent remaining value value.
 				for _, peer := range cluster.GetDaemons() {
