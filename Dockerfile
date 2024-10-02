@@ -1,12 +1,12 @@
 # Build image
-FROM --platform=$BUILDPLATFORM golang:1.21.0 as build
+FROM --platform=$BUILDPLATFORM golang:1.21.0 AS build
 ARG BUILDPLATFORM
 ARG TARGETPLATFORM
 # https://github.com/docker/buildx/issues/510#issuecomment-768432329
 ENV BUILDPLATFORM=${BUILDPLATFORM:-linux/amd64}
 ENV TARGETPLATFORM=${TARGETPLATFORM:-linux/amd64}
 
-LABEL org.opencontainers.image.source = "https://github.com/gubernator-io/gubernator"
+LABEL org.opencontainers.image.source="https://github.com/gubernator-io/gubernator"
 
 WORKDIR /go/src
 
@@ -27,6 +27,9 @@ RUN CGO_ENABLED=0 GOOS=${TARGETPLATFORM%/*} GOARCH=${TARGETPLATFORM#*/} go build
 RUN CGO_ENABLED=0 GOOS=${TARGETPLATFORM%/*} GOARCH=${TARGETPLATFORM#*/} go build \
     -ldflags "-w -s" -o /healthcheck /go/src/cmd/healthcheck/main.go
 
+# Create a non-root user
+RUN useradd -u 1001 gubernator
+
 # Create our deploy image
 FROM scratch
 
@@ -37,9 +40,11 @@ COPY --from=build /etc/ssl/certs/ca-certificates.crt /etc/ssl/certs/
 COPY --from=build /gubernator /gubernator
 COPY --from=build /healthcheck /healthcheck
 
+# Switch to non root user
+USER 1001
+
 # Healtcheck
 HEALTHCHECK --interval=3s --timeout=1s --start-period=2s --retries=2 CMD [ "/healthcheck" ]
-
 
 # Run the server
 ENTRYPOINT ["/gubernator"]
