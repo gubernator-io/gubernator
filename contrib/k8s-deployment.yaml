@@ -15,6 +15,12 @@ spec:
         app: gubernator
     spec:
       serviceAccountName: gubernator
+      # If using the default ports 80 and 81, you need to grant permissions to avoid bind permission denied
+      # securityContext:
+      #   runAsNonRoot: true
+      #   sysctls:
+      #     - name: net.ipv4.ip_unprivileged_port_start
+      #       value: "80"
       containers:
         - image: ghcr.io/gubernator-io/gubernator:latest
           imagePullPolicy: IfNotPresent
