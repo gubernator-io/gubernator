@@ -15,7 +15,8 @@ spec:
         app: gubernator
     spec:
       serviceAccountName: gubernator
-      # If using the default ports 80 and 81, you need to grant permissions to avoid bind permission denied
+      # If using the default ports 80 and 81 and containerd runtime, you need to grant permissions to avoid bind
+      # permission denied
       # securityContext:
       #   runAsNonRoot: true
       #   sysctls:
