@@ -35,8 +35,8 @@ module "gubernator_service" {
           initProcessEnabled = true
         },
         portMappings = [
-          { containerPort = 80 },
-          { containerPort = 81 },
+          { containerPort = 1050 },
+          { containerPort = 1051 },
         ],
         logConfiguration = {
           logDriver = "awslogs",

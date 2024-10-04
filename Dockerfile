@@ -49,6 +49,6 @@ HEALTHCHECK --interval=3s --timeout=1s --start-period=2s --retries=2 CMD [ "/hea
 # Run the server
 ENTRYPOINT ["/gubernator"]
 
-EXPOSE 80
-EXPOSE 81
+EXPOSE 1050
+EXPOSE 1051
 EXPOSE 7946

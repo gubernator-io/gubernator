@@ -21,13 +21,14 @@ GUBER_GRPC_ADDRESS=10.10.10.10:9000`
 	require.NotEmpty(t, daemonConfig.InstanceID)
 }
 
-func TestDefaultGrpcAddress(t *testing.T) {
+func TestDefaultListenAddress(t *testing.T) {
 	os.Clearenv()
 	s := `
 # a comment`
 	daemonConfig, err := SetupDaemonConfig(logrus.StandardLogger(), strings.NewReader(s))
 	require.NoError(t, err)
-	require.Equal(t, fmt.Sprintf("%s:81", LocalHost()), daemonConfig.GRPCListenAddress)
+	require.Equal(t, fmt.Sprintf("%s:1051", LocalHost()), daemonConfig.GRPCListenAddress)
+	require.Equal(t, fmt.Sprintf("%s:1050", LocalHost()), daemonConfig.HTTPListenAddress)
 	require.NotEmpty(t, daemonConfig.InstanceID)
 }
 
