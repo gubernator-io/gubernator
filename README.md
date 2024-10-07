@@ -38,11 +38,11 @@ $ docker-compose up -d
 ```
 Now you can make rate limit requests via CURL
 ```
-# Hit the HTTP API at localhost:9080 (GRPC is at 9081)
-$ curl http://localhost:9080/v1/HealthCheck
+# Hit the HTTP API at localhost:1050 (GRPC is at 1051)
+$ curl http://localhost:1050/v1/HealthCheck
 
 # Make a rate limit request
-$ curl http://localhost:9080/v1/GetRateLimits \
+$ curl http://localhost:1050/v1/GetRateLimits \
   --header 'Content-Type: application/json' \
   --data '{
     "requests": [
@@ -306,7 +306,7 @@ Example response:
       "reset_time": "1690855128786",
       "error": "",
       "metadata": {
-        "owner": "gubernator:81"
+        "owner": "gubernator:1051"
       }
     }
   ]
@@ -321,11 +321,11 @@ simplest way to try gubernator out.
 
 ##### Docker with existing etcd cluster
 ```bash
-$ docker run -p 8081:81 -p 9080:80 -e GUBER_ETCD_ENDPOINTS=etcd1:2379,etcd2:2379 \
+$ docker run -p 1051:1051 -p 1050:1050 -e GUBER_ETCD_ENDPOINTS=etcd1:2379,etcd2:2379 \
    ghcr.io/gubernator-io/gubernator:latest
 
-# Hit the HTTP API at localhost:9080
-$ curl http://localhost:9080/v1/HealthCheck
+# Hit the HTTP API at localhost:1050
+$ curl http://localhost:1050/v1/HealthCheck
 ```
 
 ##### Kubernetes
@@ -352,8 +352,8 @@ self signed certs by running `docker-compose-tls.yaml`
 # Run docker compose
 $ docker-compose -f docker-compose-tls.yaml up -d
 
-# Hit the HTTP API at localhost:9080 (GRPC is at 9081)
-$ curl --cacert certs/ca.cert --cert certs/gubernator.pem --key certs/gubernator.key  https://localhost:9080/v1/HealthCheck
+# Hit the HTTP API at localhost:1050 (GRPC is at 1051)
+$ curl --cacert certs/ca.cert --cert certs/gubernator.pem --key certs/gubernator.key  https://localhost:1050/v1/HealthCheck
 ```
 
 ### Configuration

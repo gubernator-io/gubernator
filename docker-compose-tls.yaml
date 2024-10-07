@@ -5,9 +5,9 @@ services:
     entrypoint: "/gubernator"
     environment:
       # Basic member-list config
-      - GUBER_GRPC_ADDRESS=0.0.0.0:81
-      - GUBER_HTTP_ADDRESS=0.0.0.0:80
-      - GUBER_ADVERTISE_ADDRESS=gubernator-1:81
+      - GUBER_GRPC_ADDRESS=0.0.0.0:1051
+      - GUBER_HTTP_ADDRESS=0.0.0.0:1050
+      - GUBER_ADVERTISE_ADDRESS=gubernator-1:1051
       - GUBER_MEMBERLIST_KNOWN_NODES=gubernator-1
       - GUBER_MEMBERLIST_SECRET_KEYS=eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHg=
       # TLS config
@@ -16,8 +16,8 @@ services:
       - GUBER_TLS_CERT=/etc/tls/gubernator.pem
       - GUBER_TLS_CLIENT_AUTH=require-and-verify
     ports:
-      - "9081:81"
-      - "9080:80"
+      - "1051:1051"
+      - "1050:1050"
     volumes:
       - ${PWD}/contrib/certs:/etc/tls
 
@@ -26,9 +26,9 @@ services:
     entrypoint: "/gubernator"
     environment:
       # Basic member-list config
-      - GUBER_GRPC_ADDRESS=0.0.0.0:81
-      - GUBER_HTTP_ADDRESS=0.0.0.0:80
-      - GUBER_ADVERTISE_ADDRESS=gubernator-2:81
+      - GUBER_GRPC_ADDRESS=0.0.0.0:1051
+      - GUBER_HTTP_ADDRESS=0.0.0.0:1050
+      - GUBER_ADVERTISE_ADDRESS=gubernator-2:1051
       - GUBER_MEMBERLIST_KNOWN_NODES=gubernator-1
       - GUBER_MEMBERLIST_SECRET_KEYS=eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHg=
       # TLS config
@@ -37,8 +37,8 @@ services:
       - GUBER_TLS_CERT=/etc/tls/gubernator.pem
       - GUBER_TLS_CLIENT_AUTH=require-and-verify
     ports:
-      - "9181:81"
-      - "9180:80"
+      - "1151:1051"
+      - "1150:1050"
     volumes:
       - ${PWD}/contrib/certs:/etc/tls
 
@@ -47,9 +47,9 @@ services:
     entrypoint: "/gubernator"
     environment:
       # Basic member-list config
-      - GUBER_GRPC_ADDRESS=0.0.0.0:81
-      - GUBER_HTTP_ADDRESS=0.0.0.0:80
-      - GUBER_ADVERTISE_ADDRESS=gubernator-3:81
+      - GUBER_GRPC_ADDRESS=0.0.0.0:1051
+      - GUBER_HTTP_ADDRESS=0.0.0.0:1050
+      - GUBER_ADVERTISE_ADDRESS=gubernator-3:1051
       - GUBER_MEMBERLIST_KNOWN_NODES=gubernator-1
       - GUBER_MEMBERLIST_SECRET_KEYS=eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHg=
       # TLS config
@@ -58,8 +58,8 @@ services:
       - GUBER_TLS_CERT=/etc/tls/gubernator.pem
       - GUBER_TLS_CLIENT_AUTH=require-and-verify
     ports:
-      - "9281:81"
-      - "9280:80"
+      - "1251:1051"
+      - "1250:1050"
     volumes:
       - ${PWD}/contrib/certs:/etc/tls
 
@@ -69,9 +69,9 @@ services:
     environment:
       # Basic member-list config
       - GUBER_DEBUG=true
-      - GUBER_GRPC_ADDRESS=0.0.0.0:81
-      - GUBER_HTTP_ADDRESS=0.0.0.0:80
-      - GUBER_ADVERTISE_ADDRESS=gubernator-4:81
+      - GUBER_GRPC_ADDRESS=0.0.0.0:1051
+      - GUBER_HTTP_ADDRESS=0.0.0.0:1050
+      - GUBER_ADVERTISE_ADDRESS=gubernator-4:1051
       - GUBER_MEMBERLIST_KNOWN_NODES=gubernator-1
       - GUBER_MEMBERLIST_SECRET_KEYS=eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHg=
       # TLS config
@@ -80,7 +80,7 @@ services:
       - GUBER_TLS_CERT=/etc/tls/gubernator.pem
       - GUBER_TLS_CLIENT_AUTH=require-and-verify
     ports:
-      - "9381:81"
-      - "9380:80"
+      - "1351:1051"
+      - "1350:1050"
     volumes:
       - ${PWD}/contrib/certs:/etc/tls

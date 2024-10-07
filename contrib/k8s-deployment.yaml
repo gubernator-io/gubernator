@@ -20,9 +20,9 @@ spec:
           imagePullPolicy: IfNotPresent
           ports:
             - name: grpc-port
-              containerPort: 81
+              containerPort: 1051
             - name: http-port
-              containerPort: 80
+              containerPort: 1050
           name: gubernator
           env:
           - name: GUBER_K8S_NAMESPACE
@@ -36,16 +36,16 @@ spec:
           # Must set the GRPC and HTTP addresses, as gubernator
           # defaults to listening on localhost only
           - name: GUBER_GRPC_ADDRESS
-            value: 0.0.0.0:81
+            value: 0.0.0.0:1051
           - name: GUBER_HTTP_ADDRESS
-            value: 0.0.0.0:80
+            value: 0.0.0.0:1050
           # Use the k8s API for peer discovery
           - name: GUBER_PEER_DISCOVERY_TYPE
             value: "k8s"
           # This should match the port number GRPC is listening on
           # as defined by `containerPort`
           - name: GUBER_K8S_POD_PORT
-            value: "81"
+            value: "1051"
           # The selector used when listing endpoints. This selector
           # should only select gubernator peers.
           - name: GUBER_K8S_ENDPOINTS_SELECTOR
@@ -74,13 +74,13 @@ spec:
   clusterIP: None
   #ports:
   #- name: grpc-port
-  #targetPort: 81
+  #targetPort: 1051
   #protocol: TCP
-  #port: 81
+  #port: 1051
   #- name: http-port
-  #targetPort: 80
+  #targetPort: 1050
   #protocol: TCP
-  #port: 80
+  #port: 1050
   selector:
     app: gubernator
 ---

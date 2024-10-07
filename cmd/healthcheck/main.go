@@ -29,7 +29,7 @@ import (
 func main() {
 	url := os.Getenv("GUBER_HTTP_ADDRESS")
 	if url == "" {
-		url = "localhost:80"
+		url = "localhost:1050"
 	}
 	resp, err := http.DefaultClient.Get(fmt.Sprintf("http://%s/v1/HealthCheck", url))
 	if err != nil {

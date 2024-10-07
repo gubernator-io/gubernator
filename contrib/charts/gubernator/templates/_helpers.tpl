@@ -67,7 +67,7 @@ GRPC Port
 {{- if .Values.gubernator.server.grpc.port }}
 {{- .Values.gubernator.server.grpc.port}}
 {{- else }}
-{{- print "81" }}
+{{- print "1051" }}
 {{- end }}
 {{- end }}
 
@@ -78,7 +78,7 @@ HTTP Port
 {{- if .Values.gubernator.server.http.port }}
 {{- .Values.gubernator.server.http.port}}
 {{- else }}
-{{- print "80" }}
+{{- print "1050" }}
 {{- end }}
 {{- end }}
 
