@@ -128,7 +128,6 @@ type Config struct {
 type HitEvent struct {
 	Request  *RateLimitReq
 	Response *RateLimitResp
-	Err      error
 }
 
 func (c *Config) SetDefaults() error {

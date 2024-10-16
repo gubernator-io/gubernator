@@ -283,18 +283,6 @@ func (p *WorkerPool) GetRateLimit(ctx context.Context, rlRequest *RateLimitReq, 
 	select {
 	case handlerResponse := <-handlerRequest.resp:
 		// Successfully read response.
-		// Send to event channel, if set.
-		if p.conf.EventChannel != nil {
-			e := HitEvent{
-				Request:  handlerRequest.request,
-				Response: handlerResponse.rl,
-				Err:      handlerResponse.err,
-			}
-			select {
-			case p.conf.EventChannel <- e:
-			case <-ctx.Done():
-			}
-		}
 		return handlerResponse.rl, handlerResponse.err
 	case <-ctx.Done():
 		return nil, ctx.Err()
