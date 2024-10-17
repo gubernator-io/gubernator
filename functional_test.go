@@ -2113,6 +2113,11 @@ func TestEventChannel(t *testing.T) {
 	}()
 
 	// Spawn specialized Gubernator cluster with EventChannel enabled.
+	cluster.Stop()
+	defer func() {
+		err := startGubernator()
+		require.NoError(t, err)
+	}()
 	peers := []guber.PeerInfo{
 		{GRPCAddress: "127.0.0.1:10000", HTTPAddress: "127.0.0.1:10001", DataCenter: cluster.DataCenterNone},
 		{GRPCAddress: "127.0.0.1:10002", HTTPAddress: "127.0.0.1:10003", DataCenter: cluster.DataCenterNone},
