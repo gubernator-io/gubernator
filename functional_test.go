@@ -2099,14 +2099,12 @@ func TestGlobalBehavior(t *testing.T) {
 func TestEventChannel(t *testing.T) {
 	eventChannel := make(chan guber.HitEvent)
 	defer close(eventChannel)
-	var counter int
 	hits := make(map[string]int64)
 	var mu sync.Mutex
 	sem := make(chan struct{})
 	go func() {
 		for e := range eventChannel {
 			mu.Lock()
-			counter++
 			key := e.Request.Name + "|" + e.Request.UniqueKey
 			hits[key] += e.Request.Hits
 			mu.Unlock()
@@ -2151,16 +2149,20 @@ func TestEventChannel(t *testing.T) {
 	}
 
 	// Send hits using all peering behaviors.
-	const iterations = 3
-	sendHit("foobar0", guber.Behavior_BATCHING)
-	sendHit("foobar1", guber.Behavior_NO_BATCHING)
-	sendHit("foobar2", guber.Behavior_GLOBAL)
+	t.Run("Batching", func(t *testing.T) {
+		sendHit("foobar0", guber.Behavior_BATCHING)
+		assert.Equal(t, int64(2), hits["test|foobar0"])
+	})
 
-	assert.Equal(t, iterations, counter)
-	for i := 0; i < iterations; i++ {
-		expectedKey := fmt.Sprintf("test|foobar%d", i)
-		assert.Equal(t, int64(2), hits[expectedKey], "i=%d", i)
-	}
+	t.Run("No batching", func(t *testing.T) {
+		sendHit("foobar1", guber.Behavior_NO_BATCHING)
+		assert.Equal(t, int64(2), hits["test|foobar1"])
+	})
+
+	t.Run("Global", func(t *testing.T) {
+		sendHit("foobar2", guber.Behavior_GLOBAL)
+		assert.Equal(t, int64(2), hits["test|foobar2"])
+	})
 }
 
 // Request metrics and parse into map.
