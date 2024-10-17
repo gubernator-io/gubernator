@@ -156,6 +156,7 @@ func (s *Daemon) Start(ctx context.Context) error {
 		CacheSize:     s.conf.CacheSize,
 		Workers:       s.conf.Workers,
 		InstanceID:    s.conf.InstanceID,
+		EventChannel:  s.conf.EventChannel,
 	}
 
 	s.V1Server, err = NewV1Instance(s.instanceConf)
