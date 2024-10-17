@@ -121,7 +121,7 @@ type Config struct {
 	CacheSize int
 
 	// (Optional) EventChannel receives hit events
-	EventChannel chan HitEvent
+	EventChannel chan<- HitEvent
 }
 
 type HitEvent struct {
