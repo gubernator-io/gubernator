@@ -119,6 +119,14 @@ type Config struct {
 
 	// (Optional) The total size of the cache used to store rate limits. Defaults to 50,000
 	CacheSize int
+
+	// (Optional) EventChannel receives hit events
+	EventChannel chan HitEvent
+}
+
+type HitEvent struct {
+	Request  *RateLimitReq
+	Response *RateLimitResp
 }
 
 func (c *Config) SetDefaults() error {

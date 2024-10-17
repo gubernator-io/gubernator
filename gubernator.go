@@ -608,6 +608,18 @@ func (s *V1Instance) getLocalRateLimit(ctx context.Context, r *RateLimitReq, req
 
 	if reqState.IsOwner {
 		metricGetRateLimitCounter.WithLabelValues("local").Inc()
+
+		// Send to event channel, if set.
+		if s.conf.EventChannel != nil {
+			e := HitEvent{
+				Request:  r,
+				Response: resp,
+			}
+			select {
+			case s.conf.EventChannel <- e:
+			case <-ctx.Done():
+			}
+		}
 	}
 	return resp, nil
 }
