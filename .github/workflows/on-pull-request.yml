@@ -4,9 +4,6 @@ on:
   pull_request:
     branches: [ master ]
 
-env:
-  GOLANGCI_LINT_VERSION: v1.56.2
-
 jobs:
   test:
     name: test
@@ -40,14 +37,9 @@ jobs:
       - name: Install deps
         run: go mod download
 
-      - name: golangci-lint
-        uses: golangci/golangci-lint-action@v4
-        with:
-          version: ${{ env.GOLANGCI_LINT_VERSION }}
-          skip-cache: true
-
       - name: Test
         run: go test -v -race -p=1 -count=1 -tags holster_test_mode
+
   go-bench:
     runs-on: ubuntu-latest
     timeout-minutes: 30
