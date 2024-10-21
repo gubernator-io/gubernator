@@ -6,7 +6,7 @@ on:
   pull_request:
 
 env:
-  GOLANGCI_LINT_VERSION: v1.56.2
+  GOLANGCI_LINT_VERSION: v1.61.0
 
 jobs:
   lint:
@@ -20,7 +20,7 @@ jobs:
         uses: actions/checkout@v4
 
       - name: Set up Go
-        uses: actions/setup-go@v4
+        uses: actions/setup-go@v5
         with:
           go-version-file: ./go.mod
           cache: true # caching and restoring go modules and build outputs
@@ -29,7 +29,7 @@ jobs:
         run: go mod tidy && git diff --exit-code
 
       - name: golangci-lint
-        uses: golangci/golangci-lint-action@v3
+        uses: golangci/golangci-lint-action@v6
         with:
           version: ${{ env.GOLANGCI_LINT_VERSION }}
           skip-cache: true # cache/restore is done by actions/setup-go@v3 step

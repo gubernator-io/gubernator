@@ -119,6 +119,14 @@ type Config struct {
 
 	// (Optional) The total size of the cache used to store rate limits. Defaults to 50,000
 	CacheSize int
+
+	// (Optional) EventChannel receives hit events
+	EventChannel chan<- HitEvent
+}
+
+type HitEvent struct {
+	Request  *RateLimitReq
+	Response *RateLimitResp
 }
 
 func (c *Config) SetDefaults() error {
@@ -248,6 +256,9 @@ type DaemonConfig struct {
 	// (Optional) TraceLevel sets the tracing level, this controls the number of spans included in a single trace.
 	//  Valid options are (tracing.InfoLevel, tracing.DebugLevel) Defaults to tracing.InfoLevel
 	TraceLevel tracing.Level
+
+	// (Optional) EventChannel receives hit events
+	EventChannel chan<- HitEvent
 }
 
 func (d *DaemonConfig) ClientTLS() *tls.Config {

@@ -148,10 +148,10 @@ func Restart(ctx context.Context) error {
 }
 
 // StartWith a local cluster with specific addresses
-func StartWith(localPeers []gubernator.PeerInfo) error {
+func StartWith(localPeers []gubernator.PeerInfo, opts ...option) error {
 	for _, peer := range localPeers {
 		ctx, cancel := context.WithTimeout(context.Background(), clock.Second*10)
-		d, err := gubernator.SpawnDaemon(ctx, gubernator.DaemonConfig{
+		cfg := gubernator.DaemonConfig{
 			Logger:            logrus.WithField("instance", peer.GRPCAddress),
 			InstanceID:        peer.GRPCAddress,
 			GRPCListenAddress: peer.GRPCAddress,
@@ -163,7 +163,11 @@ func StartWith(localPeers []gubernator.PeerInfo) error {
 				GlobalTimeout:  clock.Second * 5,
 				BatchTimeout:   clock.Second * 5,
 			},
-		})
+		}
+		for _, opt := range opts {
+			opt.Apply(&cfg)
+		}
+		d, err := gubernator.SpawnDaemon(ctx, cfg)
 		cancel()
 		if err != nil {
 			return errors.Wrapf(err, "while starting server for addr '%s'", peer.GRPCAddress)
@@ -195,4 +199,21 @@ func Stop() {
 	}
 	peers = nil
 	daemons = nil
+}
+
+type option interface {
+	Apply(cfg *gubernator.DaemonConfig)
+}
+
+type eventChannelOption struct {
+	eventChannel chan<- gubernator.HitEvent
+}
+
+func (o *eventChannelOption) Apply(cfg *gubernator.DaemonConfig) {
+	cfg.EventChannel = o.eventChannel
+}
+
+// WithEventChannel sets EventChannel to Gubernator config.
+func WithEventChannel(eventChannel chan<- gubernator.HitEvent) option {
+	return &eventChannelOption{eventChannel: eventChannel}
 }

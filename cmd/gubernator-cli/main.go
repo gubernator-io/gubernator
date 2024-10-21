@@ -170,7 +170,7 @@ func min(a, b int) int {
 
 func checkErr(err error) {
 	if err != nil {
-		log.Fatalf(err.Error())
+		log.Fatal(err.Error())
 	}
 }
 
