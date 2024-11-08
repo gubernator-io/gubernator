@@ -21,21 +21,22 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"log/slog"
 	"os"
 	"os/signal"
 	"runtime"
 	"strings"
 	"syscall"
 
-	"github.com/gubernator-io/gubernator/v3"
 	"github.com/mailgun/holster/v4/tracing"
-	"github.com/sirupsen/logrus"
 	"go.opentelemetry.io/otel/sdk/resource"
 	semconv "go.opentelemetry.io/otel/semconv/v1.24.0"
 	"k8s.io/klog/v2"
+
+	"github.com/gubernator-io/gubernator/v3"
 )
 
-var log = logrus.WithField("category", "gubernator")
+var log = slog.Default().With("category", "gubernator")
 var Version = "dev-build"
 var tracerCloser io.Closer
 
@@ -50,7 +51,11 @@ func main() {
 func Main(ctx context.Context) error {
 	var configFile string
 
-	logrus.Infof("Gubernator %s (%s/%s)", Version, runtime.GOARCH, runtime.GOOS)
+	log.LogAttrs(ctx, slog.LevelInfo, "Gubernator",
+		slog.String("version", Version),
+		slog.String("arch", runtime.GOARCH),
+		slog.String("os", runtime.GOOS),
+	)
 	flags := flag.NewFlagSet("gubernator", flag.ContinueOnError)
 	flags.SetOutput(io.Discard)
 	flags.StringVar(&configFile, "config", "", "environment config file")
@@ -73,7 +78,10 @@ func Main(ctx context.Context) error {
 		semconv.ServiceInstanceID(gubernator.GetInstanceID()),
 	))
 	if err != nil {
-		log.WithError(err).Fatal("during tracing.NewResource()")
+		log.LogAttrs(ctx, slog.LevelError, "during tracing.NewResource()",
+			gubernator.ErrAttr(err),
+		)
+		return err
 	}
 	defer func() {
 		if tracerCloser != nil {
@@ -88,7 +96,10 @@ func Main(ctx context.Context) error {
 		tracing.WithResource(res),
 	)
 	if err != nil {
-		log.WithError(err).Fatal("during tracing.InitTracing()")
+		log.LogAttrs(ctx, slog.LevelError, "during tracing.InitTracing()",
+			gubernator.ErrAttr(err),
+		)
+		return err
 	}
 
 	var configFileReader io.Reader
@@ -96,11 +107,14 @@ func Main(ctx context.Context) error {
 	if configFile != "" {
 		configFileReader, err = os.Open(configFile)
 		if err != nil {
-			log.WithError(err).Fatal("while opening config file")
+			log.LogAttrs(ctx, slog.LevelError, "while opening config file",
+				gubernator.ErrAttr(err),
+			)
+			return err
 		}
 	}
 
-	conf, err := gubernator.SetupDaemonConfig(logrus.StandardLogger(), configFileReader)
+	conf, err := gubernator.SetupDaemonConfig(slog.Default(), configFileReader)
 	if err != nil {
 		return fmt.Errorf("while collecting daemon config: %w", err)
 	}

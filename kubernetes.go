@@ -19,11 +19,11 @@ package gubernator
 import (
 	"context"
 	"fmt"
+	"log/slog"
 	"reflect"
 
 	"github.com/mailgun/holster/v4/setter"
 	"github.com/pkg/errors"
-	"github.com/sirupsen/logrus"
 	api_v1 "k8s.io/api/core/v1"
 	meta_v1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
@@ -93,7 +93,7 @@ func NewK8sPool(conf K8sPoolConfig) (*K8sPool, error) {
 		watchCtx:    ctx,
 		watchCancel: cancel,
 	}
-	setter.SetDefault(&pool.log, logrus.WithField("category", "gubernator"))
+	setter.SetDefault(&pool.log, slog.Default().With("category", "gubernator"))
 
 	return pool, pool.start()
 }
@@ -120,27 +120,39 @@ func (e *K8sPool) startGenericWatch(objType runtime.Object, listWatch *cache.Lis
 	e.informer.AddEventHandler(cache.ResourceEventHandlerFuncs{
 		AddFunc: func(obj interface{}) {
 			key, err := cache.MetaNamespaceKeyFunc(obj)
-			e.log.Debugf("Queue (Add) '%s' - %v", key, err)
+			e.log.LogAttrs(context.TODO(), slog.LevelDebug, "Queue (Add)",
+				slog.String("key", key),
+			)
 			if err != nil {
-				e.log.Errorf("while calling MetaNamespaceKeyFunc(): %s", err)
+				e.log.LogAttrs(context.TODO(), slog.LevelError, "while calling MetaNamespaceKeyFunc()",
+					ErrAttr(err),
+				)
 				return
 			}
 			updateFunc()
 		},
 		UpdateFunc: func(obj, new interface{}) {
 			key, err := cache.MetaNamespaceKeyFunc(obj)
-			e.log.Debugf("Queue (Update) '%s' - %v", key, err)
+			e.log.LogAttrs(context.TODO(), slog.LevelDebug, "Queue (Update)",
+				slog.String("key", key),
+			)
 			if err != nil {
-				e.log.Errorf("while calling MetaNamespaceKeyFunc(): %s", err)
+				e.log.LogAttrs(context.TODO(), slog.LevelError, "while calling MetaNamespaceKeyFunc()",
+					ErrAttr(err),
+				)
 				return
 			}
 			updateFunc()
 		},
 		DeleteFunc: func(obj interface{}) {
 			key, err := cache.MetaNamespaceKeyFunc(obj)
-			e.log.Debugf("Queue (Delete) '%s' - %v", key, err)
+			e.log.LogAttrs(context.TODO(), slog.LevelDebug, "Queue (Delete)",
+				slog.String("key", key),
+			)
 			if err != nil {
-				e.log.Errorf("while calling MetaNamespaceKeyFunc(): %s", err)
+				e.log.LogAttrs(context.TODO(), slog.LevelError, "while calling MetaNamespaceKeyFunc()",
+					ErrAttr(err),
+				)
 				return
 			}
 			updateFunc()
@@ -192,7 +204,9 @@ main:
 	for _, obj := range e.informer.GetStore().List() {
 		pod, ok := obj.(*api_v1.Pod)
 		if !ok {
-			e.log.Errorf("expected type v1.Endpoints got '%s' instead", reflect.TypeOf(obj).String())
+			e.log.LogAttrs(context.TODO(), slog.LevelError, "expected type v1.Endpoints",
+				slog.String("got_type", reflect.TypeOf(obj).String()),
+			)
 		}
 
 		peer := PeerInfo{HTTPAddress: fmt.Sprintf("%s:%s", pod.Status.PodIP, e.conf.PodPort)}
@@ -200,7 +214,9 @@ main:
 		// if containers are not ready or not running then skip this peer
 		for _, status := range pod.Status.ContainerStatuses {
 			if !status.Ready || status.State.Running == nil {
-				e.log.Debugf("Skipping peer because it's not ready or not running: %+v\n", peer)
+				e.log.LogAttrs(context.TODO(), slog.LevelDebug, "Skipping peer because it's not ready or not running",
+					slog.Any("peer", peer),
+				)
 				continue main
 			}
 		}
@@ -208,7 +224,9 @@ main:
 		if pod.Status.PodIP == e.conf.PodIP {
 			peer.IsOwner = true
 		}
-		e.log.Debugf("Peer: %+v\n", peer)
+		e.log.LogAttrs(context.TODO(), slog.LevelDebug, "Peer",
+			slog.Any("peer", peer),
+		)
 		peers = append(peers, peer)
 	}
 	e.conf.OnUpdate(peers)
@@ -220,7 +238,9 @@ func (e *K8sPool) updatePeersFromEndpoints() {
 	for _, obj := range e.informer.GetStore().List() {
 		endpoint, ok := obj.(*api_v1.Endpoints)
 		if !ok {
-			e.log.Errorf("expected type v1.Endpoints got '%s' instead", reflect.TypeOf(obj).String())
+			e.log.LogAttrs(context.TODO(), slog.LevelError, "expected type v1.Endpoints",
+				slog.String("got_type", reflect.TypeOf(obj).String()),
+			)
 		}
 
 		for _, s := range endpoint.Subsets {
@@ -234,7 +254,9 @@ func (e *K8sPool) updatePeersFromEndpoints() {
 					peer.IsOwner = true
 				}
 				peers = append(peers, peer)
-				e.log.Debugf("Peer: %+v\n", peer)
+				e.log.LogAttrs(context.TODO(), slog.LevelDebug, "Peer",
+					slog.Any("peer", peer),
+				)
 			}
 		}
 	}

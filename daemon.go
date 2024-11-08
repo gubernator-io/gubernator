@@ -22,6 +22,7 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"log/slog"
 	"net"
 	"net/http"
 	"strings"
@@ -34,7 +35,6 @@ import (
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/collectors"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
-	"github.com/sirupsen/logrus"
 	"golang.org/x/net/proxy"
 )
 
@@ -55,10 +55,10 @@ type Daemon struct {
 // SpawnDaemon starts a new gubernator daemon according to the provided DaemonConfig.
 // This function will block until the daemon responds to connections to HTTPListenAddress
 func SpawnDaemon(ctx context.Context, conf DaemonConfig) (*Daemon, error) {
-	setter.SetDefault(&conf.Logger, logrus.WithFields(logrus.Fields{
-		"service-id": conf.InstanceID,
-		"category":   "gubernator",
-	}))
+	setter.SetDefault(&conf.Logger, slog.Default().With(
+		"service-id", conf.InstanceID,
+		"category", "gubernator",
+	))
 
 	s := &Daemon{
 		logAdaptor: newLogAdaptor(conf.Logger),
@@ -227,10 +227,14 @@ func (d *Daemon) spawnHTTPHealthCheck(ctx context.Context, h *Handler, r *promet
 	}
 
 	d.wg.Go(func() {
-		d.log.Infof("HTTPS Health Check Listening on %s ...", d.conf.HTTPStatusListenAddress)
+		d.log.LogAttrs(ctx, slog.LevelInfo, "HTTPS Health Check Listening",
+			slog.String("address", d.conf.HTTPStatusListenAddress),
+		)
 		if err := srv.ServeTLS(d.HealthListener, "", ""); err != nil {
 			if !errors.Is(err, http.ErrServerClosed) {
-				d.log.WithError(err).Error("while starting TLS Status HTTP server")
+				d.log.LogAttrs(context.TODO(), slog.LevelError, "while starting TLS Status HTTP server",
+					ErrAttr(err),
+				)
 			}
 		}
 	})
@@ -258,10 +262,14 @@ func (d *Daemon) spawnHTTPS(ctx context.Context, mux http.Handler) error {
 	}
 
 	d.wg.Go(func() {
-		d.log.Infof("HTTPS Listening on %s ...", d.conf.HTTPListenAddress)
+		d.log.LogAttrs(context.TODO(), slog.LevelInfo, "HTTPS Listening",
+			slog.String("address", d.conf.HTTPListenAddress),
+		)
 		if err := srv.ServeTLS(d.Listener, "", ""); err != nil {
 			if !errors.Is(err, http.ErrServerClosed) {
-				d.log.WithError(err).Error("while starting TLS HTTP server")
+				d.log.LogAttrs(context.TODO(), slog.LevelError, "while starting TLS HTTP server",
+					ErrAttr(err),
+				)
 			}
 
 		}
@@ -288,10 +296,14 @@ func (d *Daemon) spawnHTTP(ctx context.Context, h http.Handler) error {
 	}
 
 	d.wg.Go(func() {
-		d.log.Infof("HTTP Listening on %s ...", d.conf.HTTPListenAddress)
+		d.log.LogAttrs(context.TODO(), slog.LevelInfo, "HTTP Listening",
+			slog.String("address", d.conf.HTTPListenAddress),
+		)
 		if err := srv.Serve(d.Listener); err != nil {
 			if !errors.Is(err, http.ErrServerClosed) {
-				d.log.WithError(err).Error("while starting HTTP server")
+				d.log.LogAttrs(context.TODO(), slog.LevelError, "while starting HTTP server",
+					ErrAttr(err),
+				)
 			}
 		}
 	})
@@ -311,7 +323,9 @@ func (d *Daemon) Close(ctx context.Context) error {
 	}
 
 	for _, srv := range d.httpServers {
-		d.log.Infof("Shutting down server %s ...", srv.Addr)
+		d.log.LogAttrs(context.TODO(), slog.LevelInfo, "Shutting down server",
+			slog.String("address", srv.Addr),
+		)
 		_ = srv.Shutdown(ctx)
 	}
 	d.httpServers = nil

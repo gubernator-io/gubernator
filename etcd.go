@@ -19,12 +19,12 @@ package gubernator
 import (
 	"context"
 	"encoding/json"
+	"log/slog"
 
 	"github.com/mailgun/holster/v4/clock"
 	"github.com/mailgun/holster/v4/errors"
 	"github.com/mailgun/holster/v4/setter"
 	"github.com/mailgun/holster/v4/syncutil"
-	"github.com/sirupsen/logrus"
 	etcd "go.etcd.io/etcd/client/v3"
 )
 
@@ -72,7 +72,7 @@ type EtcdPoolConfig struct {
 
 func NewEtcdPool(conf EtcdPoolConfig) (*EtcdPool, error) {
 	setter.SetDefault(&conf.KeyPrefix, defaultBaseKey)
-	setter.SetDefault(&conf.Logger, logrus.WithField("category", "gubernator"))
+	setter.SetDefault(&conf.Logger, slog.Default().With("category", "gubernator"))
 
 	if conf.Advertise.HTTPAddress == "" {
 		return nil, errors.New("Advertise.HTTPAddress is required")
@@ -130,7 +130,10 @@ func (e *EtcdPool) watchPeers() error {
 
 	select {
 	case <-ready:
-		e.log.Infof("watching for peer changes '%s' at revision %d", e.conf.KeyPrefix, revision)
+		e.log.LogAttrs(context.TODO(), slog.LevelInfo, "watching for peer changes",
+			slog.String("key_prefix", e.conf.KeyPrefix),
+			slog.Int64("revision", revision),
+		)
 	case <-clock.After(etcdTimeout):
 		return errors.New("timed out while waiting for watcher.Watch() to start")
 	}
@@ -164,7 +167,9 @@ func (e *EtcdPool) unMarshallValue(v []byte) PeerInfo {
 
 	// for backward compatible with older gubernator versions
 	if err := json.Unmarshal(v, &p); err != nil {
-		e.log.WithError(err).Errorf("while unmarshalling peer info from key value")
+		e.log.LogAttrs(context.TODO(), slog.LevelError, "while unmarshalling peer info from key value",
+			ErrAttr(err),
+		)
 		return PeerInfo{HTTPAddress: string(v)}
 	}
 	return p
@@ -181,12 +186,14 @@ func (e *EtcdPool) watch() error {
 	e.wg.Until(func(done chan struct{}) bool {
 		for response := range e.watchChan {
 			if response.Canceled {
-				e.log.Infof("graceful watch shutdown")
+				e.log.Info("graceful watch shutdown")
 				return false
 			}
 
 			if err := response.Err(); err != nil {
-				e.log.Errorf("watch error: %v", err)
+				e.log.LogAttrs(context.TODO(), slog.LevelError, "watch error",
+					ErrAttr(err),
+				)
 				goto restart
 			}
 			_ = e.collectPeers(&rev)
@@ -203,8 +210,9 @@ func (e *EtcdPool) watch() error {
 		}
 
 		if err := e.watchPeers(); err != nil {
-			e.log.WithError(err).
-				Error("while attempting to restart watch")
+			e.log.LogAttrs(context.TODO(), slog.LevelError, "while attempting to restart watch",
+				ErrAttr(err),
+			)
 			select {
 			case <-clock.After(backOffTimeout):
 				return true
@@ -220,7 +228,9 @@ func (e *EtcdPool) watch() error {
 
 func (e *EtcdPool) register(peer PeerInfo) error {
 	instanceKey := e.conf.KeyPrefix + peer.HTTPAddress
-	e.log.Infof("Registering peer '%#v' with etcd", peer)
+	e.log.LogAttrs(context.TODO(), slog.LevelInfo, "Registering peer with etcd",
+		slog.Any("peer", peer),
+	)
 
 	b, err := json.Marshal(peer)
 	if err != nil {
@@ -262,8 +272,9 @@ func (e *EtcdPool) register(peer PeerInfo) error {
 		// If we have lost our keep alive, register again
 		if keepAlive == nil {
 			if err = register(); err != nil {
-				e.log.WithError(err).
-					Error("while attempting to re-register peer")
+				e.log.LogAttrs(context.TODO(), slog.LevelError, "while attempting to re-register peer",
+					ErrAttr(err),
+				)
 				select {
 				case <-clock.After(backOffTimeout):
 					return true
@@ -297,13 +308,15 @@ func (e *EtcdPool) register(peer PeerInfo) error {
 		case <-done:
 			ctx, cancel := context.WithTimeout(context.Background(), etcdTimeout)
 			if _, err := e.conf.Client.Delete(ctx, instanceKey); err != nil {
-				e.log.WithError(err).
-					Warn("during etcd delete")
+				e.log.LogAttrs(context.TODO(), slog.LevelError, "during etcd delete",
+					ErrAttr(err),
+				)
 			}
 
 			if _, err := e.conf.Client.Revoke(ctx, lease.ID); err != nil {
-				e.log.WithError(err).
-					Warn("during lease revoke")
+				e.log.LogAttrs(context.TODO(), slog.LevelError, "during lease revoke",
+					ErrAttr(err),
+				)
 			}
 			cancel()
 			return false

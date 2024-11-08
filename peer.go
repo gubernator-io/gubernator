@@ -19,6 +19,7 @@ package gubernator
 import (
 	"context"
 	"fmt"
+	"log/slog"
 	"sync"
 	"sync/atomic"
 
@@ -29,7 +30,6 @@ import (
 	"github.com/mailgun/holster/v4/setter"
 	"github.com/mailgun/holster/v4/tracing"
 	"github.com/prometheus/client_golang/prometheus"
-	"github.com/sirupsen/logrus"
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/propagation"
 	"go.opentelemetry.io/otel/trace"
@@ -75,7 +75,7 @@ func NewPeer(conf PeerConfig) (*Peer, error) {
 	}
 
 	setter.SetDefault(&conf.PeerClient, NewPeerClient(WithNoTLS(conf.Info.HTTPAddress)))
-	setter.SetDefault(&conf.Log, logrus.WithField("category", "Peer"))
+	setter.SetDefault(&conf.Log, slog.Default().With("category", "Peer"))
 
 	p := &Peer{
 		lastErrs: collections.NewLRUCache(100),
@@ -304,10 +304,10 @@ func (p *Peer) run() {
 			queue = append(queue, r)
 			// Send the queue if we reached our batch limit
 			if len(queue) >= p.Conf.Behavior.BatchLimit {
-				p.Conf.Log.WithFields(logrus.Fields{
-					"queueLen":   len(queue),
-					"batchLimit": p.Conf.Behavior.BatchLimit,
-				}).Debug("run() reached batch limit")
+				p.Conf.Log.LogAttrs(context.TODO(), slog.LevelDebug, "run() reached batch limit",
+					slog.Int("queueLen", len(queue)),
+					slog.Int("batchLimit", p.Conf.Behavior.BatchLimit),
+				)
 				ref := queue
 				queue = nil
 				go p.sendBatch(ref)
@@ -370,11 +370,11 @@ func (p *Peer) sendBatch(queue []*request) {
 	// An error here indicates the entire request failed
 	if err != nil {
 		err = errors.Wrap(err, "Error in client.forward")
-		p.Conf.Log.WithFields(logrus.Fields{
-			"batchTimeout": p.Conf.Behavior.BatchTimeout.String(),
-			"queueLen":     len(queue),
-			"error":        err,
-		}).Error("Error in client.forward")
+		p.Conf.Log.LogAttrs(context.TODO(), slog.LevelError, "Error in client.forward",
+			ErrAttr(err),
+			slog.Int("queueLen", len(queue)),
+			slog.Duration("batchTimeout", p.Conf.Behavior.BatchTimeout),
+		)
 		_ = p.setLastErr(err)
 
 		for _, r := range queue {

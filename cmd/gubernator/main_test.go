@@ -15,12 +15,11 @@ import (
 	"testing"
 	"time"
 
-	cli "github.com/gubernator-io/gubernator/v3/cmd/gubernator"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"golang.org/x/net/proxy"
 
-	cli "github.com/gubernator-io/gubernator/v2/cmd/gubernator"
+	cli "github.com/gubernator-io/gubernator/v3/cmd/gubernator"
 )
 
 var cliRunning = flag.Bool("test_cli_running", false, "True if running as a child process; used by TestCLI")
@@ -50,7 +49,7 @@ func TestCLI(t *testing.T) {
 				"GUBER_HTTP_ADDRESS=localhost:8080",
 			},
 			args:     []string{},
-			contains: "HTTP Listening on",
+			contains: "HTTP Listening",
 		},
 	}
 	for _, tt := range tests {

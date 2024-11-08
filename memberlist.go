@@ -22,6 +22,7 @@ import (
 	"encoding/base64"
 	"encoding/gob"
 	"encoding/json"
+	"log/slog"
 	"net"
 	"strconv"
 	"strings"
@@ -31,7 +32,6 @@ import (
 	"github.com/mailgun/holster/v4/retry"
 	"github.com/mailgun/holster/v4/setter"
 	"github.com/pkg/errors"
-	"github.com/sirupsen/logrus"
 )
 
 type MemberListPool struct {
@@ -85,7 +85,7 @@ type MemberListEncryptionConfig struct {
 }
 
 func NewMemberListPool(ctx context.Context, conf MemberListPoolConfig) (*MemberListPool, error) {
-	setter.SetDefault(conf.Logger, logrus.WithField("category", "gubernator"))
+	setter.SetDefault(conf.Logger, slog.Default().With("category", "gubernator"))
 	m := &MemberListPool{
 		log:  conf.Logger,
 		conf: conf,
@@ -193,7 +193,9 @@ func (m *MemberListPool) joinPool(ctx context.Context, conf MemberListPoolConfig
 func (m *MemberListPool) Close() {
 	err := m.memberList.Leave(clock.Second)
 	if err != nil {
-		m.log.Warn(errors.Wrap(err, "while leaving member-list"))
+		m.log.LogAttrs(context.TODO(), slog.LevelWarn, "while leaving member-list",
+			ErrAttr(err),
+		)
 	}
 	_ = m.logAdaptor.Close()
 }
@@ -218,7 +220,9 @@ func (e *memberListEventHandler) addPeer(node *ml.Node) {
 
 	peer, err := unmarshallPeer(node.Meta, ip)
 	if err != nil {
-		e.log.WithError(err).Warnf("while adding to peers")
+		e.log.LogAttrs(context.TODO(), slog.LevelWarn, "while adding to peers",
+			ErrAttr(err),
+		)
 	} else {
 		e.peers[ip] = peer
 		e.callOnUpdate()
@@ -232,7 +236,9 @@ func (e *memberListEventHandler) NotifyJoin(node *ml.Node) {
 	if err != nil {
 		// This is called during member list initialization due to the fact that the local node
 		// has no metadata yet
-		e.log.WithError(err).Warn("while deserialize member-list peer")
+		e.log.LogAttrs(context.TODO(), slog.LevelWarn, "while deserialize member-list peer",
+			ErrAttr(err),
+		)
 		return
 	}
 	peer.IsOwner = false
@@ -254,7 +260,9 @@ func (e *memberListEventHandler) NotifyUpdate(node *ml.Node) {
 
 	peer, err := unmarshallPeer(node.Meta, ip)
 	if err != nil {
-		e.log.WithError(err).Warn("while unmarshalling peer info")
+		e.log.LogAttrs(context.TODO(), slog.LevelError, "while unmarshalling peer info",
+			ErrAttr(err),
+		)
 	}
 	peer.IsOwner = false
 	e.peers[ip] = peer

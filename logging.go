@@ -18,13 +18,13 @@ package gubernator
 
 import (
 	"encoding/json"
+	"log/slog"
 
 	"github.com/pkg/errors"
-	"github.com/sirupsen/logrus"
 )
 
 type LogLevelJSON struct {
-	Level logrus.Level
+	Level slog.Level
 }
 
 func (ll LogLevelJSON) MarshalJSON() ([]byte, error) {
@@ -41,9 +41,9 @@ func (ll *LogLevelJSON) UnmarshalJSON(b []byte) error {
 
 	switch value := v.(type) {
 	case float64:
-		ll.Level = logrus.Level(int32(value))
+		ll.Level = slog.Level(int32(value))
 	case string:
-		ll.Level, err = logrus.ParseLevel(value)
+		err = ll.Level.UnmarshalText([]byte(value))
 	default:
 		return errors.New("invalid log level")
 	}
