@@ -2150,38 +2150,42 @@ func TestEventChannel(t *testing.T) {
 	}()
 
 	// Spawn specialized Gubernator cluster with EventChannel enabled.
-	cluster.Stop()
+	cluster.Stop(context.Background())
 	defer func() {
 		err := startGubernator()
 		require.NoError(t, err)
 	}()
 	peers := []guber.PeerInfo{
-		{GRPCAddress: "127.0.0.1:10000", HTTPAddress: "127.0.0.1:10001", DataCenter: cluster.DataCenterNone},
-		{GRPCAddress: "127.0.0.1:10002", HTTPAddress: "127.0.0.1:10003", DataCenter: cluster.DataCenterNone},
-		{GRPCAddress: "127.0.0.1:10004", HTTPAddress: "127.0.0.1:10005", DataCenter: cluster.DataCenterNone},
+		{HTTPAddress: "127.0.0.1:10001", DataCenter: cluster.DataCenterNone},
+		{HTTPAddress: "127.0.0.1:10002", DataCenter: cluster.DataCenterNone},
+		{HTTPAddress: "127.0.0.1:10003", DataCenter: cluster.DataCenterNone},
 	}
 	err := cluster.StartWith(peers, cluster.WithEventChannel(eventChannel))
 	require.NoError(t, err)
-	defer cluster.Stop()
+	defer cluster.Stop(context.Background())
 
-	client, err := guber.DialV1Server(cluster.GetRandomPeer(cluster.DataCenterNone).GRPCAddress, nil)
-	require.NoError(t, err)
+	addr := cluster.GetRandomPeerInfo(cluster.DataCenterNone).HTTPAddress
+	client, err := guber.NewClient(guber.WithNoTLS(addr))
+	require.Nil(t, err)
+
 	sendHit := func(key string, behavior guber.Behavior) {
 		ctx, cancel := context.WithTimeout(context.Background(), clock.Second*10)
 		defer cancel()
-		_, err = client.GetRateLimits(ctx, &guber.GetRateLimitsReq{
-			Requests: []*guber.RateLimitReq{
+
+		var resp guber.CheckRateLimitsResponse
+		err = client.CheckRateLimits(ctx, &guber.CheckRateLimitsRequest{
+			Requests: []*guber.RateLimitRequest{
 				{
-					Name:      "test",
-					UniqueKey: key,
 					Algorithm: guber.Algorithm_TOKEN_BUCKET,
-					Behavior:  behavior,
 					Duration:  guber.Minute * 3,
-					Hits:      2,
+					Behavior:  behavior,
+					Name:      "test",
 					Limit:     1000,
+					UniqueKey: key,
+					Hits:      2,
 				},
 			},
-		})
+		}, &resp)
 		require.NoError(t, err)
 		select {
 		case <-sem:

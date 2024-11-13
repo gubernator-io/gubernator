@@ -107,8 +107,9 @@ func (d *Daemon) Start(ctx context.Context) error {
 			return NewPeerClient(WithPeerInfo(info))
 		},
 		CacheFactory: cacheFactory,
-		DataCenter:   d.conf.DataCenter,
+		EventChannel: d.conf.EventChannel,
 		InstanceID:   d.conf.InstanceID,
+		DataCenter:   d.conf.DataCenter,
 		CacheSize:    d.conf.CacheSize,
 		Behaviors:    d.conf.Behaviors,
 		Workers:      d.conf.Workers,

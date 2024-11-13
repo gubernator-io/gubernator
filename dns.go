@@ -157,12 +157,11 @@ func peer(ip string, self string, ipv6 bool) PeerInfo {
 	if ipv6 {
 		ip = "[" + ip + "]"
 	}
-	grpc := ip + ":1051"
+	addr := ip + ":1050"
 	return PeerInfo{
 		DataCenter:  "",
-		HTTPAddress: ip + ":1050",
-		GRPCAddress: grpc,
-		IsOwner:     grpc == self,
+		HTTPAddress: addr,
+		IsOwner:     addr == self,
 	}
 
 }

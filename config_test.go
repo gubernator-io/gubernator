@@ -27,7 +27,7 @@ func TestDefaultListenAddress(t *testing.T) {
 # a comment`
 	daemonConfig, err := SetupDaemonConfig(logrus.StandardLogger(), strings.NewReader(s))
 	require.NoError(t, err)
-	require.Equal(t, fmt.Sprintf("%s:80", LocalHost()), daemonConfig.HTTPListenAddress)
+	require.Equal(t, fmt.Sprintf("%s:1050", LocalHost()), daemonConfig.HTTPListenAddress)
 	require.NotEmpty(t, daemonConfig.InstanceID)
 }
 
