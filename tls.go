@@ -25,10 +25,14 @@ import (
 	"crypto/x509"
 	"crypto/x509/pkix"
 	"encoding/pem"
+	"fmt"
 	"math/big"
 	"net"
 	"os"
+	"os/signal"
 	"strings"
+	"sync"
+	"syscall"
 	"time"
 
 	"github.com/mailgun/holster/v4/setter"
@@ -252,8 +256,18 @@ func SetupTLS(conf *TLSConfig) error {
 		if err != nil {
 			return errors.Wrap(err, "while parsing server certificate and private key")
 		}
-		conf.ServerTLS.Certificates = []tls.Certificate{serverCert}
 		conf.ClientTLS.Certificates = []tls.Certificate{serverCert}
+
+		if conf.AutoTLS {
+			conf.ServerTLS.Certificates = []tls.Certificate{serverCert}
+		} else {
+			// Enable hot reload TLS cert and key file when AutoTLS is unused
+			kpr, err := NewKeypairReloader(conf.Logger, conf.CertFile, conf.KeyFile, conf.ClientTLS.Certificates)
+			if err != nil {
+				return fmt.Errorf("error creating tls reloader: %w", err)
+			}
+			conf.ServerTLS.GetCertificate = kpr.GetCertificateFunc()
+		}
 	}
 
 	// If user asked for client auth
@@ -288,6 +302,67 @@ func SetupTLS(conf *TLSConfig) error {
 	conf.ClientTLS.ServerName = conf.ClientAuthServerName
 	conf.ClientTLS.InsecureSkipVerify = conf.InsecureSkipVerify
 	return nil
+}
+
+type keypairReloader struct {
+	certMu   sync.RWMutex
+	cert     *tls.Certificate
+	certPath string
+	keyPath  string
+	logger   FieldLogger
+	// clientCerts is used to connect to peer gubernator instances.
+	// Since GetCertificate is only applicable to TLS server, client
+	// certificates are statically re-assigned along with server cert/key.
+	clientCerts []tls.Certificate
+}
+
+// NewKeypairReloader create a reloader that hot-reloads cert and key file
+func NewKeypairReloader(logger FieldLogger, certPath, keyPath string, clientCerts []tls.Certificate) (*keypairReloader, error) {
+	result := &keypairReloader{
+		certPath:    certPath,
+		keyPath:     keyPath,
+		logger:      logger,
+		clientCerts: clientCerts,
+	}
+	cert, err := tls.LoadX509KeyPair(certPath, keyPath)
+	if err != nil {
+		return nil, fmt.Errorf("error loading keypair: %w", err)
+	}
+	result.cert = &cert
+	go func() {
+		c := make(chan os.Signal, 10)
+		signal.Notify(c, syscall.SIGHUP)
+		for range c {
+			logger.Infof("Caught SIGHUP, reloading TLS certificate and key from %q and %q\n",
+				result.certPath, result.keyPath)
+			if err := result.maybeReload(); err != nil {
+				logger.Errorf("Keeping old TLS certificate because the new one could not be loaded: %v", err)
+			}
+		}
+	}()
+	return result, nil
+}
+
+// maybeReload reloads TLS cert and updates client certificates.
+// Client certificates are used to conenct to gubernator peers.
+func (kpr *keypairReloader) maybeReload() error {
+	newCert, err := tls.LoadX509KeyPair(kpr.certPath, kpr.keyPath)
+	if err != nil {
+		return err
+	}
+	kpr.certMu.Lock()
+	defer kpr.certMu.Unlock()
+	kpr.cert = &newCert
+	kpr.clientCerts = []tls.Certificate{newCert}
+	return nil
+}
+
+func (kpr *keypairReloader) GetCertificateFunc() func(*tls.ClientHelloInfo) (*tls.Certificate, error) {
+	return func(clientHello *tls.ClientHelloInfo) (*tls.Certificate, error) {
+		kpr.certMu.RLock()
+		defer kpr.certMu.RUnlock()
+		return kpr.cert, nil
+	}
 }
 
 func selfCert(conf *TLSConfig) error {
