@@ -55,6 +55,7 @@ type PeerClient struct {
 	queue       chan *request
 	queueClosed atomic.Bool
 	lastErrs    *collections.LRUCache
+	isShutdown  atomic.Bool
 
 	wgMutex sync.RWMutex
 	wg      sync.WaitGroup // Monitor the number of in-flight requests. GUARDED_BY(wgMutex)
@@ -406,6 +407,10 @@ func (c *PeerClient) sendBatch(ctx context.Context, queue []*request) {
 // Shutdown waits until all outstanding requests have finished or the context is cancelled.
 // Then it closes the grpc connection.
 func (c *PeerClient) Shutdown(ctx context.Context) error {
+	if !c.isShutdown.CompareAndSwap(false, true) {
+		return nil
+	}
+
 	// ensure we don't leak goroutines, even if the Shutdown times out
 	defer c.conn.Close()
 

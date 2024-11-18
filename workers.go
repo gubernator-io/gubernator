@@ -58,6 +58,7 @@ type WorkerPool struct {
 	hashRingStep    uint64
 	conf            *Config
 	done            chan struct{}
+	isClosed        atomic.Bool
 }
 
 type Worker struct {
@@ -155,6 +156,9 @@ func (ph *hasher) ComputeHash63(input string) uint64 {
 }
 
 func (p *WorkerPool) Close() error {
+	if !p.isClosed.CompareAndSwap(false, true) {
+		return nil
+	}
 	close(p.done)
 	return nil
 }
