@@ -23,12 +23,11 @@ import (
 	"sync"
 	"sync/atomic"
 
+	"github.com/gubernator-io/gubernator/v3/tracing"
+	"github.com/kapetan-io/tackle/clock"
+	"github.com/kapetan-io/tackle/set"
 	"github.com/mailgun/errors"
-	"github.com/mailgun/holster/v4/clock"
 	"github.com/mailgun/holster/v4/collections"
-	"github.com/mailgun/holster/v4/ctxutil"
-	"github.com/mailgun/holster/v4/setter"
-	"github.com/mailgun/holster/v4/tracing"
 	"github.com/prometheus/client_golang/prometheus"
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/propagation"
@@ -74,8 +73,8 @@ func NewPeer(conf PeerConfig) (*Peer, error) {
 		return nil, errors.New("Peer.Info.HTTPAddress is empty; must provide an address")
 	}
 
-	setter.SetDefault(&conf.PeerClient, NewPeerClient(WithNoTLS(conf.Info.HTTPAddress)))
-	setter.SetDefault(&conf.Log, slog.Default().With("category", "Peer"))
+	set.Default(&conf.PeerClient, NewPeerClient(WithNoTLS(conf.Info.HTTPAddress)))
+	set.Default(&conf.Log, slog.Default().With("category", "Peer"))
 
 	p := &Peer{
 		lastErrs: collections.NewLRUCache(100),
@@ -100,7 +99,7 @@ var (
 // Forward forwards a rate limit request to a peer.
 // If the rate limit has `behavior == BATCHING` configured, this method will attempt to batch the rate limits
 func (p *Peer) Forward(ctx context.Context, r *RateLimitRequest) (resp *RateLimitResponse, err error) {
-	ctx = tracing.StartNamedScope(ctx, "Peer.Forward")
+	ctx = tracing.StartScope(ctx, "Peer.Forward")
 	defer func() { tracing.EndScope(ctx, err) }()
 	span := trace.SpanFromContext(ctx)
 	span.SetAttributes(
@@ -165,7 +164,7 @@ func (p *Peer) Forward(ctx context.Context, r *RateLimitRequest) (resp *RateLimi
 
 // ForwardBatch requests a list of rate limit statuses from a peer
 func (p *Peer) ForwardBatch(ctx context.Context, req *ForwardRequest, resp *ForwardResponse) (err error) {
-	ctx = tracing.StartNamedScopeDebug(ctx, "Peer.forward")
+	ctx = tracing.StartScope(ctx, "Peer.forward")
 	defer func() { tracing.EndScope(ctx, err) }()
 
 	if err = p.client.Forward(ctx, req, resp); err != nil {
@@ -182,7 +181,7 @@ func (p *Peer) ForwardBatch(ctx context.Context, req *ForwardRequest, resp *Forw
 
 // Update sends rate limit status updates to a peer
 func (p *Peer) Update(ctx context.Context, req *UpdateRequest) (err error) {
-	ctx = tracing.StartNamedScope(ctx, "Peer.Update")
+	ctx = tracing.StartScope(ctx, "Peer.Update")
 	defer func() { tracing.EndScope(ctx, err) }()
 
 	err = p.client.Update(ctx, req)
@@ -235,7 +234,7 @@ func (p *Peer) Close(ctx context.Context) error {
 }
 
 func (p *Peer) forwardBatch(ctx context.Context, r *RateLimitRequest) (resp *RateLimitResponse, err error) {
-	ctx = tracing.StartNamedScopeDebug(ctx, "Peer.forwardBatch")
+	ctx = tracing.StartScope(ctx, "Peer.forwardBatch")
 	defer func() { tracing.EndScope(ctx, err) }()
 
 	funcTimer := prometheus.NewTimer(metricFuncTimeDuration.WithLabelValues("Peer.forwardBatch"))
@@ -246,7 +245,7 @@ func (p *Peer) forwardBatch(ctx context.Context, r *RateLimitRequest) (resp *Rat
 	}
 
 	// Wait for a response or context cancel
-	ctx2 := tracing.StartNamedScopeDebug(ctx, "Wait for response")
+	ctx2 := tracing.StartScope(ctx, "Wait for response")
 	defer tracing.EndScope(ctx2, nil)
 
 	req := request{
@@ -335,7 +334,7 @@ func (p *Peer) run() {
 // sendBatch sends the queue provided and returns the responses to
 // waiting go routines
 func (p *Peer) sendBatch(queue []*request) {
-	ctx := tracing.StartNamedScopeDebug(context.Background(), "Peer.sendBatch")
+	ctx := tracing.StartScope(context.Background(), "Peer.sendBatch")
 	defer tracing.EndScope(ctx, nil)
 
 	batchSendTimer := prometheus.NewTimer(metricBatchSendDuration.WithLabelValues(p.Conf.Info.HTTPAddress))
@@ -347,7 +346,7 @@ func (p *Peer) sendBatch(queue []*request) {
 	for _, r := range queue {
 		// NOTE: This trace has the same name because it's in a separate trace than the one above.
 		// We link the two traces, so we can relate our rate limit trace back to the above trace.
-		r.ctx = tracing.StartNamedScopeDebug(r.ctx, "Peer.sendBatch",
+		r.ctx = tracing.StartScope(r.ctx, "Peer.sendBatch",
 			trace.WithLinks(trace.LinkFromContext(ctx)))
 		// If no metadata is provided
 		if r.request.Metadata == nil {
@@ -362,7 +361,7 @@ func (p *Peer) sendBatch(queue []*request) {
 
 	}
 
-	ctx, cancel := ctxutil.WithTimeout(ctx, p.Conf.Behavior.BatchTimeout)
+	ctx, cancel := context.WithTimeout(ctx, p.Conf.Behavior.BatchTimeout)
 	var resp ForwardResponse
 	err := p.client.Forward(ctx, &req, &resp)
 	cancel()

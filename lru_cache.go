@@ -23,7 +23,7 @@ import (
 	"sync"
 	"sync/atomic"
 
-	"github.com/mailgun/holster/v4/setter"
+	"github.com/kapetan-io/tackle/set"
 )
 
 // LRUCache is a mutex protected LRU cache that supports expiration and is thread-safe
@@ -40,7 +40,7 @@ var _ Cache = &LRUCache{}
 
 // NewLRUCache creates a new Cache with a maximum size.
 func NewLRUCache(maxSize int) *LRUCache {
-	setter.SetDefault(&maxSize, 50_000)
+	set.Default(&maxSize, 50_000)
 
 	return &LRUCache{
 		cache:     make(map[string]*list.Element),

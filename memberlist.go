@@ -28,9 +28,9 @@ import (
 	"strings"
 
 	ml "github.com/hashicorp/memberlist"
-	"github.com/mailgun/holster/v4/clock"
+	"github.com/kapetan-io/tackle/clock"
+	"github.com/kapetan-io/tackle/set"
 	"github.com/mailgun/holster/v4/retry"
-	"github.com/mailgun/holster/v4/setter"
 	"github.com/pkg/errors"
 )
 
@@ -85,7 +85,7 @@ type MemberListEncryptionConfig struct {
 }
 
 func NewMemberListPool(ctx context.Context, conf MemberListPoolConfig) (*MemberListPool, error) {
-	setter.SetDefault(conf.Logger, slog.Default().With("category", "gubernator"))
+	set.Default(conf.Logger, slog.Default().With("category", "gubernator"))
 	m := &MemberListPool{
 		log:  conf.Logger,
 		conf: conf,

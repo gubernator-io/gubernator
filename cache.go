@@ -21,7 +21,7 @@ import (
 
 	"github.com/prometheus/client_golang/prometheus"
 
-	"github.com/mailgun/holster/v4/clock"
+	"github.com/kapetan-io/tackle/clock"
 )
 
 type Cache interface {

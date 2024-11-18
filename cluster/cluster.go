@@ -22,10 +22,9 @@ import (
 	"log/slog"
 	"math/rand"
 
-	"github.com/mailgun/holster/v4/clock"
-	"github.com/mailgun/holster/v4/errors"
-
 	"github.com/gubernator-io/gubernator/v3"
+	"github.com/kapetan-io/errors"
+	"github.com/kapetan-io/tackle/clock"
 )
 
 const (

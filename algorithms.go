@@ -20,7 +20,7 @@ import (
 	"context"
 	"errors"
 
-	"github.com/mailgun/holster/v4/clock"
+	"github.com/kapetan-io/tackle/clock"
 	"github.com/prometheus/client_golang/prometheus"
 	"go.opentelemetry.io/otel/trace"
 )

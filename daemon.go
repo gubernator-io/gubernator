@@ -28,10 +28,9 @@ import (
 	"strings"
 	"time"
 
-	"github.com/mailgun/holster/v4/errors"
-	"github.com/mailgun/holster/v4/etcdutil"
-	"github.com/mailgun/holster/v4/setter"
-	"github.com/mailgun/holster/v4/syncutil"
+	"github.com/kapetan-io/errors"
+	"github.com/kapetan-io/tackle/set"
+	"github.com/kapetan-io/tackle/wait"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/collectors"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
@@ -39,7 +38,7 @@ import (
 )
 
 type Daemon struct {
-	wg             syncutil.WaitGroup
+	wg             wait.Group
 	httpServers    []*http.Server
 	pool           PoolInterface
 	conf           DaemonConfig
@@ -55,7 +54,7 @@ type Daemon struct {
 // SpawnDaemon starts a new gubernator daemon according to the provided DaemonConfig.
 // This function will block until the daemon responds to connections to HTTPListenAddress
 func SpawnDaemon(ctx context.Context, conf DaemonConfig) (*Daemon, error) {
-	setter.SetDefault(&conf.Logger, slog.Default().With(
+	set.Default(&conf.Logger, slog.Default().With(
 		"service-id", conf.InstanceID,
 		"category", "gubernator",
 	))
@@ -76,7 +75,7 @@ func (d *Daemon) Start(ctx context.Context) error {
 	registry := prometheus.NewRegistry()
 	cacheCollector := NewCacheCollector()
 	if err := registry.Register(cacheCollector); err != nil {
-		return errors.Wrap(err, "during call to promRegister.Register()")
+		return fmt.Errorf("during call to promRegister.Register(): %w", err)
 	}
 
 	cacheFactory := func(maxSize int) (Cache, error) {
@@ -119,7 +118,7 @@ func (d *Daemon) Start(ctx context.Context) error {
 		Logger:       d.log,
 	})
 	if err != nil {
-		return errors.Wrap(err, "while creating new gubernator service")
+		return errors.Errorf("while creating new gubernator service: %w", err)
 	}
 
 	// Service implements prometheus.Collector interface
@@ -131,25 +130,25 @@ func (d *Daemon) Start(ctx context.Context) error {
 		d.conf.K8PoolConf.OnUpdate = d.Service.SetPeers
 		d.pool, err = NewK8sPool(d.conf.K8PoolConf)
 		if err != nil {
-			return errors.Wrap(err, "while querying kubernetes API")
+			return errors.Errorf("while querying kubernetes API: %w", err)
 		}
 	case "etcd":
 		d.conf.EtcdPoolConf.OnUpdate = d.Service.SetPeers
 		// Register ourselves with other peers via ETCD
-		d.conf.EtcdPoolConf.Client, err = etcdutil.NewClient(d.conf.EtcdPoolConf.EtcdConfig)
+		d.conf.EtcdPoolConf.Client, err = newEtcdClient(d.conf.EtcdPoolConf.EtcdConfig)
 		if err != nil {
-			return errors.Wrap(err, "while connecting to etcd")
+			return errors.Errorf("while connecting to etcd: %w", err)
 		}
 
 		d.pool, err = NewEtcdPool(d.conf.EtcdPoolConf)
 		if err != nil {
-			return errors.Wrap(err, "while creating etcd pool")
+			return errors.Errorf("while creating etcd pool: %w", err)
 		}
 	case "dns":
 		d.conf.DNSPoolConf.OnUpdate = d.Service.SetPeers
 		d.pool, err = NewDNSPool(d.conf.DNSPoolConf)
 		if err != nil {
-			return errors.Wrap(err, "while creating the DNS pool")
+			return errors.Errorf("while creating the DNS pool: %w", err)
 		}
 	case "member-list":
 		d.conf.MemberListPoolConf.OnUpdate = d.Service.SetPeers
@@ -158,7 +157,7 @@ func (d *Daemon) Start(ctx context.Context) error {
 		// Register peer on the member list
 		d.pool, err = NewMemberListPool(ctx, d.conf.MemberListPoolConf)
 		if err != nil {
-			return errors.Wrap(err, "while creating member list pool")
+			return errors.Errorf("while creating member list pool: %w", err)
 		}
 	}
 
@@ -223,7 +222,7 @@ func (d *Daemon) spawnHTTPHealthCheck(ctx context.Context, h *Handler, r *promet
 	var err error
 	d.HealthListener, err = net.Listen("tcp", d.conf.HTTPStatusListenAddress)
 	if err != nil {
-		return errors.Wrap(err, "while starting HTTP listener for health metric")
+		return errors.Errorf("while starting HTTP listener for health metric: %w", err)
 	}
 
 	d.wg.Go(func() {
@@ -258,7 +257,7 @@ func (d *Daemon) spawnHTTPS(ctx context.Context, mux http.Handler) error {
 	var err error
 	d.Listener, err = net.Listen("tcp", d.conf.HTTPListenAddress)
 	if err != nil {
-		return errors.Wrap(err, "while starting HTTPS listener")
+		return errors.Errorf("while starting HTTPS listener: %w", err)
 	}
 
 	d.wg.Go(func() {
@@ -292,7 +291,7 @@ func (d *Daemon) spawnHTTP(ctx context.Context, h http.Handler) error {
 	var err error
 	d.Listener, err = net.Listen("tcp", d.conf.HTTPListenAddress)
 	if err != nil {
-		return errors.Wrap(err, "while starting HTTP listener")
+		return errors.Errorf("while starting HTTP listener: %w", err)
 	}
 
 	d.wg.Go(func() {
@@ -339,7 +338,7 @@ func (d *Daemon) Close(ctx context.Context) error {
 	d.HealthListener = nil
 	d.Listener = nil
 
-	d.wg.Wait()
+	_ = d.wg.Wait()
 	return nil
 }
 

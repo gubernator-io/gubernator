@@ -24,7 +24,8 @@ import (
 	"os"
 	"time"
 
-	"github.com/mailgun/holster/v4/setter"
+	"github.com/kapetan-io/tackle/set"
+
 	"github.com/miekg/dns"
 	"github.com/pkg/errors"
 )
@@ -135,7 +136,7 @@ type DNSPool struct {
 }
 
 func NewDNSPool(conf DNSPoolConfig) (*DNSPool, error) {
-	setter.SetDefault(&conf.Logger, slog.New(slog.NewTextHandler(os.Stderr, nil)).With("category", "gubernator"))
+	set.Default(&conf.Logger, slog.New(slog.NewTextHandler(os.Stderr, nil)).With("category", "gubernator"))
 
 	if conf.OwnAddress == "" {
 		return nil, errors.New("AdvertiseAddress is required")

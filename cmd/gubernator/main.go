@@ -28,12 +28,13 @@ import (
 	"strings"
 	"syscall"
 
-	"github.com/mailgun/holster/v4/tracing"
+	sdktrace "go.opentelemetry.io/otel/sdk/trace"
+
+	"github.com/gubernator-io/gubernator/v3"
+	"github.com/gubernator-io/gubernator/v3/tracing"
 	"go.opentelemetry.io/otel/sdk/resource"
 	semconv "go.opentelemetry.io/otel/semconv/v1.24.0"
 	"k8s.io/klog/v2"
-
-	"github.com/gubernator-io/gubernator/v3"
 )
 
 var log = slog.Default().With("category", "gubernator")
@@ -90,11 +91,9 @@ func Main(ctx context.Context) error {
 	}()
 
 	// Initialize tracing.
-	err = tracing.InitTracing(ctx,
+	shutdown, err := tracing.InitTracing(ctx, log,
 		"github.com/gubernator-io/gubernator/v3",
-		tracing.WithLevel(gubernator.GetTracingLevel()),
-		tracing.WithResource(res),
-	)
+		sdktrace.WithResource(res))
 	if err != nil {
 		log.LogAttrs(ctx, slog.LevelError, "during tracing.InitTracing()",
 			gubernator.ErrAttr(err),
@@ -132,7 +131,7 @@ func Main(ctx context.Context) error {
 	case <-c:
 		log.Info("caught signal; shutting down")
 		_ = daemon.Close(context.Background())
-		_ = tracing.CloseTracing(context.Background())
+		_ = shutdown(ctx)
 		return nil
 	case <-ctx.Done():
 		return ctx.Err()

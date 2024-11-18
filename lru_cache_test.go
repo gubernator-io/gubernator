@@ -25,7 +25,7 @@ import (
 	"time"
 
 	"github.com/gubernator-io/gubernator/v3"
-	"github.com/mailgun/holster/v4/clock"
+	"github.com/kapetan-io/tackle/clock"
 	"github.com/prometheus/client_golang/prometheus"
 	dto "github.com/prometheus/client_model/go"
 	"github.com/stretchr/testify/assert"
@@ -308,7 +308,7 @@ func TestLRUMutexCache(t *testing.T) {
 	})
 
 	t.Run("Check gubernator_unexpired_evictions_count metric is not incremented when expired item is evicted", func(t *testing.T) {
-		defer clock.Freeze(clock.Now()).Unfreeze()
+		defer clock.Freeze(clock.Now()).UnFreeze()
 
 		promRegister := prometheus.NewRegistry()
 
@@ -355,7 +355,7 @@ func TestLRUMutexCache(t *testing.T) {
 	})
 
 	t.Run("Check gubernator_unexpired_evictions_count metric is incremented when unexpired item is evicted", func(t *testing.T) {
-		defer clock.Freeze(clock.Now()).Unfreeze()
+		defer clock.Freeze(clock.Now()).UnFreeze()
 
 		promRegister := prometheus.NewRegistry()
 

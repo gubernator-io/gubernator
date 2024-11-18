@@ -20,8 +20,8 @@ import (
 	"errors"
 	"time"
 
-	"github.com/mailgun/holster/v4/clock"
-	"github.com/mailgun/holster/v4/syncutil"
+	"github.com/kapetan-io/tackle/clock"
+	"github.com/kapetan-io/tackle/wait"
 )
 
 // Interval is a one-shot ticker.  Call `Next()` to trigger the start of an
@@ -29,7 +29,7 @@ import (
 type Interval struct {
 	C  chan struct{}
 	in chan struct{}
-	wg syncutil.WaitGroup
+	wg wait.Group
 }
 
 // NewInterval creates a new ticker like object, however

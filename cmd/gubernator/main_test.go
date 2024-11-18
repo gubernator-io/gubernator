@@ -46,7 +46,7 @@ func TestCLI(t *testing.T) {
 		{
 			name: "Should start with no config provided",
 			env: []string{
-				"GUBER_HTTP_ADDRESS=localhost:8080",
+				"GUBER_HTTP_ADDRESS=localhost:1050",
 			},
 			args:     []string{},
 			contains: "HTTP Listening",

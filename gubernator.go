@@ -25,11 +25,12 @@ import (
 	"sync"
 	"time"
 
+	"github.com/kapetan-io/tackle/wait"
+
 	"github.com/duh-rpc/duh-go"
 	v1 "github.com/duh-rpc/duh-go/proto/v1"
-	"github.com/mailgun/holster/v4/clock"
-	"github.com/mailgun/holster/v4/syncutil"
-	"github.com/mailgun/holster/v4/tracing"
+	"github.com/gubernator-io/gubernator/v3/tracing"
+	"github.com/kapetan-io/tackle/clock"
 	"github.com/prometheus/client_golang/prometheus"
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/propagation"
@@ -304,7 +305,7 @@ type AsyncReq struct {
 }
 
 func (s *Service) asyncRequest(ctx context.Context, req *AsyncReq) {
-	ctx = tracing.StartNamedScope(ctx, "Service.asyncRequest")
+	ctx = tracing.StartScope(ctx, "Service.asyncRequest")
 	defer tracing.EndScope(ctx, nil)
 	var attempts int
 	var err error
@@ -392,7 +393,7 @@ func (s *Service) asyncRequest(ctx context.Context, req *AsyncReq) {
 // checkGlobalRateLimit handles rate limits that are marked as `Behavior = GLOBAL`. Rate limit responses
 // are returned from the local cache and the hits are queued to be sent to the owning peer.
 func (s *Service) checkGlobalRateLimit(ctx context.Context, req *RateLimitRequest) (resp *RateLimitResponse, err error) {
-	ctx = tracing.StartNamedScope(ctx, "Service.checkGlobalRateLimit", trace.WithAttributes(
+	ctx = tracing.StartScope(ctx, "Service.checkGlobalRateLimit", trace.WithAttributes(
 		attribute.String("ratelimit.key", req.UniqueKey),
 		attribute.String("ratelimit.name", req.Name),
 	))
@@ -422,7 +423,7 @@ func (s *Service) checkGlobalRateLimit(ctx context.Context, req *RateLimitReques
 // Update updates the local cache with a list of rate limit state from a peer
 // This method should only be called by a peer.
 func (s *Service) Update(ctx context.Context, r *UpdateRequest, _ *v1.Reply) (err error) {
-	ctx = tracing.StartNamedScopeDebug(ctx, "Service.Update")
+	ctx = tracing.StartScope(ctx, "Service.Update")
 	defer func() { tracing.EndScope(ctx, err) }()
 
 	now := MillisecondNow()
@@ -471,9 +472,6 @@ func (s *Service) Update(ctx context.Context, r *UpdateRequest, _ *v1.Reply) (er
 
 // Forward is called by other peers when forwarding rate limits to this peer
 func (s *Service) Forward(ctx context.Context, req *ForwardRequest, resp *ForwardResponse) (err error) {
-	ctx = tracing.StartNamedScopeDebug(ctx, "Service.Forward")
-	defer func() { tracing.EndScope(ctx, err) }()
-
 	if len(req.Requests) > maxBatchSize {
 		metricCheckErrorCounter.WithLabelValues("Request too large").Add(1)
 		return duh.NewServiceError(duh.CodeBadRequest,
@@ -481,10 +479,6 @@ func (s *Service) Forward(ctx context.Context, req *ForwardRequest, resp *Forwar
 	}
 
 	// Invoke each rate limit request.
-	type reqIn struct {
-		idx int
-		req *RateLimitRequest
-	}
 	type respOut struct {
 		idx int
 		rl  *RateLimitResponse
@@ -506,36 +500,35 @@ func (s *Service) Forward(ctx context.Context, req *ForwardRequest, resp *Forwar
 	}()
 
 	// Fan out requests.
-	fan := syncutil.NewFanOut(s.conf.Workers)
+	fan := wait.NewFanOut(s.conf.Workers)
 	for idx, req := range req.Requests {
-		fan.Run(func(in interface{}) error {
-			rin := in.(reqIn)
+		fan.Run(func() error {
 			// Extract the propagated context from the metadata in the request
-			ctx := s.propagator.Extract(ctx, &MetadataCarrier{Map: rin.req.Metadata})
+			ctx := s.propagator.Extract(ctx, &MetadataCarrier{Map: req.Metadata})
 
 			// Forwarded global requests must have DRAIN_OVER_LIMIT set so token and leaky algorithms
 			// drain the remaining in the event a peer asks for more than is remaining.
 			// This is needed because with GLOBAL behavior peers will accumulate hits, which could
 			// result in requesting more hits than is remaining.
-			if HasBehavior(rin.req.Behavior, Behavior_GLOBAL) {
-				SetBehavior(&rin.req.Behavior, Behavior_DRAIN_OVER_LIMIT, true)
+			if HasBehavior(req.Behavior, Behavior_GLOBAL) {
+				SetBehavior(&req.Behavior, Behavior_DRAIN_OVER_LIMIT, true)
 			}
 
 			// Assign default to CreatedAt for backwards compatibility.
-			if rin.req.CreatedAt == nil || *rin.req.CreatedAt == 0 {
+			if req.CreatedAt == nil || *req.CreatedAt == 0 {
 				createdAt := epochMillis(clock.Now())
-				rin.req.CreatedAt = &createdAt
+				req.CreatedAt = &createdAt
 			}
 
-			rl, err := s.checkLocalRateLimit(ctx, rin.req, reqState)
+			rl, err := s.checkLocalRateLimit(ctx, req, reqState)
 			if err != nil {
 				rl = &RateLimitResponse{Error: fmt.Errorf("error in checkLocalRateLimit: %w", err).Error()}
 				// metricCheckErrorCounter is updated within checkLocalRateLimit(), not in Forward().
 			}
 
-			respChan <- respOut{rin.idx, rl}
+			respChan <- respOut{idx, rl}
 			return nil
-		}, reqIn{idx, req})
+		})
 	}
 
 	// Wait for all requests to be handled, then clean up.
@@ -584,7 +577,7 @@ func (s *Service) HealthCheck(ctx context.Context, _ *HealthCheckRequest, resp *
 }
 
 func (s *Service) checkLocalRateLimit(ctx context.Context, r *RateLimitRequest, reqState RateLimitContext) (_ *RateLimitResponse, err error) {
-	ctx = tracing.StartNamedScope(ctx, "Service.checkLocalRateLimit", trace.WithAttributes(
+	ctx = tracing.StartScope(ctx, "Service.checkLocalRateLimit", trace.WithAttributes(
 		attribute.String("ratelimit.key", r.UniqueKey),
 		attribute.String("ratelimit.name", r.Name),
 		attribute.Int64("ratelimit.limit", r.Limit),
@@ -703,21 +696,20 @@ func (s *Service) SetPeers(peerInfo []PeerInfo) {
 		}
 	}
 
-	var wg syncutil.WaitGroup
+	var wg wait.Group
 	for _, p := range shutdownPeers {
-		wg.Run(func(obj interface{}) error {
-			pc := obj.(*Peer)
-			err := pc.Close(ctx)
+		wg.Run(func() error {
+			err := p.Close(ctx)
 			if err != nil {
 				s.log.LogAttrs(context.TODO(), slog.LevelError, "while shutting down peer",
 					ErrAttr(err),
-					slog.Any("peer", pc),
+					slog.Any("peer", p),
 				)
 			}
 			return nil
-		}, p)
+		})
 	}
-	wg.Wait()
+	_ = wg.Wait()
 
 	if len(shutdownPeers) > 0 {
 		var peers []string

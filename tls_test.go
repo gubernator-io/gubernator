@@ -27,7 +27,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/mailgun/holster/v4/clock"
+	"github.com/kapetan-io/tackle/clock"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 

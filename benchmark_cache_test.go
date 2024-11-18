@@ -7,7 +7,7 @@ import (
 	"time"
 
 	"github.com/gubernator-io/gubernator/v3"
-	"github.com/mailgun/holster/v4/clock"
+	"github.com/kapetan-io/tackle/clock"
 	"github.com/stretchr/testify/require"
 )
 

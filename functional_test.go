@@ -32,10 +32,9 @@ import (
 
 	guber "github.com/gubernator-io/gubernator/v3"
 	"github.com/gubernator-io/gubernator/v3/cluster"
+	"github.com/kapetan-io/tackle/clock"
+	"github.com/kapetan-io/tackle/wait"
 	"github.com/mailgun/errors"
-	"github.com/mailgun/holster/v4/clock"
-	"github.com/mailgun/holster/v4/syncutil"
-	"github.com/mailgun/holster/v4/testutil"
 	"github.com/prometheus/common/expfmt"
 	"github.com/prometheus/common/model"
 	"github.com/stretchr/testify/assert"
@@ -158,7 +157,7 @@ func TestMultipleAsync(t *testing.T) {
 }
 
 func TestTokenBucket(t *testing.T) {
-	defer clock.Freeze(clock.Now()).Unfreeze()
+	defer clock.Freeze(clock.Now()).UnFreeze()
 
 	addr := cluster.GetRandomPeerInfo(cluster.DataCenterNone).HTTPAddress
 	client, errs := guber.NewClient(guber.WithNoTLS(addr))
@@ -220,7 +219,7 @@ func TestTokenBucket(t *testing.T) {
 }
 
 func TestTokenBucketGregorian(t *testing.T) {
-	defer clock.Freeze(clock.Now()).Unfreeze()
+	defer clock.Freeze(clock.Now()).UnFreeze()
 
 	client, errs := guber.NewClient(guber.WithNoTLS(cluster.GetRandomPeerInfo(cluster.DataCenterNone).HTTPAddress))
 	require.Nil(t, errs)
@@ -296,7 +295,7 @@ func TestTokenBucketGregorian(t *testing.T) {
 }
 
 func TestTokenBucketNegativeHits(t *testing.T) {
-	defer clock.Freeze(clock.Now()).Unfreeze()
+	defer clock.Freeze(clock.Now()).UnFreeze()
 
 	addr := cluster.GetRandomPeerInfo(cluster.DataCenterNone).HTTPAddress
 	client, errs := guber.NewClient(guber.WithNoTLS(addr))
@@ -369,7 +368,7 @@ func TestTokenBucketNegativeHits(t *testing.T) {
 }
 
 func TestDrainOverLimit(t *testing.T) {
-	defer clock.Freeze(clock.Now()).Unfreeze()
+	defer clock.Freeze(clock.Now()).UnFreeze()
 	client, errs := guber.NewClient(cluster.GetRandomPeerOptions(cluster.DataCenterNone))
 	require.Nil(t, errs)
 
@@ -436,7 +435,7 @@ func TestDrainOverLimit(t *testing.T) {
 }
 
 func TestTokenBucketRequestMoreThanAvailable(t *testing.T) {
-	defer clock.Freeze(clock.Now()).Unfreeze()
+	defer clock.Freeze(clock.Now()).UnFreeze()
 
 	client, errs := guber.NewClient(cluster.GetRandomPeerOptions(cluster.DataCenterNone))
 	require.Nil(t, errs)
@@ -480,7 +479,7 @@ func TestTokenBucketRequestMoreThanAvailable(t *testing.T) {
 }
 
 func TestLeakyBucket(t *testing.T) {
-	defer clock.Freeze(clock.Now()).Unfreeze()
+	defer clock.Freeze(clock.Now()).UnFreeze()
 
 	client, errs := guber.NewClient(guber.WithNoTLS(cluster.PeerAt(0).HTTPAddress))
 	require.Nil(t, errs)
@@ -608,7 +607,7 @@ func TestLeakyBucket(t *testing.T) {
 }
 
 func TestLeakyBucketWithBurst(t *testing.T) {
-	defer clock.Freeze(clock.Now()).Unfreeze()
+	defer clock.Freeze(clock.Now()).UnFreeze()
 
 	client, errs := guber.NewClient(guber.WithNoTLS(cluster.PeerAt(0).HTTPAddress))
 	require.Nil(t, errs)
@@ -716,7 +715,7 @@ func TestLeakyBucketWithBurst(t *testing.T) {
 }
 
 func TestLeakyBucketGregorian(t *testing.T) {
-	defer clock.Freeze(clock.Now().Round(time.Minute)).Unfreeze()
+	defer clock.Freeze(clock.Now().Round(clock.Minute)).UnFreeze()
 
 	client, errs := guber.NewClient(guber.WithNoTLS(cluster.PeerAt(0).HTTPAddress))
 	require.Nil(t, errs)
@@ -752,7 +751,7 @@ func TestLeakyBucketGregorian(t *testing.T) {
 
 	// Truncate to the nearest minute.
 	now := clock.Now()
-	trunc := now.Truncate(time.Hour)
+	trunc := now.Truncate(clock.Hour)
 	trunc = now.Add(now.Sub(trunc))
 	clock.Advance(now.Sub(trunc))
 
@@ -790,7 +789,7 @@ func TestLeakyBucketGregorian(t *testing.T) {
 }
 
 func TestLeakyBucketNegativeHits(t *testing.T) {
-	defer clock.Freeze(clock.Now()).Unfreeze()
+	defer clock.Freeze(clock.Now()).UnFreeze()
 
 	client, errs := guber.NewClient(guber.WithNoTLS(cluster.PeerAt(0).HTTPAddress))
 	require.Nil(t, errs)
@@ -863,7 +862,7 @@ func TestLeakyBucketNegativeHits(t *testing.T) {
 
 func TestLeakyBucketRequestMoreThanAvailable(t *testing.T) {
 	// Freeze time so we don't leak during the test
-	defer clock.Freeze(clock.Now()).Unfreeze()
+	defer clock.Freeze(clock.Now()).UnFreeze()
 
 	client, errs := guber.NewClient(cluster.GetRandomPeerOptions(cluster.DataCenterNone))
 	require.Nil(t, errs)
@@ -1021,13 +1020,13 @@ func TestGlobalRateLimits(t *testing.T) {
 	// Our second should be processed as if we own it since the async forward hasn't occurred yet
 	sendHit(peers[0].MustClient(), guber.Status_UNDER_LIMIT, 2, 2)
 
-	testutil.UntilPass(t, 20, clock.Millisecond*200, func(t testutil.TestingT) {
+	assert.EventuallyWithT(t, func(collect *assert.CollectT) {
 		// Inspect peers metrics, ensure the peer sent the global rate limit to the owner
 		metricsURL := fmt.Sprintf("http://%s/metrics", peers[0].Config().HTTPListenAddress)
 		m, err := getMetricRequest(metricsURL, "gubernator_global_send_duration_count")
 		assert.NoError(t, err)
 		assert.Equal(t, 1, int(m.Value))
-	})
+	}, 2*clock.Second, clock.Millisecond*200)
 
 	require.NoError(t, waitForBroadcast(clock.Second*3, owner, 1))
 
@@ -1183,7 +1182,7 @@ func TestGlobalRequestMoreThanAvailable(t *testing.T) {
 		assert.Equal(t, expectedStatus, resp.Responses[0].GetStatus())
 	}
 
-	require.NoError(t, waitForIdle(1*time.Minute, cluster.GetDaemons()...))
+	require.NoError(t, waitForIdle(1*clock.Minute, cluster.GetDaemons()...))
 	prev := getMetricValue(t, owner, "gubernator_broadcast_duration_count")
 
 	// Ensure GRPC has connections to each peer before we start, as we want
@@ -1245,7 +1244,7 @@ func TestGlobalNegativeHits(t *testing.T) {
 		assert.Equal(t, remaining, resp.Responses[0].Remaining)
 	}
 
-	require.NoError(t, waitForIdle(1*time.Minute, cluster.GetDaemons()...))
+	require.NoError(t, waitForIdle(1*clock.Minute, cluster.GetDaemons()...))
 
 	prev := getMetricValue(t, owner, "gubernator_broadcast_duration_count")
 	require.NoError(t, err)
@@ -1300,7 +1299,7 @@ func TestGlobalResetRemaining(t *testing.T) {
 		assert.Equal(t, remaining, resp.Responses[0].Remaining)
 	}
 
-	require.NoError(t, waitForIdle(1*time.Minute, cluster.GetDaemons()...))
+	require.NoError(t, waitForIdle(1*clock.Minute, cluster.GetDaemons()...))
 
 	prev := getMetricValue(t, owner, "gubernator_broadcast_duration_count")
 	require.NoError(t, err)
@@ -1582,7 +1581,7 @@ func TestHealthCheck(t *testing.T) {
 		require.NoError(t, err)
 	}
 
-	testutil.UntilPass(t, 20, clock.Millisecond*300, func(t testutil.TestingT) {
+	assert.EventuallyWithT(t, func(collect *assert.CollectT) {
 		// Check the health again to get back the connection error
 		var resp guber.HealthCheckResponse
 		err = client.HealthCheck(context.Background(), &resp)
@@ -1592,7 +1591,7 @@ func TestHealthCheck(t *testing.T) {
 
 		assert.Equal(t, "unhealthy", resp.GetStatus())
 		assert.Contains(t, resp.GetMessage(), "connect: connection refused")
-	})
+	}, 2*clock.Second, clock.Millisecond*300)
 
 	// Restart stopped instances
 	ctx, cancel := context.WithTimeout(context.Background(), clock.Second*15)
@@ -1601,7 +1600,7 @@ func TestHealthCheck(t *testing.T) {
 }
 
 func TestLeakyBucketDivBug(t *testing.T) {
-	defer clock.Freeze(clock.Now()).Unfreeze()
+	defer clock.Freeze(clock.Now()).UnFreeze()
 	name := t.Name()
 	key := guber.RandomString(10)
 	d := cluster.DaemonAt(0)
@@ -1724,7 +1723,7 @@ func TestNoRateLimits(t *testing.T) {
 
 func TestGlobalBehavior(t *testing.T) {
 	const limit = 1000
-	broadcastTimeout := 400 * time.Millisecond
+	broadcastTimeout := 400 * clock.Millisecond
 	createdAt := epochMillis(clock.Now())
 
 	makeReq := func(name, key string, hits int64) *guber.RateLimitRequest {
@@ -1759,7 +1758,7 @@ func TestGlobalBehavior(t *testing.T) {
 				require.NoError(t, err)
 				t.Logf("Owner peer: %s", owner.InstanceID)
 
-				require.NoError(t, waitForIdle(1*time.Minute, cluster.GetDaemons()...))
+				require.NoError(t, waitForIdle(1*clock.Minute, cluster.GetDaemons()...))
 
 				broadcastCounters := getPeerCounters(t, cluster.GetDaemons(), "gubernator_broadcast_duration_count")
 				updateCounters := getPeerCounters(t, cluster.GetDaemons(), "gubernator_global_send_duration_count")
@@ -2189,7 +2188,7 @@ func TestEventChannel(t *testing.T) {
 		require.NoError(t, err)
 		select {
 		case <-sem:
-		case <-time.After(3 * time.Second):
+		case <-time.After(3 * clock.Second):
 			t.Fatal("Timeout waiting for EventChannel handler")
 		}
 	}
@@ -2356,12 +2355,11 @@ func waitForUpdate(timeout clock.Duration, d *guber.Daemon, expect float64) erro
 // waitForIdle waits until both global broadcast and global hits queues are
 // empty.
 func waitForIdle(timeout clock.Duration, daemons ...*guber.Daemon) error {
-	var wg syncutil.WaitGroup
+	var wg wait.Group
 	ctx, cancel := context.WithTimeout(context.Background(), timeout)
 	defer cancel()
 	for _, d := range daemons {
-		wg.Run(func(raw any) error {
-			d := raw.(*guber.Daemon)
+		wg.Run(func() error {
 			for {
 				metrics, err := getMetrics(d.Config().HTTPListenAddress,
 					"gubernator_global_queue_length", "gubernator_global_send_queue_length")
@@ -2387,13 +2385,9 @@ func waitForIdle(timeout clock.Duration, daemons ...*guber.Daemon) error {
 					return ctx.Err()
 				}
 			}
-		}, d)
+		})
 	}
-	errs := wg.Wait()
-	if len(errs) > 0 {
-		return errs[0]
-	}
-	return nil
+	return wg.Wait()
 }
 
 func getMetricValue(t *testing.T, d *guber.Daemon, name string) float64 {
@@ -2422,7 +2416,7 @@ func sendHit(t *testing.T, d *guber.Daemon, req *guber.RateLimitRequest, expectS
 		t.Logf("Sending %d hits to peer %s", req.Hits, d.InstanceID)
 	}
 	client := d.MustClient()
-	ctx, cancel := context.WithTimeout(context.Background(), time.Second*10)
+	ctx, cancel := context.WithTimeout(context.Background(), clock.Second*10)
 	defer cancel()
 
 	var resp guber.CheckRateLimitsResponse

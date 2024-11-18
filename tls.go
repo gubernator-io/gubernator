@@ -33,8 +33,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/mailgun/holster/v4/setter"
-	"github.com/pkg/errors"
+	"github.com/kapetan-io/errors"
+	"github.com/kapetan-io/tackle/set"
 )
 
 const (
@@ -133,7 +133,7 @@ func fromFile(name string) (*bytes.Buffer, error) {
 
 	b, err := os.ReadFile(name)
 	if err != nil {
-		return nil, errors.Wrapf(err, "while reading file '%s'", name)
+		return nil, errors.Errorf("while reading file '%s': %w", name, err)
 	}
 	return bytes.NewBuffer(b), nil
 }
@@ -155,11 +155,11 @@ func SetupTLS(conf *TLSConfig) error {
 		minServerTLSVersion = tls.VersionTLS13
 	}
 
-	setter.SetDefault(&conf.Logger, slog.Default().With("category", "gubernator"))
+	set.Default(&conf.Logger, slog.Default().With("category", "gubernator"))
 	conf.Logger.Info("Detected TLS Configuration")
 
 	// Basic config with reasonably secure defaults
-	setter.SetDefault(&conf.ServerTLS, &tls.Config{
+	set.Default(&conf.ServerTLS, &tls.Config{
 		CipherSuites: []uint16{
 			tls.TLS_ECDHE_ECDSA_WITH_AES_128_GCM_SHA256,
 			tls.TLS_ECDHE_RSA_WITH_AES_128_GCM_SHA256,
@@ -185,7 +185,7 @@ func SetupTLS(conf *TLSConfig) error {
 			"h2", "http/1.1", // enable HTTP/2
 		},
 	})
-	setter.SetDefault(&conf.ClientTLS, &tls.Config{})
+	set.Default(&conf.ClientTLS, &tls.Config{})
 
 	// Attempt to load any files provided
 	conf.CaPEM, err = fromFile(conf.CaFile)
@@ -228,12 +228,12 @@ func SetupTLS(conf *TLSConfig) error {
 		conf.Logger.Info("AutoTLS Enabled")
 		// Generate CA Cert and Private Key
 		if err := selfCA(conf); err != nil {
-			return errors.Wrap(err, "while generating self signed CA certs")
+			return errors.Errorf("while generating self signed CA certs: %w", err)
 		}
 
 		// Generate Server Cert and Private Key
 		if err := selfCert(conf); err != nil {
-			return errors.Wrap(err, "while generating self signed server certs")
+			return errors.Errorf("while generating self signed server certs: %w", err)
 		}
 	}
 
@@ -253,7 +253,7 @@ func SetupTLS(conf *TLSConfig) error {
 	if conf.KeyPEM != nil && conf.CertPEM != nil {
 		serverCert, err := tls.X509KeyPair(conf.CertPEM.Bytes(), conf.KeyPEM.Bytes())
 		if err != nil {
-			return errors.Wrap(err, "while parsing server certificate and private key")
+			return errors.Errorf("while parsing server certificate and private key: %w", err)
 		}
 		conf.ServerTLS.Certificates = []tls.Certificate{serverCert}
 		conf.ClientTLS.Certificates = []tls.Certificate{serverCert}
@@ -285,7 +285,7 @@ func SetupTLS(conf *TLSConfig) error {
 		if conf.ClientAuthKeyPEM != nil && conf.ClientAuthCertPEM != nil {
 			clientCert, err := tls.X509KeyPair(conf.ClientAuthCertPEM.Bytes(), conf.ClientAuthKeyPEM.Bytes())
 			if err != nil {
-				return errors.Wrap(err, "while parsing client certificate and private key")
+				return errors.Errorf("while parsing client certificate and private key: %w", err)
 			}
 			conf.ClientTLS.Certificates = []tls.Certificate{clientCert}
 		}
@@ -303,7 +303,7 @@ func selfCert(conf *TLSConfig) error {
 
 	network, err := discoverNetwork()
 	if err != nil {
-		return errors.Wrap(err, "while detecting ip and host names")
+		return errors.Errorf("while detecting ip and host names: %w", err)
 	}
 
 	cert := x509.Certificate{
@@ -344,7 +344,7 @@ func selfCert(conf *TLSConfig) error {
 	// Generate a public / private key
 	privKey, err := ecdsa.GenerateKey(elliptic.P521(), rand.Reader)
 	if err != nil {
-		return errors.Wrap(err, "while generating pubic/private key pair")
+		return errors.Errorf("while generating pubic/private key pair: %w", err)
 	}
 
 	// Attempt to sign the generated certs with the provided CaFile
@@ -354,7 +354,7 @@ func selfCert(conf *TLSConfig) error {
 
 	keyPair, err := tls.X509KeyPair(conf.CaPEM.Bytes(), conf.CaKeyPEM.Bytes())
 	if err != nil {
-		return errors.Wrap(err, "while reading generated PEMs")
+		return errors.Errorf("while reading generated PEMs: %w", err)
 	}
 
 	if len(keyPair.Certificate) == 0 {
@@ -363,12 +363,12 @@ func selfCert(conf *TLSConfig) error {
 
 	caCert, err := x509.ParseCertificate(keyPair.Certificate[0])
 	if err != nil {
-		return errors.Wrap(err, "while parsing CA Cert")
+		return errors.Errorf("while parsing CA Cert: %w", err)
 	}
 
 	signedBytes, err := x509.CreateCertificate(rand.Reader, &cert, caCert, &privKey.PublicKey, keyPair.PrivateKey)
 	if err != nil {
-		return errors.Wrap(err, "while self signing server cert")
+		return errors.Errorf("while self signing server cert: %w", err)
 	}
 
 	conf.CertPEM = new(bytes.Buffer)
@@ -376,12 +376,12 @@ func selfCert(conf *TLSConfig) error {
 		Type:  "CERTIFICATE",
 		Bytes: signedBytes,
 	}); err != nil {
-		return errors.Wrap(err, "while encoding CERTIFICATE PEM")
+		return errors.Errorf("while encoding CERTIFICATE PEM: %w", err)
 	}
 
 	b, err := x509.MarshalECPrivateKey(privKey)
 	if err != nil {
-		return errors.Wrap(err, "while encoding EC Marshalling")
+		return errors.Errorf("while encoding EC Marshalling: %w", err)
 	}
 
 	conf.KeyPEM = new(bytes.Buffer)
@@ -389,7 +389,7 @@ func selfCert(conf *TLSConfig) error {
 		Type:  blockTypeEC,
 		Bytes: b,
 	}); err != nil {
-		return errors.Wrap(err, "while encoding EC KEY PEM")
+		return errors.Errorf("while encoding EC KEY PEM: %w", err)
 	}
 	return nil
 }
@@ -417,12 +417,12 @@ func selfCA(conf *TLSConfig) error {
 	conf.Logger.Info("Generating CA Certificates....")
 	privKey, err = ecdsa.GenerateKey(elliptic.P521(), rand.Reader)
 	if err != nil {
-		return errors.Wrap(err, "while generating pubic/private key pair")
+		return errors.Errorf("while generating pubic/private key pair: %w", err)
 	}
 
 	b, err = x509.CreateCertificate(rand.Reader, &ca, &ca, &privKey.PublicKey, privKey)
 	if err != nil {
-		return errors.Wrap(err, "while self signing CA certificate")
+		return errors.Errorf("while self signing CA certificate: %w", err)
 	}
 
 	conf.CaPEM = new(bytes.Buffer)
@@ -430,12 +430,12 @@ func selfCA(conf *TLSConfig) error {
 		Type:  blockTypeCert,
 		Bytes: b,
 	}); err != nil {
-		return errors.Wrap(err, "while encoding CERTIFICATE PEM")
+		return errors.Errorf("while encoding CERTIFICATE PEM: %w", err)
 	}
 
 	b, err = x509.MarshalECPrivateKey(privKey)
 	if err != nil {
-		return errors.Wrap(err, "while marshalling EC private key")
+		return errors.Errorf("while marshalling EC private key: %w", err)
 	}
 
 	conf.CaKeyPEM = new(bytes.Buffer)
@@ -443,7 +443,7 @@ func selfCA(conf *TLSConfig) error {
 		Type:  blockTypeEC,
 		Bytes: b,
 	}); err != nil {
-		return errors.Wrap(err, "while encoding EC private key into PEM")
+		return errors.Errorf("while encoding EC private key into PEM: %w", err)
 	}
 	return nil
 }

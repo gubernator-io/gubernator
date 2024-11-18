@@ -28,8 +28,8 @@ import (
 
 	"github.com/duh-rpc/duh-go"
 	v1 "github.com/duh-rpc/duh-go/proto/v1"
-	"github.com/mailgun/holster/v4/clock"
-	"github.com/mailgun/holster/v4/setter"
+	"github.com/kapetan-io/tackle/clock"
+	"github.com/kapetan-io/tackle/set"
 	"github.com/pkg/errors"
 	"go.opentelemetry.io/otel/propagation"
 	"google.golang.org/protobuf/proto"
@@ -66,7 +66,7 @@ type client struct {
 
 // NewClient creates a new instance of the Gubernator user client
 func NewClient(opts ClientOptions) (Client, error) {
-	setter.SetDefault(&opts.Client, &http.Client{
+	set.Default(&opts.Client, &http.Client{
 		Transport: &http.Transport{
 			MaxConnsPerHost:     2_000,
 			MaxIdleConns:        2_000,

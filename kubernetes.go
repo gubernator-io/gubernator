@@ -22,7 +22,7 @@ import (
 	"log/slog"
 	"reflect"
 
-	"github.com/mailgun/holster/v4/setter"
+	"github.com/kapetan-io/tackle/set"
 	"github.com/pkg/errors"
 	api_v1 "k8s.io/api/core/v1"
 	meta_v1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -93,7 +93,7 @@ func NewK8sPool(conf K8sPoolConfig) (*K8sPool, error) {
 		watchCtx:    ctx,
 		watchCancel: cancel,
 	}
-	setter.SetDefault(&pool.log, slog.Default().With("category", "gubernator"))
+	set.Default(&pool.log, slog.Default().With("category", "gubernator"))
 
 	return pool, pool.start()
 }

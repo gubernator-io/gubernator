@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"sync/atomic"
 
-	"github.com/mailgun/holster/v4/setter"
+	"github.com/kapetan-io/tackle/set"
 	"github.com/maypok86/otter"
 )
 
@@ -17,7 +17,7 @@ type OtterCache struct {
 // the cache is created with a default cache size.
 func NewOtterCache(size int) (*OtterCache, error) {
 	// Default is 500k bytes in size
-	setter.SetDefault(&size, 500_000)
+	set.Default(&size, 500_000)
 	b, err := otter.NewBuilder[string, *CacheItem](size)
 	if err != nil {
 		return nil, fmt.Errorf("during otter.NewBuilder(): %w", err)

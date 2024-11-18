@@ -29,15 +29,14 @@ import (
 	"net"
 	"os"
 	"runtime"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
 
 	"github.com/davecgh/go-spew/spew"
-	"github.com/mailgun/holster/v4/clock"
-	"github.com/mailgun/holster/v4/setter"
-	"github.com/mailgun/holster/v4/slice"
-	"github.com/mailgun/holster/v4/tracing"
+	"github.com/kapetan-io/tackle/clock"
+	"github.com/kapetan-io/tackle/set"
 	"github.com/pkg/errors"
 	"github.com/segmentio/fasthash/fnv1"
 	"github.com/segmentio/fasthash/fnv1a"
@@ -124,22 +123,22 @@ type HitEvent struct {
 }
 
 func (c *Config) SetDefaults() error {
-	setter.SetDefault(&c.Behaviors.BatchTimeout, time.Millisecond*500)
-	setter.SetDefault(&c.Behaviors.BatchLimit, maxBatchSize)
-	setter.SetDefault(&c.Behaviors.BatchWait, time.Microsecond*500)
+	set.Default(&c.Behaviors.BatchTimeout, time.Millisecond*500)
+	set.Default(&c.Behaviors.BatchLimit, maxBatchSize)
+	set.Default(&c.Behaviors.BatchWait, time.Microsecond*500)
 
-	setter.SetDefault(&c.Behaviors.GlobalTimeout, time.Millisecond*500)
-	setter.SetDefault(&c.Behaviors.GlobalBatchLimit, maxBatchSize)
-	setter.SetDefault(&c.Behaviors.GlobalSyncWait, time.Millisecond*100)
+	set.Default(&c.Behaviors.GlobalTimeout, time.Millisecond*500)
+	set.Default(&c.Behaviors.GlobalBatchLimit, maxBatchSize)
+	set.Default(&c.Behaviors.GlobalSyncWait, time.Millisecond*100)
 
-	setter.SetDefault(&c.Behaviors.GlobalPeerRequestsConcurrency, 100)
+	set.Default(&c.Behaviors.GlobalPeerRequestsConcurrency, 100)
 
-	setter.SetDefault(&c.LocalPicker, NewReplicatedConsistentHash(nil, DefaultReplicas))
-	setter.SetDefault(&c.RegionPicker, NewRegionPicker(nil))
+	set.Default(&c.LocalPicker, NewReplicatedConsistentHash(nil, DefaultReplicas))
+	set.Default(&c.RegionPicker, NewRegionPicker(nil))
 
-	setter.SetDefault(&c.CacheSize, 50_000)
-	setter.SetDefault(&c.Workers, runtime.NumCPU())
-	setter.SetDefault(&c.Logger, slog.Default().With("category", "gubernator"))
+	set.Default(&c.CacheSize, 50_000)
+	set.Default(&c.Workers, runtime.NumCPU())
+	set.Default(&c.Logger, slog.Default().With("category", "gubernator"))
 
 	if c.CacheFactory == nil {
 		c.CacheFactory = func(maxSize int) (Cache, error) {
@@ -265,10 +264,6 @@ type DaemonConfig struct {
 	// (Optional) Instance ID which is a unique id that identifies this instance of gubernator
 	InstanceID string
 
-	// (Optional) TraceLevel sets the tracing level, this controls the number of spans included in a single trace.
-	//  Valid options are (tracing.InfoLevel, tracing.DebugLevel) Defaults to tracing.InfoLevel
-	TraceLevel tracing.Level
-
 	// (Optional) EventChannel receives hit events
 	EventChannel chan<- HitEvent
 
@@ -307,7 +302,7 @@ func SetupDaemonConfig(logger *slog.Logger, configFile io.Reader) (DaemonConfig,
 	}
 
 	// Log config
-	setter.SetDefault(&logFormat, os.Getenv("GUBER_LOG_FORMAT"))
+	set.Default(&logFormat, os.Getenv("GUBER_LOG_FORMAT"))
 	slogLevel := &slog.LevelVar{}
 	if logFormat != "" {
 		switch logFormat {
@@ -324,8 +319,8 @@ func SetupDaemonConfig(logger *slog.Logger, configFile io.Reader) (DaemonConfig,
 		}
 	}
 
-	setter.SetDefault(&DebugEnabled, getEnvBool(log, "GUBER_DEBUG"))
-	setter.SetDefault(&logLevel, os.Getenv("GUBER_LOG_LEVEL"))
+	set.Default(&DebugEnabled, getEnvBool(log, "GUBER_DEBUG"))
+	set.Default(&logLevel, os.Getenv("GUBER_LOG_LEVEL"))
 	if DebugEnabled {
 		slogLevel.Set(slog.LevelDebug)
 		log.Debug("Debug enabled")
@@ -337,19 +332,19 @@ func SetupDaemonConfig(logger *slog.Logger, configFile io.Reader) (DaemonConfig,
 	}
 
 	// Main config
-	setter.SetDefault(&conf.HTTPListenAddress, os.Getenv("GUBER_HTTP_ADDRESS"),
+	set.Default(&conf.HTTPListenAddress, os.Getenv("GUBER_HTTP_ADDRESS"),
 		fmt.Sprintf("%s:1050", LocalHost()))
-	setter.SetDefault(&conf.InstanceID, GetInstanceID())
-	setter.SetDefault(&conf.HTTPStatusListenAddress, os.Getenv("GUBER_STATUS_HTTP_ADDRESS"), "")
-	setter.SetDefault(&conf.CacheSize, getEnvInteger(log, "GUBER_CACHE_SIZE"), 50_000)
-	setter.SetDefault(&conf.Workers, getEnvInteger(log, "GUBER_WORKER_COUNT"), 0)
-	setter.SetDefault(&conf.AdvertiseAddress, os.Getenv("GUBER_ADVERTISE_ADDRESS"), conf.HTTPListenAddress)
-	setter.SetDefault(&conf.DataCenter, os.Getenv("GUBER_DATA_CENTER"), "")
-	setter.SetDefault(&conf.MetricFlags, getEnvMetricFlags(log, "GUBER_METRIC_FLAGS"))
+	set.Default(&conf.InstanceID, GetInstanceID())
+	set.Default(&conf.HTTPStatusListenAddress, os.Getenv("GUBER_STATUS_HTTP_ADDRESS"), "")
+	set.Default(&conf.CacheSize, getEnvInteger(log, "GUBER_CACHE_SIZE"), 50_000)
+	set.Default(&conf.Workers, getEnvInteger(log, "GUBER_WORKER_COUNT"), 0)
+	set.Default(&conf.AdvertiseAddress, os.Getenv("GUBER_ADVERTISE_ADDRESS"), conf.HTTPListenAddress)
+	set.Default(&conf.DataCenter, os.Getenv("GUBER_DATA_CENTER"), "")
+	set.Default(&conf.MetricFlags, getEnvMetricFlags(log, "GUBER_METRIC_FLAGS"))
 
 	choices := []string{"member-list", "k8s", "etcd", "dns"}
-	setter.SetDefault(&conf.PeerDiscoveryType, os.Getenv("GUBER_PEER_DISCOVERY_TYPE"), "member-list")
-	if !slice.ContainsString(conf.PeerDiscoveryType, choices, nil) {
+	set.Default(&conf.PeerDiscoveryType, os.Getenv("GUBER_PEER_DISCOVERY_TYPE"), "member-list")
+	if !slices.Contains(choices, conf.PeerDiscoveryType) {
 		return conf, fmt.Errorf("GUBER_PEER_DISCOVERY_TYPE is invalid; choices are [%s]`", strings.Join(choices, ","))
 	}
 
@@ -367,25 +362,25 @@ func SetupDaemonConfig(logger *slog.Logger, configFile io.Reader) (DaemonConfig,
 	}
 
 	// Behaviors
-	setter.SetDefault(&conf.Behaviors.BatchTimeout, getEnvDuration(log, "GUBER_BATCH_TIMEOUT"))
-	setter.SetDefault(&conf.Behaviors.BatchLimit, getEnvInteger(log, "GUBER_BATCH_LIMIT"))
-	setter.SetDefault(&conf.Behaviors.BatchWait, getEnvDuration(log, "GUBER_BATCH_WAIT"))
-	setter.SetDefault(&conf.Behaviors.DisableBatching, getEnvBool(log, "GUBER_DISABLE_BATCHING"))
+	set.Default(&conf.Behaviors.BatchTimeout, getEnvDuration(log, "GUBER_BATCH_TIMEOUT"))
+	set.Default(&conf.Behaviors.BatchLimit, getEnvInteger(log, "GUBER_BATCH_LIMIT"))
+	set.Default(&conf.Behaviors.BatchWait, getEnvDuration(log, "GUBER_BATCH_WAIT"))
+	set.Default(&conf.Behaviors.DisableBatching, getEnvBool(log, "GUBER_DISABLE_BATCHING"))
 
-	setter.SetDefault(&conf.Behaviors.GlobalTimeout, getEnvDuration(log, "GUBER_GLOBAL_TIMEOUT"))
-	setter.SetDefault(&conf.Behaviors.GlobalBatchLimit, getEnvInteger(log, "GUBER_GLOBAL_BATCH_LIMIT"))
-	setter.SetDefault(&conf.Behaviors.GlobalSyncWait, getEnvDuration(log, "GUBER_GLOBAL_SYNC_WAIT"))
-	setter.SetDefault(&conf.Behaviors.ForceGlobal, getEnvBool(log, "GUBER_FORCE_GLOBAL"))
+	set.Default(&conf.Behaviors.GlobalTimeout, getEnvDuration(log, "GUBER_GLOBAL_TIMEOUT"))
+	set.Default(&conf.Behaviors.GlobalBatchLimit, getEnvInteger(log, "GUBER_GLOBAL_BATCH_LIMIT"))
+	set.Default(&conf.Behaviors.GlobalSyncWait, getEnvDuration(log, "GUBER_GLOBAL_SYNC_WAIT"))
+	set.Default(&conf.Behaviors.ForceGlobal, getEnvBool(log, "GUBER_FORCE_GLOBAL"))
 
 	// TLS Config
 	if anyHasPrefix("GUBER_TLS_", os.Environ()) {
 		conf.TLS = &TLSConfig{}
-		setter.SetDefault(&conf.TLS.CaFile, os.Getenv("GUBER_TLS_CA"))
-		setter.SetDefault(&conf.TLS.CaKeyFile, os.Getenv("GUBER_TLS_CA_KEY"))
-		setter.SetDefault(&conf.TLS.KeyFile, os.Getenv("GUBER_TLS_KEY"))
-		setter.SetDefault(&conf.TLS.CertFile, os.Getenv("GUBER_TLS_CERT"))
-		setter.SetDefault(&conf.TLS.AutoTLS, getEnvBool(log, "GUBER_TLS_AUTO"))
-		setter.SetDefault(&conf.TLS.MinVersion, getEnvMinVersion(log, "GUBER_TLS_MIN_VERSION"))
+		set.Default(&conf.TLS.CaFile, os.Getenv("GUBER_TLS_CA"))
+		set.Default(&conf.TLS.CaKeyFile, os.Getenv("GUBER_TLS_CA_KEY"))
+		set.Default(&conf.TLS.KeyFile, os.Getenv("GUBER_TLS_KEY"))
+		set.Default(&conf.TLS.CertFile, os.Getenv("GUBER_TLS_CERT"))
+		set.Default(&conf.TLS.AutoTLS, getEnvBool(log, "GUBER_TLS_AUTO"))
+		set.Default(&conf.TLS.MinVersion, getEnvMinVersion(log, "GUBER_TLS_MIN_VERSION"))
 
 		clientAuth := os.Getenv("GUBER_TLS_CLIENT_AUTH")
 		if clientAuth != "" {
@@ -402,33 +397,33 @@ func SetupDaemonConfig(logger *slog.Logger, configFile io.Reader) (DaemonConfig,
 			}
 			conf.TLS.ClientAuth = t
 		}
-		setter.SetDefault(&conf.TLS.ClientAuthKeyFile, os.Getenv("GUBER_TLS_CLIENT_AUTH_KEY"))
-		setter.SetDefault(&conf.TLS.ClientAuthCertFile, os.Getenv("GUBER_TLS_CLIENT_AUTH_CERT"))
-		setter.SetDefault(&conf.TLS.ClientAuthCaFile, os.Getenv("GUBER_TLS_CLIENT_AUTH_CA_CERT"))
-		setter.SetDefault(&conf.TLS.InsecureSkipVerify, getEnvBool(log, "GUBER_TLS_INSECURE_SKIP_VERIFY"))
-		setter.SetDefault(&conf.TLS.ClientAuthServerName, os.Getenv("GUBER_TLS_CLIENT_AUTH_SERVER_NAME"))
+		set.Default(&conf.TLS.ClientAuthKeyFile, os.Getenv("GUBER_TLS_CLIENT_AUTH_KEY"))
+		set.Default(&conf.TLS.ClientAuthCertFile, os.Getenv("GUBER_TLS_CLIENT_AUTH_CERT"))
+		set.Default(&conf.TLS.ClientAuthCaFile, os.Getenv("GUBER_TLS_CLIENT_AUTH_CA_CERT"))
+		set.Default(&conf.TLS.InsecureSkipVerify, getEnvBool(log, "GUBER_TLS_INSECURE_SKIP_VERIFY"))
+		set.Default(&conf.TLS.ClientAuthServerName, os.Getenv("GUBER_TLS_CLIENT_AUTH_SERVER_NAME"))
 	}
 
 	// ETCD Config
-	setter.SetDefault(&conf.EtcdPoolConf.KeyPrefix, os.Getenv("GUBER_ETCD_KEY_PREFIX"), "/gubernator-peers")
-	setter.SetDefault(&conf.EtcdPoolConf.EtcdConfig, &etcd.Config{})
-	setter.SetDefault(&conf.EtcdPoolConf.EtcdConfig.Endpoints, getEnvSlice("GUBER_ETCD_ENDPOINTS"), []string{"localhost:2379"})
-	setter.SetDefault(&conf.EtcdPoolConf.EtcdConfig.DialTimeout, getEnvDuration(log, "GUBER_ETCD_DIAL_TIMEOUT"), clock.Second*5)
-	setter.SetDefault(&conf.EtcdPoolConf.EtcdConfig.Username, os.Getenv("GUBER_ETCD_USER"))
-	setter.SetDefault(&conf.EtcdPoolConf.EtcdConfig.Password, os.Getenv("GUBER_ETCD_PASSWORD"))
-	setter.SetDefault(&conf.EtcdPoolConf.Advertise.HTTPAddress, os.Getenv("GUBER_ETCD_ADVERTISE_ADDRESS"), conf.AdvertiseAddress)
-	setter.SetDefault(&conf.EtcdPoolConf.Advertise.DataCenter, os.Getenv("GUBER_ETCD_DATA_CENTER"), conf.DataCenter)
+	set.Default(&conf.EtcdPoolConf.KeyPrefix, os.Getenv("GUBER_ETCD_KEY_PREFIX"), "/gubernator-peers")
+	set.Default(&conf.EtcdPoolConf.EtcdConfig, &etcd.Config{})
+	set.Default(&conf.EtcdPoolConf.EtcdConfig.Endpoints, getEnvSlice("GUBER_ETCD_ENDPOINTS"), []string{"localhost:2379"})
+	set.Default(&conf.EtcdPoolConf.EtcdConfig.DialTimeout, getEnvDuration(log, "GUBER_ETCD_DIAL_TIMEOUT"), clock.Second*5)
+	set.Default(&conf.EtcdPoolConf.EtcdConfig.Username, os.Getenv("GUBER_ETCD_USER"))
+	set.Default(&conf.EtcdPoolConf.EtcdConfig.Password, os.Getenv("GUBER_ETCD_PASSWORD"))
+	set.Default(&conf.EtcdPoolConf.Advertise.HTTPAddress, os.Getenv("GUBER_ETCD_ADVERTISE_ADDRESS"), conf.AdvertiseAddress)
+	set.Default(&conf.EtcdPoolConf.Advertise.DataCenter, os.Getenv("GUBER_ETCD_DATA_CENTER"), conf.DataCenter)
 
-	setter.SetDefault(&conf.MemberListPoolConf.Advertise.HTTPAddress, os.Getenv("GUBER_MEMBERLIST_ADVERTISE_ADDRESS"), conf.AdvertiseAddress)
-	setter.SetDefault(&conf.MemberListPoolConf.MemberListAddress, os.Getenv("GUBER_MEMBERLIST_ADDRESS"), fmt.Sprintf("%s:7946", advAddr))
-	setter.SetDefault(&conf.MemberListPoolConf.KnownNodes, getEnvSlice("GUBER_MEMBERLIST_KNOWN_NODES"), []string{})
-	setter.SetDefault(&conf.MemberListPoolConf.Advertise.DataCenter, conf.DataCenter)
-	setter.SetDefault(&conf.MemberListPoolConf.EncryptionConfig.SecretKeys, getEnvSlice("GUBER_MEMBERLIST_SECRET_KEYS"), []string{})
-	setter.SetDefault(&conf.MemberListPoolConf.EncryptionConfig.GossipVerifyIncoming, getEnvBool(log, "GUBER_MEMBERLIST_GOSSIP_VERIFY_INCOMING"), true)
-	setter.SetDefault(&conf.MemberListPoolConf.EncryptionConfig.GossipVerifyOutgoing, getEnvBool(log, "GUBER_MEMBERLIST_GOSSIP_VERIFY_OUTGOING"), true)
+	set.Default(&conf.MemberListPoolConf.Advertise.HTTPAddress, os.Getenv("GUBER_MEMBERLIST_ADVERTISE_ADDRESS"), conf.AdvertiseAddress)
+	set.Default(&conf.MemberListPoolConf.MemberListAddress, os.Getenv("GUBER_MEMBERLIST_ADDRESS"), fmt.Sprintf("%s:7946", advAddr))
+	set.Default(&conf.MemberListPoolConf.KnownNodes, getEnvSlice("GUBER_MEMBERLIST_KNOWN_NODES"), []string{})
+	set.Default(&conf.MemberListPoolConf.Advertise.DataCenter, conf.DataCenter)
+	set.Default(&conf.MemberListPoolConf.EncryptionConfig.SecretKeys, getEnvSlice("GUBER_MEMBERLIST_SECRET_KEYS"), []string{})
+	set.Default(&conf.MemberListPoolConf.EncryptionConfig.GossipVerifyIncoming, getEnvBool(log, "GUBER_MEMBERLIST_GOSSIP_VERIFY_INCOMING"), true)
+	set.Default(&conf.MemberListPoolConf.EncryptionConfig.GossipVerifyOutgoing, getEnvBool(log, "GUBER_MEMBERLIST_GOSSIP_VERIFY_OUTGOING"), true)
 
 	// Kubernetes Config
-	setter.SetDefault(&conf.K8PoolConf.Namespace, os.Getenv("GUBER_K8S_NAMESPACE"), "default")
+	set.Default(&conf.K8PoolConf.Namespace, os.Getenv("GUBER_K8S_NAMESPACE"), "default")
 	conf.K8PoolConf.PodIP = os.Getenv("GUBER_K8S_POD_IP")
 	conf.K8PoolConf.PodPort = os.Getenv("GUBER_K8S_POD_PORT")
 	conf.K8PoolConf.Selector = os.Getenv("GUBER_K8S_ENDPOINTS_SELECTOR")
@@ -440,11 +435,11 @@ func SetupDaemonConfig(logger *slog.Logger, configFile io.Reader) (DaemonConfig,
 	}
 
 	// DNS Config
-	setter.SetDefault(&conf.DNSPoolConf.FQDN, os.Getenv("GUBER_DNS_FQDN"))
-	setter.SetDefault(&conf.DNSPoolConf.ResolvConf, os.Getenv("GUBER_RESOLV_CONF"), "/etc/resolv.conf")
-	setter.SetDefault(&conf.DNSPoolConf.OwnAddress, conf.AdvertiseAddress)
+	set.Default(&conf.DNSPoolConf.FQDN, os.Getenv("GUBER_DNS_FQDN"))
+	set.Default(&conf.DNSPoolConf.ResolvConf, os.Getenv("GUBER_RESOLV_CONF"), "/etc/resolv.conf")
+	set.Default(&conf.DNSPoolConf.OwnAddress, conf.AdvertiseAddress)
 
-	setter.SetDefault(&conf.CacheProvider, os.Getenv("GUBER_CACHE_PROVIDER"), "default-lru")
+	set.Default(&conf.CacheProvider, os.Getenv("GUBER_CACHE_PROVIDER"), "default-lru")
 
 	// PeerPicker Config
 	// TODO: Deprecated: Remove in GUBER_PEER_PICKER in v3
@@ -454,9 +449,9 @@ func SetupDaemonConfig(logger *slog.Logger, configFile io.Reader) (DaemonConfig,
 
 		switch pp {
 		case "replicated-hash":
-			setter.SetDefault(&replicas, getEnvInteger(log, "GUBER_REPLICATED_HASH_REPLICAS"), DefaultReplicas)
+			set.Default(&replicas, getEnvInteger(log, "GUBER_REPLICATED_HASH_REPLICAS"), DefaultReplicas)
 			conf.Picker = NewReplicatedConsistentHash(nil, replicas)
-			setter.SetDefault(&hash, os.Getenv("GUBER_PEER_PICKER_HASH"), "fnv1a")
+			set.Default(&hash, os.Getenv("GUBER_PEER_PICKER_HASH"), "fnv1a")
 			hashFuncs := map[string]HashString64{
 				"fnv1a": fnv1a.HashString64,
 				"fnv1":  fnv1.HashString64,
@@ -503,8 +498,6 @@ func SetupDaemonConfig(logger *slog.Logger, configFile io.Reader) (DaemonConfig,
 		log.Debug(spew.Sdump(conf))
 	}
 
-	setter.SetDefault(&conf.TraceLevel, GetTracingLevel())
-
 	return conf, nil
 }
 
@@ -545,15 +538,15 @@ func setupEtcdTLS(conf *etcd.Config) error {
 
 	// set `GUBER_ETCD_TLS_ENABLE` and this line will
 	// create a TLS config with no config.
-	setter.SetDefault(&conf.TLS, &tls.Config{})
+	set.Default(&conf.TLS, &tls.Config{})
 
-	setter.SetDefault(&tlsCertFile, os.Getenv("GUBER_ETCD_TLS_CERT"))
-	setter.SetDefault(&tlsKeyFile, os.Getenv("GUBER_ETCD_TLS_KEY"))
-	setter.SetDefault(&tlsCAFile, os.Getenv("GUBER_ETCD_TLS_CA"))
+	set.Default(&tlsCertFile, os.Getenv("GUBER_ETCD_TLS_CERT"))
+	set.Default(&tlsKeyFile, os.Getenv("GUBER_ETCD_TLS_KEY"))
+	set.Default(&tlsCAFile, os.Getenv("GUBER_ETCD_TLS_CA"))
 
 	// If the CA file was provided
 	if tlsCAFile != "" {
-		setter.SetDefault(&conf.TLS, &tls.Config{})
+		set.Default(&conf.TLS, &tls.Config{})
 
 		var certPool *x509.CertPool = nil
 		if pemBytes, err := os.ReadFile(tlsCAFile); err == nil {
@@ -562,7 +555,7 @@ func setupEtcdTLS(conf *etcd.Config) error {
 		} else {
 			return errors.Wrapf(err, "while loading cert CA file '%s'", tlsCAFile)
 		}
-		setter.SetDefault(&conf.TLS.RootCAs, certPool)
+		set.Default(&conf.TLS.RootCAs, certPool)
 		conf.TLS.InsecureSkipVerify = false
 	}
 
@@ -573,13 +566,13 @@ func setupEtcdTLS(conf *etcd.Config) error {
 			return errors.Wrapf(err, "while loading cert '%s' and key file '%s'",
 				tlsCertFile, tlsKeyFile)
 		}
-		setter.SetDefault(&conf.TLS.Certificates, []tls.Certificate{tlsCert})
+		set.Default(&conf.TLS.Certificates, []tls.Certificate{tlsCert})
 	}
 
 	// If no other TLS config is provided this will force connecting with TLS,
 	// without cert verification
 	if os.Getenv("GUBER_ETCD_TLS_SKIP_VERIFY") != "" {
-		setter.SetDefault(&conf.TLS, &tls.Config{})
+		set.Default(&conf.TLS, &tls.Config{})
 		conf.TLS.InsecureSkipVerify = true
 	}
 	return nil
@@ -721,7 +714,7 @@ func GetInstanceID() string {
 	//  1. The environment variable `GUBER_INSTANCE_ID`
 	//  2. The id of the docker container we are running in
 	//  3. Generate a random id
-	setter.SetDefault(&id, os.Getenv("GUBER_INSTANCE_ID"), getDockerCID(), generateID())
+	set.Default(&id, os.Getenv("GUBER_INSTANCE_ID"), getDockerCID(), generateID())
 
 	return id
 }
@@ -751,17 +744,4 @@ func getDockerCID() string {
 		return fullDockerCID[:12]
 	}
 	return ""
-}
-
-func GetTracingLevel() tracing.Level {
-	s := os.Getenv("GUBER_TRACING_LEVEL")
-	lvl, ok := map[string]tracing.Level{
-		"ERROR": tracing.ErrorLevel,
-		"INFO":  tracing.InfoLevel,
-		"DEBUG": tracing.DebugLevel,
-	}[s]
-	if ok {
-		return lvl
-	}
-	return tracing.InfoLevel
 }

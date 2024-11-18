@@ -20,7 +20,7 @@ import (
 	"context"
 	"log/slog"
 
-	"github.com/mailgun/holster/v4/syncutil"
+	"github.com/kapetan-io/tackle/wait"
 	"github.com/pkg/errors"
 	"github.com/prometheus/client_golang/prometheus"
 	"google.golang.org/protobuf/proto"
@@ -31,7 +31,7 @@ import (
 type globalManager struct {
 	hitsQueue                   chan *RateLimitRequest
 	broadcastQueue              chan *RateLimitRequest
-	wg                          syncutil.WaitGroup
+	wg                          wait.Group
 	conf                        BehaviorConfig
 	log                         FieldLogger
 	instance                    *Service
@@ -171,11 +171,10 @@ func (gm *globalManager) sendHits(hits map[string]*RateLimitRequest) {
 		}
 	}
 
-	fan := syncutil.NewFanOut(gm.conf.GlobalPeerRequestsConcurrency)
+	fan := wait.NewFanOut(gm.conf.GlobalPeerRequestsConcurrency)
 	// Send the rate limit requests to their respective owning peers.
 	for _, p := range peerRequests {
-		fan.Run(func(in interface{}) error {
-			p := in.(*pair)
+		fan.Run(func() error {
 			ctx, cancel := context.WithTimeout(context.Background(), gm.conf.GlobalTimeout)
 			var resp ForwardResponse
 			err := p.client.ForwardBatch(ctx, &p.req, &resp)
@@ -188,9 +187,9 @@ func (gm *globalManager) sendHits(hits map[string]*RateLimitRequest) {
 				)
 			}
 			return nil
-		}, p)
+		})
 	}
-	fan.Wait()
+	_ = fan.Wait()
 }
 
 // runBroadcasts collects status changes for global rate limits in a forever loop,
@@ -265,15 +264,14 @@ func (gm *globalManager) broadcastPeers(ctx context.Context, updates map[string]
 		req.Globals = append(req.Globals, updateReq)
 	}
 
-	fan := syncutil.NewFanOut(gm.conf.GlobalPeerRequestsConcurrency)
+	fan := wait.NewFanOut(gm.conf.GlobalPeerRequestsConcurrency)
 	for _, peer := range gm.instance.GetPeerList() {
 		// Exclude ourselves from the update
 		if peer.Info().IsOwner {
 			continue
 		}
 
-		fan.Run(func(in interface{}) error {
-			peer := in.(*Peer)
+		fan.Run(func() error {
 			ctx, cancel := context.WithTimeout(ctx, gm.conf.GlobalTimeout)
 			err := peer.Update(ctx, &req)
 			cancel()
@@ -288,9 +286,9 @@ func (gm *globalManager) broadcastPeers(ctx context.Context, updates map[string]
 				}
 			}
 			return nil
-		}, peer)
+		})
 	}
-	fan.Wait()
+	_ = fan.Wait()
 }
 
 // Close stops all goroutines and shuts down all the peers.

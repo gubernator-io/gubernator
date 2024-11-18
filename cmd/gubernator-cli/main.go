@@ -27,16 +27,15 @@ import (
 	"time"
 
 	"github.com/davecgh/go-spew/spew"
-	"github.com/mailgun/holster/v4/clock"
-	"github.com/mailgun/holster/v4/errors"
-	"github.com/mailgun/holster/v4/setter"
-	"github.com/mailgun/holster/v4/syncutil"
-	"github.com/mailgun/holster/v4/tracing"
+	guber "github.com/gubernator-io/gubernator/v3"
+	"github.com/gubernator-io/gubernator/v3/tracing"
+	"github.com/kapetan-io/tackle/clock"
+	"github.com/kapetan-io/tackle/set"
+	"github.com/kapetan-io/tackle/wait"
 	"go.opentelemetry.io/otel/attribute"
+	sdktrace "go.opentelemetry.io/otel/sdk/trace"
 	"go.opentelemetry.io/otel/trace"
 	"golang.org/x/time/rate"
-
-	guber "github.com/gubernator-io/gubernator/v3"
 )
 
 var (
@@ -77,63 +76,50 @@ func main() {
 		return
 	}
 	ctx := context.Background()
-	err = tracing.InitTracing(ctx,
-		"github.com/gubernator-io/gubernator/v3/cmd/gubernator-cli",
-		tracing.WithResource(res),
-	)
+	shutdown, err := tracing.InitTracing(ctx, log, "github.com/gubernator-io/gubernator/v3/cmd/gubernator-cli",
+		sdktrace.WithResource(res))
 	if err != nil {
 		log.LogAttrs(context.TODO(), slog.LevelWarn, "Error in tracing.InitTracing",
 			guber.ErrAttr(err),
 		)
 	}
+	defer func() { _ = shutdown(ctx) }()
 
 	// Print startup message.
-	startCtx := tracing.StartScope(ctx)
+	startCtx := tracing.StartScope(ctx, "main")
 	argsMsg := fmt.Sprintf("Command line: %s", strings.Join(os.Args[1:], " "))
 	log.Info(argsMsg)
 	tracing.EndScope(startCtx, nil)
 
 	var client guber.Client
-	err = tracing.CallScope(ctx, func(ctx context.Context) error {
-		// Print startup message.
-		cmdLine := strings.Join(os.Args[1:], " ")
-		log.LogAttrs(ctx, slog.LevelInfo, "Command Line",
-			slog.String("cmdLine", cmdLine),
-		)
+	// Print startup message.
+	cmdLine := strings.Join(os.Args[1:], " ")
+	log.LogAttrs(ctx, slog.LevelInfo, "Command Line",
+		slog.String("cmdLine", cmdLine),
+	)
 
-		configFileReader, err := os.Open(configFile)
-		if err != nil {
-			return fmt.Errorf("while opening config file: %s", err)
-		}
-		conf, err := guber.SetupDaemonConfig(log, configFileReader)
-		if err != nil {
-			return err
-		}
-		setter.SetOverride(&conf.HTTPListenAddress, httpAddress)
+	configFileReader, err := os.Open(configFile)
+	exitOnError(err, "Error opening config file")
 
-		if configFile == "" && httpAddress == "" && os.Getenv("GUBER_GRPC_ADDRESS") == "" {
-			return errors.New("please provide a GRPC endpoint via -e or from a config " +
-				"file via -config or set the env GUBER_GRPC_ADDRESS")
-		}
+	conf, err := guber.SetupDaemonConfig(log, configFileReader)
+	exitOnError(err, "Error parsing config file")
 
-		err = guber.SetupTLS(conf.TLS)
-		if err != nil {
-			return err
-		}
+	set.Override(&conf.HTTPListenAddress, httpAddress)
 
-		log.LogAttrs(context.TODO(), slog.LevelInfo, "Connecting to",
-			slog.String("address", conf.HTTPListenAddress),
-		)
-		client, err = guber.NewClient(guber.WithDaemonConfig(conf, conf.HTTPListenAddress))
-		return err
-	})
-
-	if err != nil {
-		log.LogAttrs(context.TODO(), slog.LevelError, err.Error(),
-			guber.ErrAttr(err),
-		)
-		return
+	if configFile == "" && httpAddress == "" && os.Getenv("GUBER_GRPC_ADDRESS") == "" {
+		log.Error("please provide a GRPC endpoint via -e or from a config " +
+			"file via -config or set the env GUBER_GRPC_ADDRESS")
+		os.Exit(1)
 	}
+
+	err = guber.SetupTLS(conf.TLS)
+	exitOnError(err, "Error setting up TLS")
+
+	log.LogAttrs(context.TODO(), slog.LevelInfo, "Connecting to",
+		slog.String("address", conf.HTTPListenAddress),
+	)
+	client, err = guber.NewClient(guber.WithDaemonConfig(conf, conf.HTTPListenAddress))
+	exitOnError(err, "Error creating client")
 
 	// Generate a selection of rate limits with random limits.
 	var rateLimits []*guber.RateLimitRequest
@@ -150,7 +136,7 @@ func main() {
 		})
 	}
 
-	fan := syncutil.NewFanOut(int(concurrency))
+	fan := wait.NewFanOut(int(concurrency))
 	var limiter *rate.Limiter
 	if reqRate > 0 {
 		l := rate.Limit(reqRate)
@@ -167,26 +153,15 @@ func main() {
 				Requests: rateLimits[i:min(i+int(checksPerRequest), len(rateLimits))],
 			}
 
-			fan.Run(func(obj interface{}) error {
-				req := obj.(*guber.CheckRateLimitsRequest)
-
+			fan.Run(func() error {
 				if reqRate > 0 {
 					_ = limiter.Wait(ctx)
 				}
-
 				sendRequest(ctx, client, req)
-
 				return nil
-			}, req)
+			})
 		}
 	}
-}
-
-func min(a, b int) int {
-	if a <= b {
-		return a
-	}
-	return b
 }
 
 func randInt(min, max int) int {
@@ -194,7 +169,7 @@ func randInt(min, max int) int {
 }
 
 func sendRequest(ctx context.Context, client guber.Client, req *guber.CheckRateLimitsRequest) {
-	ctx = tracing.StartScope(ctx)
+	ctx = tracing.StartScope(ctx, "sendRequest")
 	defer tracing.EndScope(ctx, nil)
 
 	ctx, cancel := context.WithTimeout(ctx, timeout)
@@ -239,5 +214,12 @@ func sendRequest(ctx context.Context, client guber.Client, req *guber.CheckRateL
 				slog.String("value", dumpResp),
 			)
 		}
+	}
+}
+
+func exitOnError(err error, msg string) {
+	if err != nil {
+		fmt.Printf("%s: %s\n", msg, err)
+		os.Exit(1)
 	}
 }

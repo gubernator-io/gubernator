@@ -19,14 +19,14 @@ package gubernator
 import (
 	"net"
 	"os"
+	"slices"
 
-	"github.com/mailgun/holster/v4/slice"
 	"github.com/pkg/errors"
 )
 
 // ResolveHostIP attempts to discover the actual ip address of the host if the passed address is "0.0.0.0" or "::"
 func ResolveHostIP(addr string) (string, error) {
-	if slice.ContainsString(addr, []string{"0.0.0.0", "::", "0:0:0:0:0:0:0:0", ""}, nil) {
+	if slices.Contains([]string{"0.0.0.0", "::", "0:0:0:0:0:0:0:0", ""}, addr) {
 		// Use the hostname as the advertise address as it's most likely to be the external interface
 		domainName, err := os.Hostname()
 		if err != nil {

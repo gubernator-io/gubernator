@@ -19,14 +19,14 @@ lint: $(GOLANGCI_LINT) ## Run Go linter
 tidy:
 	go mod tidy && git diff --exit-code
 
-.PHONY: validate
-validate: tidy lint test bench
+.PHONY: ci
+ci: tidy lint test bench
 	@echo
 	@echo "\033[32mEVERYTHING PASSED!\033[0m"
 
 .PHONY: test
 test: ## Run unit tests and measure code coverage
-	(go test -v -race -p=1 -count=1 -tags holster_test_mode -coverprofile coverage.out ./...; ret=$$?; \
+	(go test -v -race -p=1 -count=1 -tags clock_mutex -coverprofile coverage.out ./...; ret=$$?; \
 		go tool cover -func coverage.out; \
 		go tool cover -html coverage.out -o coverage.html; \
 		exit $$ret)
