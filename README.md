@@ -15,7 +15,6 @@ Gubernator is a distributed, high performance, cloud native and stateless rate-l
   kubernetes or nomad trivial.
 * Gubernator holds no state on disk, It’s configuration is passed to it by the
   client on a per-request basis.
-* Gubernator provides both GRPC and HTTP access to the API.
 * It Can be run as a sidecar to services that need rate limiting or as a separate service.
 * It Can be used as a library to implement a domain-specific rate limiting service.
 * Supports optional eventually consistent rate limit distribution for extremely
@@ -38,8 +37,10 @@ $ docker-compose up -d
 ```
 Now you can make rate limit requests via CURL
 ```
-# Hit the HTTP API at localhost:1050 (GRPC is at 1051)
-$ curl http://localhost:1050/v1/HealthCheck
+# Hit the HTTP API at localhost:9080
+$ curl http://localhost:9080/v1/health.check
+
+# TODO: Update this example
 
 # Make a rate limit request
 $ curl http://localhost:1050/v1/GetRateLimits \
@@ -59,7 +60,7 @@ $ curl http://localhost:1050/v1/GetRateLimits \
 
 ### ProtoBuf Structure
 
-An example rate limit request sent via GRPC might look like the following
+An example rate limit request sent with protobuf might look like the following
 ```yaml
 rate_limits:
     # Scopes the request to a specific rate limit
@@ -214,7 +215,7 @@ limiting service.
 
 When you use the library, your service becomes a full member of the cluster
 participating in the same consistent hashing and caching as a stand alone
-Gubernator server would. All you need to do is provide the GRPC server instance
+Gubernator server would. All you need to do is provide the server instance
 and tell Gubernator where the peers in your cluster are located. The
 `cmd/gubernator/main.go` is a great example of how to use Gubernator as a
 library.
@@ -238,21 +239,13 @@ to support rate limit durations longer than a minute, day or month, calls to
 those rate limits that have durations over a self determined limit.
 
 ### API
-All methods are accessed via GRPC but are also exposed via HTTP using the
-[GRPC Gateway](https://github.com/grpc-ecosystem/grpc-gateway)
 
 #### Health Check
 Health check returns `unhealthy` in the event a peer is reported by etcd or kubernetes
  as `up` but the server instance is unable to contact that peer via it's advertised address.
 
-###### GRPC
-```grpc
-rpc HealthCheck (HealthCheckReq) returns (HealthCheckResp)
 ```
-
-###### HTTP
-```
-GET /v1/HealthCheck
+GET /v1/health.check
 ```
 
 Example response:
@@ -269,14 +262,8 @@ Rate limits can be applied or retrieved using this interface. If the client
 makes a request to the server with `hits: 0` then current state of the rate 
 limit is retrieved but not incremented.
 
-###### GRPC
-```grpc
-rpc GetRateLimits (GetRateLimitsReq) returns (GetRateLimitsResp)
 ```
-
-###### HTTP
-```
-POST /v1/GetRateLimits
+POST /v1/rate-limit.check
 ```
 
 Example Payload
@@ -285,7 +272,7 @@ Example Payload
   "requests": [
     {
       "name": "requests_per_sec",
-      "uniqueKey": "account:12345",
+      "unique_key": "account:12345",
       "hits": "1",
       "limit": "10",
       "duration": "1000"
@@ -314,19 +301,9 @@ Example response:
 ```
 
 ### Deployment
-NOTE: Gubernator uses `etcd`, Kubernetes or round-robin DNS to discover peers and
+NOTE: Gubernator uses `memberlist` Kubernetes or round-robin DNS to discover peers and
 establish a cluster. If you don't have either, the docker-compose method is the
 simplest way to try gubernator out.
-
-
-##### Docker with existing etcd cluster
-```bash
-$ docker run -p 1051:1051 -p 1050:1050 -e GUBER_ETCD_ENDPOINTS=etcd1:2379,etcd2:2379 \
-   ghcr.io/gubernator-io/gubernator:latest
-
-# Hit the HTTP API at localhost:1050
-$ curl http://localhost:1050/v1/HealthCheck
-```
 
 ##### Kubernetes
 ```bash
@@ -346,14 +323,15 @@ you can use same fully-qualified domain name to both let your business logic con
 instances to find `gubernator` and for `gubernator` containers/instances to find each other.
 
 ##### TLS
-Gubernator supports TLS for both HTTP and GRPC connections. You can see an example with
-self signed certs by running `docker-compose-tls.yaml`
+Gubernator supports TLS. You can see an example with self-signed certs by running
+`docker-compose-tls.yaml`
 ```bash
 # Run docker compose
 $ docker-compose -f docker-compose-tls.yaml up -d
 
-# Hit the HTTP API at localhost:1050 (GRPC is at 1051)
-$ curl --cacert certs/ca.cert --cert certs/gubernator.pem --key certs/gubernator.key  https://localhost:1050/v1/HealthCheck
+# Hit the HTTP API at localhost:9080
++$ curl -X POST --cacert certs/ca.cert --cert certs/gubernator.pem \ 
+  --key certs/gubernator.key  https://localhost:9080/v1/health.check
 ```
 
 ### Configuration

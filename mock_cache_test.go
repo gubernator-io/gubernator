@@ -19,7 +19,7 @@ package gubernator_test
 // Mock implementation of Cache.
 
 import (
-	guber "github.com/gubernator-io/gubernator/v2"
+	guber "github.com/gubernator-io/gubernator/v3"
 	"github.com/stretchr/testify/mock"
 )
 
@@ -29,13 +29,8 @@ type MockCache struct {
 
 var _ guber.Cache = &MockCache{}
 
-func (m *MockCache) Add(item *guber.CacheItem) bool {
+func (m *MockCache) AddIfNotPresent(item *guber.CacheItem) bool {
 	args := m.Called(item)
-	return args.Bool(0)
-}
-
-func (m *MockCache) UpdateExpiration(key string, expireAt int64) bool {
-	args := m.Called(key, expireAt)
 	return args.Bool(0)
 }
 
@@ -58,6 +53,10 @@ func (m *MockCache) Remove(key string) {
 func (m *MockCache) Size() int64 {
 	args := m.Called()
 	return int64(args.Int(0))
+}
+
+func (m *MockCache) Stats() guber.CacheStats {
+	return guber.CacheStats{}
 }
 
 func (m *MockCache) Close() error {

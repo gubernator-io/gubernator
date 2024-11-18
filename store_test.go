@@ -19,80 +19,43 @@ package gubernator_test
 import (
 	"context"
 	"fmt"
-	"net"
+	"sync"
 	"testing"
 
-	"github.com/gubernator-io/gubernator/v2"
+	"github.com/gubernator-io/gubernator/v3"
 	"github.com/mailgun/holster/v4/clock"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
-	"google.golang.org/grpc"
 )
-
-type v1Server struct {
-	conf     gubernator.Config
-	listener net.Listener
-	srv      *gubernator.V1Instance
-}
-
-func (s *v1Server) Close() error {
-	s.conf.GRPCServers[0].GracefulStop()
-	return s.srv.Close()
-}
-
-// Start a single instance of V1Server with the provided config and listening address.
-func newV1Server(t *testing.T, address string, conf gubernator.Config) *v1Server {
-	t.Helper()
-	conf.GRPCServers = append(conf.GRPCServers, grpc.NewServer())
-
-	srv, err := gubernator.NewV1Instance(conf)
-	require.NoError(t, err)
-
-	listener, err := net.Listen("tcp", address)
-	require.NoError(t, err)
-
-	go func() {
-		if err := conf.GRPCServers[0].Serve(listener); err != nil {
-			fmt.Printf("while serving: %s\n", err)
-		}
-	}()
-
-	srv.SetPeers([]gubernator.PeerInfo{{GRPCAddress: listener.Addr().String(), IsOwner: true}})
-
-	ctx, cancel := context.WithTimeout(context.Background(), clock.Second*10)
-
-	err = gubernator.WaitForConnect(ctx, []string{listener.Addr().String()})
-	require.NoError(t, err)
-	cancel()
-
-	return &v1Server{
-		conf:     conf,
-		listener: listener,
-		srv:      srv,
-	}
-}
 
 func TestLoader(t *testing.T) {
 	loader := gubernator.NewMockLoader()
 
-	srv := newV1Server(t, "localhost:0", gubernator.Config{
+	d, err := gubernator.SpawnDaemon(context.Background(), gubernator.DaemonConfig{
+		HTTPListenAddress: "localhost:0",
 		Behaviors: gubernator.BehaviorConfig{
+			// Suitable for testing but not production
 			GlobalSyncWait: clock.Millisecond * 50, // Suitable for testing but not production
 			GlobalTimeout:  clock.Second,
 		},
 		Loader: loader,
 	})
 
+	assert.NoError(t, err)
+	conf := d.Config()
+	d.SetPeers([]gubernator.PeerInfo{{HTTPAddress: conf.HTTPListenAddress, IsOwner: true}})
+
 	// loader.Load() should have been called for gubernator startup
 	assert.Equal(t, 1, loader.Called["Load()"])
 	assert.Equal(t, 0, loader.Called["Save()"])
 
-	client, err := gubernator.DialV1Server(srv.listener.Addr().String(), nil)
-	assert.Nil(t, err)
+	client, err := gubernator.NewClient(gubernator.WithNoTLS(d.Listener.Addr().String()))
+	assert.NoError(t, err)
 
-	resp, err := client.GetRateLimits(context.Background(), &gubernator.GetRateLimitsReq{
-		Requests: []*gubernator.RateLimitReq{
+	var resp gubernator.CheckRateLimitsResponse
+	err = client.CheckRateLimits(context.Background(), &gubernator.CheckRateLimitsRequest{
+		Requests: []*gubernator.RateLimitRequest{
 			{
 				Name:      "test_over_limit",
 				UniqueKey: "account:1234",
@@ -102,14 +65,12 @@ func TestLoader(t *testing.T) {
 				Hits:      1,
 			},
 		},
-	})
-	require.Nil(t, err)
-	require.NotNil(t, resp)
+	}, &resp)
+	require.NoError(t, err)
 	require.Equal(t, 1, len(resp.Responses))
 	require.Equal(t, "", resp.Responses[0].Error)
 
-	err = srv.Close()
-	require.NoError(t, err, "Error in srv.Close")
+	d.Close(context.Background())
 
 	// Loader.Save() should been called during gubernator shutdown
 	assert.Equal(t, 1, loader.Called["Load()"])
@@ -124,33 +85,138 @@ func TestLoader(t *testing.T) {
 	assert.Equal(t, gubernator.Status_UNDER_LIMIT, item.Status)
 }
 
+type NoOpStore struct{}
+
+func (ms *NoOpStore) Remove(ctx context.Context, key string) {}
+func (ms *NoOpStore) OnChange(ctx context.Context, r *gubernator.RateLimitRequest, item *gubernator.CacheItem) {
+}
+
+func (ms *NoOpStore) Get(ctx context.Context, r *gubernator.RateLimitRequest) (*gubernator.CacheItem, bool) {
+	return &gubernator.CacheItem{
+		Algorithm: gubernator.Algorithm_TOKEN_BUCKET,
+		Key:       r.HashKey(),
+		Value: gubernator.TokenBucketItem{
+			CreatedAt: gubernator.MillisecondNow(),
+			Duration:  gubernator.Minute * 60,
+			Limit:     1_000,
+			Remaining: 1_000,
+			Status:    0,
+		},
+		ExpireAt: 0,
+	}, true
+}
+
+// The goal of this test is to generate some race conditions where multiple routines load from the store and or
+// add items to the cache in parallel thus creating a race condition the code must then handle.
+func TestHighContentionFromStore(t *testing.T) {
+	const (
+		// Increase these number to improve the chance of contention, but at the cost of test speed.
+		numGoroutines = 150
+		numKeys       = 100
+	)
+	store := &NoOpStore{}
+	d, err := gubernator.SpawnDaemon(context.Background(), gubernator.DaemonConfig{
+		HTTPListenAddress: "localhost:0",
+		Behaviors: gubernator.BehaviorConfig{
+			// Suitable for testing but not production
+			GlobalSyncWait: clock.Millisecond * 50, // Suitable for testing but not production
+			GlobalTimeout:  clock.Second,
+		},
+		Store: store,
+	})
+	require.NoError(t, err)
+	d.SetPeers([]gubernator.PeerInfo{{HTTPAddress: d.Config().HTTPListenAddress, IsOwner: true}})
+
+	keys := GenerateRandomKeys(numKeys)
+
+	var wg sync.WaitGroup
+	var ready sync.WaitGroup
+	wg.Add(numGoroutines)
+	ready.Add(numGoroutines)
+
+	for i := 0; i < numGoroutines; i++ {
+		go func() {
+			// Create a client for each concurrent request to avoid contention in the client
+			client, err := gubernator.NewClient(gubernator.WithNoTLS(d.Listener.Addr().String()))
+			require.NoError(t, err)
+			ready.Wait()
+			for idx := 0; idx < numKeys; idx++ {
+				var resp gubernator.CheckRateLimitsResponse
+				err := client.CheckRateLimits(context.Background(), &gubernator.CheckRateLimitsRequest{
+					Requests: []*gubernator.RateLimitRequest{
+						{
+							Name:      keys[idx],
+							UniqueKey: "high_contention_",
+							Algorithm: gubernator.Algorithm_TOKEN_BUCKET,
+							Duration:  gubernator.Minute * 60,
+							Limit:     numKeys,
+							Hits:      1,
+						},
+					},
+				}, &resp)
+				if err != nil {
+					// NOTE: you may see `connection reset by peer` if the server is overloaded
+					// and needs to forcibly drop some connections due to out of open file handlers etc...
+					fmt.Printf("%s\n", err)
+				}
+			}
+			wg.Done()
+		}()
+		ready.Done()
+	}
+	wg.Wait()
+
+	for idx := 0; idx < numKeys; idx++ {
+		var resp gubernator.CheckRateLimitsResponse
+		err := d.MustClient().CheckRateLimits(context.Background(), &gubernator.CheckRateLimitsRequest{
+			Requests: []*gubernator.RateLimitRequest{
+				{
+					Name:      keys[idx],
+					UniqueKey: "high_contention_",
+					Algorithm: gubernator.Algorithm_TOKEN_BUCKET,
+					Duration:  gubernator.Minute * 60,
+					Limit:     numKeys,
+					Hits:      0,
+				},
+			},
+		}, &resp)
+		require.NoError(t, err)
+		assert.Equal(t, int64(0), resp.Responses[0].Remaining)
+	}
+
+	assert.NoError(t, d.Close(context.Background()))
+}
+
 func TestStore(t *testing.T) {
 	ctx := context.Background()
-	setup := func() (*MockStore2, *v1Server, gubernator.V1Client) {
+	setup := func() (*MockStore2, *gubernator.Daemon, gubernator.Client) {
 		store := &MockStore2{}
 
-		srv := newV1Server(t, "localhost:0", gubernator.Config{
+		d, err := gubernator.SpawnDaemon(context.Background(), gubernator.DaemonConfig{
+			HTTPListenAddress: "localhost:0",
 			Behaviors: gubernator.BehaviorConfig{
-				GlobalSyncWait: clock.Millisecond * 50, // Suitable for testing but not production
+				GlobalSyncWait: clock.Millisecond * 50,
 				GlobalTimeout:  clock.Second,
 			},
 			Store: store,
 		})
+		assert.NoError(t, err)
+		conf := d.Config()
+		d.SetPeers([]gubernator.PeerInfo{{HTTPAddress: conf.HTTPListenAddress, IsOwner: true}})
 
-		client, err := gubernator.DialV1Server(srv.listener.Addr().String(), nil)
+		client, err := gubernator.NewClient(gubernator.WithNoTLS(d.Listener.Addr().String()))
 		require.NoError(t, err)
 
-		return store, srv, client
+		return store, d, client
 	}
 
-	tearDown := func(srv *v1Server) {
-		err := srv.Close()
-		require.NoError(t, err)
+	tearDown := func(d *gubernator.Daemon) {
+		d.Close(context.Background())
 	}
 
 	// Create a mock argument matcher for a request by name/key.
-	matchReq := func(req *gubernator.RateLimitReq) interface{} {
-		return mock.MatchedBy(func(req2 *gubernator.RateLimitReq) bool {
+	matchReq := func(req *gubernator.RateLimitRequest) interface{} {
+		return mock.MatchedBy(func(req2 *gubernator.RateLimitRequest) bool {
 			return req2.Name == req.Name &&
 				req2.UniqueKey == req.UniqueKey
 		})
@@ -158,7 +224,7 @@ func TestStore(t *testing.T) {
 
 	// Create a mock argument matcher for CacheItem input.
 	// Verify item matches expected algorithm, limit, and duration.
-	matchItem := func(req *gubernator.RateLimitReq) interface{} {
+	matchItem := func(req *gubernator.RateLimitRequest) interface{} {
 		switch req.Algorithm {
 		case gubernator.Algorithm_TOKEN_BUCKET:
 			return mock.MatchedBy(func(item *gubernator.CacheItem) bool {
@@ -193,7 +259,7 @@ func TestStore(t *testing.T) {
 	}
 
 	// Create a bucket item matching the request.
-	createBucketItem := func(req *gubernator.RateLimitReq) interface{} {
+	createBucketItem := func(req *gubernator.RateLimitRequest) interface{} {
 		switch req.Algorithm {
 		case gubernator.Algorithm_TOKEN_BUCKET:
 			return &gubernator.TokenBucketItem{
@@ -230,7 +296,7 @@ func TestStore(t *testing.T) {
 				store, srv, client := setup()
 				defer tearDown(srv)
 
-				req := &gubernator.RateLimitReq{
+				req := &gubernator.RateLimitRequest{
 					Name:      "test_over_limit",
 					UniqueKey: "account:1234",
 					Algorithm: testCase.Algorithm,
@@ -244,12 +310,13 @@ func TestStore(t *testing.T) {
 				store.On("OnChange", mock.Anything, matchReq(req), matchItem(req)).Once()
 
 				// Call code.
-				resp, err := client.GetRateLimits(ctx, &gubernator.GetRateLimitsReq{
-					Requests: []*gubernator.RateLimitReq{req},
-				})
+				var resp gubernator.CheckRateLimitsResponse
+				err := client.CheckRateLimits(ctx, &gubernator.CheckRateLimitsRequest{
+					Requests: []*gubernator.RateLimitRequest{req},
+				}, &resp)
 				require.NoError(t, err)
-				require.NotNil(t, resp)
 				assert.Len(t, resp.Responses, 1)
+				assert.Equal(t, "", resp.Responses[0].Error)
 				assert.Equal(t, req.Limit, resp.Responses[0].Limit)
 				assert.Equal(t, gubernator.Status_UNDER_LIMIT, resp.Responses[0].Status)
 				store.AssertExpectations(t)
@@ -259,12 +326,13 @@ func TestStore(t *testing.T) {
 					store.On("OnChange", mock.Anything, matchReq(req), matchItem(req)).Once()
 
 					// Call code.
-					resp, err := client.GetRateLimits(ctx, &gubernator.GetRateLimitsReq{
-						Requests: []*gubernator.RateLimitReq{req},
-					})
+					var resp gubernator.CheckRateLimitsResponse
+					err := client.CheckRateLimits(ctx, &gubernator.CheckRateLimitsRequest{
+						Requests: []*gubernator.RateLimitRequest{req},
+					}, &resp)
 					require.NoError(t, err)
-					require.NotNil(t, resp)
 					assert.Len(t, resp.Responses, 1)
+					assert.Equal(t, "", resp.Responses[0].Error)
 					assert.Equal(t, req.Limit, resp.Responses[0].Limit)
 					assert.Equal(t, gubernator.Status_UNDER_LIMIT, resp.Responses[0].Status)
 					store.AssertExpectations(t)
@@ -275,7 +343,7 @@ func TestStore(t *testing.T) {
 				store, srv, client := setup()
 				defer tearDown(srv)
 
-				req := &gubernator.RateLimitReq{
+				req := &gubernator.RateLimitRequest{
 					Name:      "test_over_limit",
 					UniqueKey: "account:1234",
 					Algorithm: testCase.Algorithm,
@@ -298,12 +366,13 @@ func TestStore(t *testing.T) {
 				store.On("OnChange", mock.Anything, matchReq(req), matchItem(req)).Once()
 
 				// Call code.
-				resp, err := client.GetRateLimits(ctx, &gubernator.GetRateLimitsReq{
-					Requests: []*gubernator.RateLimitReq{req},
-				})
+				var resp gubernator.CheckRateLimitsResponse
+				err := client.CheckRateLimits(ctx, &gubernator.CheckRateLimitsRequest{
+					Requests: []*gubernator.RateLimitRequest{req},
+				}, &resp)
 				require.NoError(t, err)
-				require.NotNil(t, resp)
 				assert.Len(t, resp.Responses, 1)
+				assert.Equal(t, "", resp.Responses[0].Error)
 				assert.Equal(t, req.Limit, resp.Responses[0].Limit)
 				assert.Equal(t, gubernator.Status_UNDER_LIMIT, resp.Responses[0].Status)
 				store.AssertExpectations(t)
@@ -314,7 +383,7 @@ func TestStore(t *testing.T) {
 				store, srv, client := setup()
 				defer tearDown(srv)
 
-				req := &gubernator.RateLimitReq{
+				req := &gubernator.RateLimitRequest{
 					Name:      "test_over_limit",
 					UniqueKey: "account:1234",
 					Algorithm: testCase.Algorithm,
@@ -338,12 +407,13 @@ func TestStore(t *testing.T) {
 				store.On("OnChange", mock.Anything, matchReq(req), matchItem(req)).Once()
 
 				// Call code.
-				resp, err := client.GetRateLimits(ctx, &gubernator.GetRateLimitsReq{
-					Requests: []*gubernator.RateLimitReq{req},
-				})
+				var resp gubernator.CheckRateLimitsResponse
+				err := client.CheckRateLimits(ctx, &gubernator.CheckRateLimitsRequest{
+					Requests: []*gubernator.RateLimitRequest{req},
+				}, &resp)
 				require.NoError(t, err)
-				require.NotNil(t, resp)
 				assert.Len(t, resp.Responses, 1)
+				assert.Equal(t, "", resp.Responses[0].Error)
 				assert.Equal(t, req.Limit, resp.Responses[0].Limit)
 				assert.Equal(t, gubernator.Status_UNDER_LIMIT, resp.Responses[0].Status)
 				store.AssertExpectations(t)
@@ -360,7 +430,7 @@ func TestStore(t *testing.T) {
 
 					oldDuration := int64(5000)
 					newDuration := int64(8000)
-					req := &gubernator.RateLimitReq{
+					req := &gubernator.RateLimitRequest{
 						Name:      "test_over_limit",
 						UniqueKey: "account:1234",
 						Algorithm: testCase.Algorithm,
@@ -427,12 +497,13 @@ func TestStore(t *testing.T) {
 						Once()
 
 					// Call code.
-					resp, err := client.GetRateLimits(ctx, &gubernator.GetRateLimitsReq{
-						Requests: []*gubernator.RateLimitReq{req},
-					})
+					var resp gubernator.CheckRateLimitsResponse
+					err := client.CheckRateLimits(ctx, &gubernator.CheckRateLimitsRequest{
+						Requests: []*gubernator.RateLimitRequest{req},
+					}, &resp)
 					require.NoError(t, err)
-					require.NotNil(t, resp)
 					assert.Len(t, resp.Responses, 1)
+					assert.Equal(t, "", resp.Responses[0].Error)
 					assert.Equal(t, req.Limit, resp.Responses[0].Limit)
 					assert.Equal(t, gubernator.Status_UNDER_LIMIT, resp.Responses[0].Status)
 					store.AssertExpectations(t)
@@ -447,7 +518,7 @@ func TestStore(t *testing.T) {
 
 					oldDuration := int64(500000)
 					newDuration := int64(8000)
-					req := &gubernator.RateLimitReq{
+					req := &gubernator.RateLimitRequest{
 						Name:      "test_over_limit",
 						UniqueKey: "account:1234",
 						Algorithm: testCase.Algorithm,
@@ -517,12 +588,13 @@ func TestStore(t *testing.T) {
 						Once()
 
 					// Call code.
-					resp, err := client.GetRateLimits(ctx, &gubernator.GetRateLimitsReq{
-						Requests: []*gubernator.RateLimitReq{req},
-					})
+					var resp gubernator.CheckRateLimitsResponse
+					err := client.CheckRateLimits(ctx, &gubernator.CheckRateLimitsRequest{
+						Requests: []*gubernator.RateLimitRequest{req},
+					}, &resp)
 					require.NoError(t, err)
-					require.NotNil(t, resp)
 					assert.Len(t, resp.Responses, 1)
+					assert.Equal(t, "", resp.Responses[0].Error)
 					assert.Equal(t, req.Limit, resp.Responses[0].Limit)
 					assert.Equal(t, gubernator.Status_UNDER_LIMIT, resp.Responses[0].Status)
 					store.AssertExpectations(t)

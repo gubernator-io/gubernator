@@ -18,14 +18,39 @@ package gubernator_test
 
 import (
 	"context"
+	"fmt"
+	"math/rand"
+	"runtime"
 	"testing"
 
-	guber "github.com/gubernator-io/gubernator/v2"
-	"github.com/gubernator-io/gubernator/v2/cluster"
+	guber "github.com/gubernator-io/gubernator/v3"
+	"github.com/gubernator-io/gubernator/v3/cluster"
 	"github.com/mailgun/holster/v4/clock"
-	"github.com/mailgun/holster/v4/syncutil"
 	"github.com/stretchr/testify/require"
 )
+
+// go test benchmark_test.go -bench=BenchmarkTrace -benchtime=20s -trace=trace.out
+// go tool trace trace.out
+//func BenchmarkTrace(b *testing.B) {
+//	if err := cluster.StartWith([]guber.PeerInfo{
+//		{HTTPAddress: "127.0.0.1:7980", DataCenter: cluster.DataCenterNone},
+//		{HTTPAddress: "127.0.0.1:7981", DataCenter: cluster.DataCenterNone},
+//		{HTTPAddress: "127.0.0.1:7982", DataCenter: cluster.DataCenterNone},
+//		{HTTPAddress: "127.0.0.1:7983", DataCenter: cluster.DataCenterNone},
+//		{HTTPAddress: "127.0.0.1:7984", DataCenter: cluster.DataCenterNone},
+//		{HTTPAddress: "127.0.0.1:7985", DataCenter: cluster.DataCenterNone},
+//
+//		// DataCenterOne
+//		{HTTPAddress: "127.0.0.1:9880", DataCenter: cluster.DataCenterOne},
+//		{HTTPAddress: "127.0.0.1:9881", DataCenter: cluster.DataCenterOne},
+//		{HTTPAddress: "127.0.0.1:9882", DataCenter: cluster.DataCenterOne},
+//		{HTTPAddress: "127.0.0.1:9883", DataCenter: cluster.DataCenterOne},
+//	}); err != nil {
+//		fmt.Println(err)
+//		os.Exit(1)
+//	}
+//	defer cluster.Stop(context.Background())
+//}
 
 func BenchmarkServer(b *testing.B) {
 	ctx := context.Background()
@@ -33,41 +58,42 @@ func BenchmarkServer(b *testing.B) {
 	err := conf.SetDefaults()
 	require.NoError(b, err, "Error in conf.SetDefaults")
 	createdAt := epochMillis(clock.Now())
+	d := cluster.GetRandomDaemon(cluster.DataCenterNone)
 
-	b.Run("GetPeerRateLimit", func(b *testing.B) {
-		client, err := guber.NewPeerClient(guber.PeerConfig{
-			Info:     cluster.GetRandomPeer(cluster.DataCenterNone),
-			Behavior: conf.Behaviors,
-		})
-		if err != nil {
-			b.Errorf("Error building client: %s", err)
-		}
+	b.Run("Forward", func(b *testing.B) {
+		client := d.MustClient().(guber.PeerClient)
 		b.ResetTimer()
 
 		for n := 0; n < b.N; n++ {
-			_, err := client.GetPeerRateLimit(ctx, &guber.RateLimitReq{
-				Name:      b.Name(),
-				UniqueKey: guber.RandomString(10),
-				// Behavior:    guber.Behavior_NO_BATCHING,
-				Limit:     10,
-				Duration:  5,
-				Hits:      1,
-				CreatedAt: &createdAt,
-			})
+			var resp guber.ForwardResponse
+			err := client.Forward(ctx, &guber.ForwardRequest{
+				Requests: []*guber.RateLimitRequest{
+					{
+						Name:      b.Name(),
+						UniqueKey: guber.RandomString(10),
+						// Behavior:    guber.Behavior_NO_BATCHING,
+						Limit:     10,
+						Duration:  5,
+						Hits:      1,
+						CreatedAt: &createdAt,
+					},
+				},
+			}, &resp)
 			if err != nil {
 				b.Errorf("Error in client.GetPeerRateLimit: %s", err)
 			}
 		}
 	})
 
-	b.Run("GetRateLimits batching", func(b *testing.B) {
-		client, err := guber.DialV1Server(cluster.GetRandomPeer(cluster.DataCenterNone).GRPCAddress, nil)
-		require.NoError(b, err, "Error in guber.DialV1Server")
+	b.Run("CheckRateLimits batching", func(b *testing.B) {
+		client := cluster.GetRandomDaemon(cluster.DataCenterNone).MustClient()
+		require.NoError(b, err)
 		b.ResetTimer()
 
 		for n := 0; n < b.N; n++ {
-			_, err := client.GetRateLimits(ctx, &guber.GetRateLimitsReq{
-				Requests: []*guber.RateLimitReq{
+			var resp guber.CheckRateLimitsResponse
+			err := client.CheckRateLimits(ctx, &guber.CheckRateLimitsRequest{
+				Requests: []*guber.RateLimitRequest{
 					{
 						Name:      b.Name(),
 						UniqueKey: guber.RandomString(10),
@@ -76,21 +102,22 @@ func BenchmarkServer(b *testing.B) {
 						Hits:      1,
 					},
 				},
-			})
+			}, &resp)
 			if err != nil {
 				b.Errorf("Error in client.GetRateLimits(): %s", err)
 			}
 		}
 	})
 
-	b.Run("GetRateLimits global", func(b *testing.B) {
-		client, err := guber.DialV1Server(cluster.GetRandomPeer(cluster.DataCenterNone).GRPCAddress, nil)
-		require.NoError(b, err, "Error in guber.DialV1Server")
+	b.Run("CheckRateLimits global", func(b *testing.B) {
+		client := cluster.GetRandomDaemon(cluster.DataCenterNone).MustClient()
+		require.NoError(b, err)
 		b.ResetTimer()
 
 		for n := 0; n < b.N; n++ {
-			_, err := client.GetRateLimits(ctx, &guber.GetRateLimitsReq{
-				Requests: []*guber.RateLimitReq{
+			var resp guber.CheckRateLimitsResponse
+			err := client.CheckRateLimits(ctx, &guber.CheckRateLimitsRequest{
+				Requests: []*guber.RateLimitRequest{
 					{
 						Name:      b.Name(),
 						UniqueKey: guber.RandomString(10),
@@ -100,49 +127,97 @@ func BenchmarkServer(b *testing.B) {
 						Hits:      1,
 					},
 				},
-			})
+			}, &resp)
 			if err != nil {
-				b.Errorf("Error in client.GetRateLimits: %s", err)
+				b.Errorf("Error in client.CheckRateLimits: %s", err)
 			}
 		}
 	})
 
 	b.Run("HealthCheck", func(b *testing.B) {
-		client, err := guber.DialV1Server(cluster.GetRandomPeer(cluster.DataCenterNone).GRPCAddress, nil)
-		require.NoError(b, err, "Error in guber.DialV1Server")
+		client := cluster.GetRandomDaemon(cluster.DataCenterNone).MustClient()
+		require.NoError(b, err)
 		b.ResetTimer()
 
 		for n := 0; n < b.N; n++ {
-			if _, err := client.HealthCheck(ctx, &guber.HealthCheckReq{}); err != nil {
+			var resp guber.HealthCheckResponse
+			if err := client.HealthCheck(ctx, &resp); err != nil {
 				b.Errorf("Error in client.HealthCheck: %s", err)
 			}
 		}
 	})
 
-	b.Run("Thundering herd", func(b *testing.B) {
-		client, err := guber.DialV1Server(cluster.GetRandomPeer(cluster.DataCenterNone).GRPCAddress, nil)
-		require.NoError(b, err, "Error in guber.DialV1Server")
-		b.ResetTimer()
-		fan := syncutil.NewFanOut(100)
+	b.Run("Concurrency CheckRateLimits", func(b *testing.B) {
+		var clients []guber.Client
 
-		for n := 0; n < b.N; n++ {
-			fan.Run(func(o interface{}) error {
-				_, err := client.GetRateLimits(ctx, &guber.GetRateLimitsReq{
-					Requests: []*guber.RateLimitReq{
+		// Create a client for each CPU on the system. This should allow us to simulate the
+		// maximum contention possible for this system.
+		for i := 0; i < runtime.NumCPU(); i++ {
+			client, err := guber.NewClient(guber.WithNoTLS(d.Listener.Addr().String()))
+			require.NoError(b, err)
+			clients = append(clients, client)
+		}
+
+		keys := GenerateRandomKeys(8_000)
+		keyMask := len(keys) - 1
+		clientMask := len(clients) - 1
+		var idx int
+
+		b.ResetTimer()
+		b.RunParallel(func(pb *testing.PB) {
+			client := clients[idx&clientMask]
+			idx++
+
+			for pb.Next() {
+				keyIdx := int(rand.Uint32() & uint32(clientMask))
+				var resp guber.CheckRateLimitsResponse
+				err = client.CheckRateLimits(ctx, &guber.CheckRateLimitsRequest{
+					Requests: []*guber.RateLimitRequest{
 						{
 							Name:      b.Name(),
-							UniqueKey: guber.RandomString(10),
-							Limit:     10,
-							Duration:  guber.Second * 5,
+							UniqueKey: keys[keyIdx&keyMask],
+							Behavior:  guber.Behavior_GLOBAL,
+							Duration:  guber.Minute,
+							Limit:     100,
 							Hits:      1,
 						},
 					},
-				})
+				}, &resp)
 				if err != nil {
-					b.Errorf("Error in client.GetRateLimits: %s", err)
+					fmt.Printf("%s\n", err.Error())
 				}
-				return nil
-			}, nil)
+			}
+		})
+
+		for _, client := range clients {
+			_ = client.Close(context.Background())
 		}
+	})
+
+	b.Run("Concurrency HealthCheck", func(b *testing.B) {
+		var clients []guber.Client
+
+		// Create a client for each CPU on the system. This should allow us to simulate the
+		// maximum contention possible for this system.
+		for i := 0; i < runtime.NumCPU(); i++ {
+			client, err := guber.NewClient(guber.WithNoTLS(d.Listener.Addr().String()))
+			require.NoError(b, err)
+			clients = append(clients, client)
+		}
+		mask := len(clients) - 1
+		var idx int
+
+		b.ResetTimer()
+		b.RunParallel(func(pb *testing.PB) {
+			client := clients[idx&mask]
+			idx++
+
+			for pb.Next() {
+				var resp guber.HealthCheckResponse
+				if err := client.HealthCheck(ctx, &resp); err != nil {
+					b.Errorf("Error in client.HealthCheck: %s", err)
+				}
+			}
+		})
 	})
 }

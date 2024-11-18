@@ -17,26 +17,25 @@ limitations under the License.
 package main
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"os/signal"
 
-	"github.com/gubernator-io/gubernator/v2"
-	"github.com/gubernator-io/gubernator/v2/cluster"
-	"github.com/sirupsen/logrus"
+	"github.com/gubernator-io/gubernator/v3"
+	"github.com/gubernator-io/gubernator/v3/cluster"
 )
 
 // Start a cluster of gubernator instances for use in testing clients
 func main() {
-	logrus.SetLevel(logrus.InfoLevel)
 	// Start a local cluster
 	err := cluster.StartWith([]gubernator.PeerInfo{
-		{GRPCAddress: "127.0.0.1:9990", HTTPAddress: "127.0.0.1:9980"},
-		{GRPCAddress: "127.0.0.1:9991", HTTPAddress: "127.0.0.1:9981"},
-		{GRPCAddress: "127.0.0.1:9992", HTTPAddress: "127.0.0.1:9982"},
-		{GRPCAddress: "127.0.0.1:9993", HTTPAddress: "127.0.0.1:9983"},
-		{GRPCAddress: "127.0.0.1:9994", HTTPAddress: "127.0.0.1:9984"},
-		{GRPCAddress: "127.0.0.1:9995", HTTPAddress: "127.0.0.1:9985"},
+		{HTTPAddress: "127.0.0.1:9980"},
+		{HTTPAddress: "127.0.0.1:9981"},
+		{HTTPAddress: "127.0.0.1:9982"},
+		{HTTPAddress: "127.0.0.1:9983"},
+		{HTTPAddress: "127.0.0.1:9984"},
+		{HTTPAddress: "127.0.0.1:9985"},
 	})
 	if err != nil {
 		panic(err)
@@ -49,7 +48,7 @@ func main() {
 	signal.Notify(c, os.Interrupt)
 	for sig := range c {
 		if sig == os.Interrupt {
-			cluster.Stop()
+			cluster.Stop(context.Background())
 			os.Exit(0)
 		}
 	}

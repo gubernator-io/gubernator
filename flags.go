@@ -16,6 +16,11 @@ limitations under the License.
 
 package gubernator
 
+import (
+	"context"
+	"log/slog"
+)
+
 const (
 	FlagOSMetrics MetricFlags = 1 << iota
 	FlagGolangMetrics
@@ -50,7 +55,10 @@ func getEnvMetricFlags(log FieldLogger, name string) MetricFlags {
 		case "golang":
 			result.Set(FlagGolangMetrics, true)
 		default:
-			log.Errorf("invalid flag '%s' for '%s' valid options are ['os', 'golang']", f, name)
+			log.LogAttrs(context.TODO(), slog.LevelError, "invalid flag, valid options are ['os', 'golang']",
+				slog.String("flag", f),
+				slog.String("name", name),
+			)
 		}
 	}
 	return result

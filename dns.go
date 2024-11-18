@@ -18,6 +18,7 @@ package gubernator
 
 import (
 	"context"
+	"log/slog"
 	"math/rand"
 	"net"
 	"os"
@@ -26,11 +27,10 @@ import (
 	"github.com/mailgun/holster/v4/setter"
 	"github.com/miekg/dns"
 	"github.com/pkg/errors"
-	"github.com/sirupsen/logrus"
 )
 
-// Adapted from TimothyYe/godns
 // DNSResolver represents a dns resolver
+// Adapted from TimothyYe/godns
 type DNSResolver struct {
 	Servers []string
 	random  *rand.Rand
@@ -118,7 +118,7 @@ type DNSPoolConfig struct {
 	// (Required) Filesystem path to "/etc/resolv.conf", override for testing
 	ResolvConf string
 
-	// (Required) Own GRPC address
+	// (Required) Own advertise address
 	OwnAddress string
 
 	// (Required) Called when the list of gubernators in the pool updates
@@ -135,10 +135,10 @@ type DNSPool struct {
 }
 
 func NewDNSPool(conf DNSPoolConfig) (*DNSPool, error) {
-	setter.SetDefault(&conf.Logger, logrus.WithField("category", "gubernator"))
+	setter.SetDefault(&conf.Logger, slog.New(slog.NewTextHandler(os.Stderr, nil)).With("category", "gubernator"))
 
 	if conf.OwnAddress == "" {
-		return nil, errors.New("Advertise.GRPCAddress is required")
+		return nil, errors.New("AdvertiseAddress is required")
 	}
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -157,12 +157,11 @@ func peer(ip string, self string, ipv6 bool) PeerInfo {
 	if ipv6 {
 		ip = "[" + ip + "]"
 	}
-	grpc := ip + ":1051"
+	addr := ip + ":1050"
 	return PeerInfo{
 		DataCenter:  "",
-		HTTPAddress: ip + ":1050",
-		GRPCAddress: grpc,
-		IsOwner:     grpc == self,
+		HTTPAddress: addr,
+		IsOwner:     addr == self,
 	}
 
 }

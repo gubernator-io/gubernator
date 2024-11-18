@@ -18,12 +18,15 @@ package gubernator
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"log/slog"
 	"strings"
 	"sync"
 	"time"
 
-	"github.com/mailgun/errors"
+	"github.com/duh-rpc/duh-go"
+	v1 "github.com/duh-rpc/duh-go/proto/v1"
 	"github.com/mailgun/holster/v4/clock"
 	"github.com/mailgun/holster/v4/syncutil"
 	"github.com/mailgun/holster/v4/tracing"
@@ -31,8 +34,6 @@ import (
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/propagation"
 	"go.opentelemetry.io/otel/trace"
-	"google.golang.org/grpc/codes"
-	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/proto"
 )
 
@@ -42,25 +43,25 @@ const (
 	UnHealthy    = "unhealthy"
 )
 
-type V1Instance struct {
-	UnimplementedV1Server
-	UnimplementedPeersV1Server
+type Service struct {
+	propagator propagation.TraceContext
 	global     *globalManager
 	peerMutex  sync.RWMutex
+	cache      CacheManager
 	log        FieldLogger
 	conf       Config
 	isClosed   bool
-	workerPool *WorkerPool
 }
 
-type RateLimitReqState struct {
+// RateLimitContext is context that is not included in the RateLimitRequest but is needed by algorithms.go
+type RateLimitContext struct {
 	IsOwner bool
 }
 
 var (
 	metricGetRateLimitCounter = prometheus.NewCounterVec(prometheus.CounterOpts{
 		Name: "gubernator_getratelimit_counter",
-		Help: "The count of getLocalRateLimit() calls.  Label \"calltype\" may be \"local\" for calls handled by the same peer, or \"global\" for global rate limits.",
+		Help: "The count of checkLocalRateLimit() calls.  Label \"calltype\" may be \"local\" for calls handled by the same peer, or \"global\" for global rate limits.",
 	}, []string{"calltype"})
 	metricFuncTimeDuration = prometheus.NewSummaryVec(prometheus.SummaryOpts{
 		Name: "gubernator_func_duration",
@@ -83,14 +84,6 @@ var (
 		Name: "gubernator_check_error_counter",
 		Help: "The number of errors while checking rate limits.",
 	}, []string{"error"})
-	metricCommandCounter = prometheus.NewCounterVec(prometheus.CounterOpts{
-		Name: "gubernator_command_counter",
-		Help: "The count of commands processed by each worker in WorkerPool.",
-	}, []string{"worker", "method"})
-	metricWorkerQueue = prometheus.NewGaugeVec(prometheus.GaugeOpts{
-		Name: "gubernator_worker_queue_length",
-		Help: "The count of requests queued up in WorkerPool.",
-	}, []string{"method", "worker"})
 
 	// Batch behavior.
 	metricBatchSendRetries = prometheus.NewCounterVec(prometheus.CounterOpts{
@@ -110,47 +103,39 @@ var (
 	}, []string{"peerAddr"})
 )
 
-// NewV1Instance instantiate a single instance of a gubernator peer and register this
-// instance with the provided GRPCServer.
-func NewV1Instance(conf Config) (s *V1Instance, err error) {
+// NewService instantiate a single instance of a gubernator service
+func NewService(conf Config) (s *Service, err error) {
 	ctx := context.Background()
-	if conf.GRPCServers == nil {
-		return nil, errors.New("at least one GRPCServer instance is required")
-	}
+
 	if err := conf.SetDefaults(); err != nil {
 		return nil, err
 	}
 
-	s = &V1Instance{
+	s = &Service{
 		log:  conf.Logger,
 		conf: conf,
 	}
 
-	s.workerPool = NewWorkerPool(&conf)
-	s.global = newGlobalManager(conf.Behaviors, s)
-
-	// Register our instance with all GRPC servers
-	for _, srv := range conf.GRPCServers {
-		RegisterV1Server(srv, s)
-		RegisterPeersV1Server(srv, s)
+	s.cache, err = NewCacheManager(conf)
+	if err != nil {
+		return nil, fmt.Errorf("during NewCacheManager(): %w", err)
 	}
+	s.global = newGlobalManager(conf.Behaviors, s)
 
 	if s.conf.Loader == nil {
 		return s, nil
 	}
 
 	// Load the cache.
-	err = s.workerPool.Load(ctx)
+	err = s.cache.Load(ctx)
 	if err != nil {
-		return nil, errors.Wrap(err, "Error in workerPool.Load")
+		return nil, fmt.Errorf("error in CacheManager.Load: %w", err)
 	}
 
 	return s, nil
 }
 
-func (s *V1Instance) Close() (err error) {
-	ctx := context.Background()
-
+func (s *Service) Close(ctx context.Context) (err error) {
 	if s.isClosed {
 		return nil
 	}
@@ -158,114 +143,124 @@ func (s *V1Instance) Close() (err error) {
 	s.global.Close()
 
 	if s.conf.Loader != nil {
-		err = s.workerPool.Store(ctx)
+		err = s.cache.Store(ctx)
 		if err != nil {
-			s.log.WithError(err).
-				Error("Error in workerPool.Store")
-			return errors.Wrap(err, "Error in workerPool.Store")
+			s.log.LogAttrs(context.TODO(), slog.LevelError, "Error in workerPool.Store",
+				ErrAttr(err),
+			)
+			return fmt.Errorf("error in CacheManager.Store: %w", err)
 		}
 	}
 
-	err = s.workerPool.Close()
+	err = s.cache.Close()
 	if err != nil {
-		s.log.WithError(err).
-			Error("Error in workerPool.Close")
-		return errors.Wrap(err, "Error in workerPool.Close")
+		s.log.LogAttrs(context.TODO(), slog.LevelError, "Error in workerPool.Close",
+			ErrAttr(err),
+		)
+		return fmt.Errorf("error in CacheManager.Close: %w", err)
 	}
+
+	// Close all the peer clients
+	s.SetPeers([]PeerInfo{})
 
 	s.isClosed = true
 	return nil
 }
 
-// GetRateLimits is the public interface used by clients to request rate limits from the system. If the
+// CheckRateLimits is the public interface used by clients to request rate limits from the system. If the
 // rate limit `Name` and `UniqueKey` is not owned by this instance, then we forward the request to the
 // peer that does.
-func (s *V1Instance) GetRateLimits(ctx context.Context, r *GetRateLimitsReq) (*GetRateLimitsResp, error) {
-	funcTimer := prometheus.NewTimer(metricFuncTimeDuration.WithLabelValues("V1Instance.GetRateLimits"))
+func (s *Service) CheckRateLimits(ctx context.Context, req *CheckRateLimitsRequest, resp *CheckRateLimitsResponse) (err error) {
+	funcTimer := prometheus.NewTimer(metricFuncTimeDuration.WithLabelValues("Service.CheckRateLimits"))
 	defer funcTimer.ObserveDuration()
 	metricConcurrentChecks.Inc()
 	defer metricConcurrentChecks.Dec()
 
-	if len(r.Requests) > maxBatchSize {
-		metricCheckErrorCounter.WithLabelValues("Request too large").Inc()
-		return nil, status.Errorf(codes.OutOfRange,
-			"Requests.RateLimits list too large; max size is '%d'", maxBatchSize)
+	if len(req.Requests) > maxBatchSize {
+		metricCheckErrorCounter.WithLabelValues("Request too large").Add(1)
+		return duh.NewServiceError(duh.CodeBadRequest,
+			fmt.Sprintf("CheckRateLimitsRequest.RateLimits list too large; max size is '%d'", maxBatchSize), nil, nil)
 	}
 
-	createdAt := epochMillis(clock.Now())
-	resp := GetRateLimitsResp{
-		Responses: make([]*RateLimitResp, len(r.Requests)),
+	if len(req.Requests) == 0 {
+		return duh.NewServiceError(duh.CodeBadRequest,
+			"CheckRateLimitsRequest.RateLimits list is empty; provide at least one rate limit", nil, nil)
 	}
+
+	resp.Responses = make([]*RateLimitResponse, len(req.Requests))
+	asyncCh := make(chan AsyncResp, len(req.Requests))
+	createdAt := epochMillis(clock.Now())
 	var wg sync.WaitGroup
-	asyncCh := make(chan AsyncResp, len(r.Requests))
 
 	// For each item in the request body
-	for i, req := range r.Requests {
-		key := req.Name + "_" + req.UniqueKey
-		var peer *PeerClient
+	for i, r := range req.Requests {
+		key := r.Name + "_" + r.UniqueKey
+		var peer *Peer
 		var err error
 
-		if req.UniqueKey == "" {
+		if r.UniqueKey == "" {
 			metricCheckErrorCounter.WithLabelValues("Invalid request").Inc()
-			resp.Responses[i] = &RateLimitResp{Error: "field 'unique_key' cannot be empty"}
+			resp.Responses[i] = &RateLimitResponse{Error: "field 'unique_key' cannot be empty"}
 			continue
 		}
-		if req.Name == "" {
+
+		if r.Name == "" {
 			metricCheckErrorCounter.WithLabelValues("Invalid request").Inc()
-			resp.Responses[i] = &RateLimitResp{Error: "field 'namespace' cannot be empty"}
+			resp.Responses[i] = &RateLimitResponse{Error: "field 'namespace' cannot be empty"}
 			continue
 		}
-		if req.CreatedAt == nil || *req.CreatedAt == 0 {
-			req.CreatedAt = &createdAt
+
+		if r.CreatedAt == nil || *r.CreatedAt == 0 {
+			r.CreatedAt = &createdAt
 		}
 
 		if ctx.Err() != nil {
-			err = errors.Wrap(ctx.Err(), "Error while iterating request items")
+			err = fmt.Errorf("error while iterating request items: %w", ctx.Err())
 			span := trace.SpanFromContext(ctx)
 			span.RecordError(err)
-			resp.Responses[i] = &RateLimitResp{
+			resp.Responses[i] = &RateLimitResponse{
 				Error: err.Error(),
 			}
 			continue
 		}
 
 		if s.conf.Behaviors.ForceGlobal {
-			SetBehavior(&req.Behavior, Behavior_GLOBAL, true)
+			SetBehavior(&r.Behavior, Behavior_GLOBAL, true)
 		}
 
 		peer, err = s.GetPeer(ctx, key)
 		if err != nil {
 			countError(err, "Error in GetPeer")
-			err = errors.Wrapf(err, "Error in GetPeer, looking up peer that owns rate limit '%s'", key)
-			resp.Responses[i] = &RateLimitResp{
+			err = fmt.Errorf("error in GetPeer, looking up peer that owns rate limit '%s': %w", key, err)
+			resp.Responses[i] = &RateLimitResponse{
 				Error: err.Error(),
 			}
 			continue
 		}
 
 		// If our server instance is the owner of this rate limit
-		reqState := RateLimitReqState{IsOwner: peer.Info().IsOwner}
+		reqState := RateLimitContext{IsOwner: peer.Info().IsOwner}
 		if reqState.IsOwner {
 			// Apply our rate limit algorithm to the request
-			resp.Responses[i], err = s.getLocalRateLimit(ctx, req, reqState)
+			resp.Responses[i], err = s.checkLocalRateLimit(ctx, r, reqState)
 			if err != nil {
-				err = errors.Wrapf(err, "Error while apply rate limit for '%s'", key)
+				err = fmt.Errorf("error while apply rate limit for '%s': %w", key, err)
 				span := trace.SpanFromContext(ctx)
 				span.RecordError(err)
-				resp.Responses[i] = &RateLimitResp{Error: err.Error()}
+				resp.Responses[i] = &RateLimitResponse{Error: err.Error()}
 			}
 		} else {
-			if HasBehavior(req.Behavior, Behavior_GLOBAL) {
-				resp.Responses[i], err = s.getGlobalRateLimit(ctx, req)
+			if HasBehavior(r.Behavior, Behavior_GLOBAL) {
+				resp.Responses[i], err = s.checkGlobalRateLimit(ctx, r)
 				if err != nil {
-					err = errors.Wrap(err, "Error in getGlobalRateLimit")
+					err = fmt.Errorf("error in checkGlobalRateLimit: %w", err)
 					span := trace.SpanFromContext(ctx)
 					span.RecordError(err)
-					resp.Responses[i] = &RateLimitResp{Error: err.Error()}
+					resp.Responses[i] = &RateLimitResponse{Error: err.Error()}
 				}
 
 				// Inform the client of the owner key of the key
-				resp.Responses[i].Metadata = map[string]string{"owner": peer.Info().GRPCAddress}
+				resp.Responses[i].Metadata = map[string]string{"owner": peer.Info().HTTPAddress}
 				continue
 			}
 
@@ -275,7 +270,7 @@ func (s *V1Instance) GetRateLimits(ctx context.Context, r *GetRateLimitsReq) (*G
 			go s.asyncRequest(ctx, &AsyncReq{
 				AsyncCh: asyncCh,
 				Peer:    peer,
-				Req:     req,
+				Req:     r,
 				WG:      &wg,
 				Key:     key,
 				Idx:     i,
@@ -291,95 +286,98 @@ func (s *V1Instance) GetRateLimits(ctx context.Context, r *GetRateLimitsReq) (*G
 		resp.Responses[a.Idx] = a.Resp
 	}
 
-	return &resp, nil
+	return nil
 }
 
 type AsyncResp struct {
+	Resp *RateLimitResponse
 	Idx  int
-	Resp *RateLimitResp
 }
 
 type AsyncReq struct {
+	Req     *RateLimitRequest
 	WG      *sync.WaitGroup
 	AsyncCh chan AsyncResp
-	Req     *RateLimitReq
-	Peer    *PeerClient
+	Peer    *Peer
 	Key     string
 	Idx     int
 }
 
-func (s *V1Instance) asyncRequest(ctx context.Context, req *AsyncReq) {
+func (s *Service) asyncRequest(ctx context.Context, req *AsyncReq) {
+	ctx = tracing.StartNamedScope(ctx, "Service.asyncRequest")
+	defer tracing.EndScope(ctx, nil)
 	var attempts int
 	var err error
 
-	ctx = tracing.StartNamedScope(ctx, "V1Instance.asyncRequest")
-	defer tracing.EndScope(ctx, nil)
-
-	funcTimer := prometheus.NewTimer(metricFuncTimeDuration.WithLabelValues("V1Instance.asyncRequest"))
+	funcTimer := prometheus.NewTimer(metricFuncTimeDuration.WithLabelValues("Service.asyncRequest"))
 	defer funcTimer.ObserveDuration()
 
-	reqState := RateLimitReqState{IsOwner: req.Peer.Info().IsOwner}
+	reqState := RateLimitContext{IsOwner: req.Peer.Info().IsOwner}
 	resp := AsyncResp{
 		Idx: req.Idx,
 	}
 
 	for {
 		if attempts > 5 {
-			s.log.WithContext(ctx).
-				WithError(err).
-				WithField("key", req.Key).
-				Error("GetPeer() returned peer that is not connected")
-			countError(err, "Peer not connected")
-			err = fmt.Errorf("GetPeer() keeps returning peers that are not connected for '%s': %w", req.Key, err)
-			resp.Resp = &RateLimitResp{Error: err.Error()}
+			err = fmt.Errorf("attempts exhausted while communicating with '%s' for '%s': %w",
+				req.Peer.Info().HTTPAddress, req.Key, err)
+			s.log.LogAttrs(ctx, slog.LevelError, "attempts exhausted while communicating with peer",
+				ErrAttr(err),
+				slog.String("key", req.Key),
+			)
+			countError(err, "peer communication failed")
+			resp.Resp = &RateLimitResponse{Error: err.Error()}
 			break
 		}
 
 		// If we are attempting again, the owner of this rate limit might have changed to us!
 		if attempts != 0 {
 			if reqState.IsOwner {
-				resp.Resp, err = s.getLocalRateLimit(ctx, req.Req, reqState)
+				resp.Resp, err = s.checkLocalRateLimit(ctx, req.Req, reqState)
 				if err != nil {
-					s.log.WithContext(ctx).
-						WithError(err).
-						WithField("key", req.Key).
-						Error("Error applying rate limit")
-					err = fmt.Errorf("during getLocalRateLimit() for '%s': %w", req.Key, err)
-					resp.Resp = &RateLimitResp{Error: err.Error()}
+					err = fmt.Errorf("during checkLocalRateLimit() for '%s': %w", req.Key, err)
+					s.log.LogAttrs(ctx, slog.LevelError, "while applying rate limit",
+						ErrAttr(err),
+						slog.String("key", req.Key),
+					)
+					resp.Resp = &RateLimitResponse{Error: err.Error()}
 				}
 				break
 			}
 		}
 
 		// Make an RPC call to the peer that owns this rate limit
-		var r *RateLimitResp
-		r, err = req.Peer.GetPeerRateLimit(ctx, req.Req)
+		var r *RateLimitResponse
+		r, err = req.Peer.Forward(ctx, req.Req)
 		if err != nil {
-			if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+			if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) ||
+				errors.Is(err, ErrPeerShutdown) {
+
 				attempts++
 				metricBatchSendRetries.WithLabelValues(req.Req.Name).Inc()
 				req.Peer, err = s.GetPeer(ctx, req.Key)
 				if err != nil {
-					errPart := fmt.Sprintf("while finding peer that owns rate limit '%s'", req.Key)
-					s.log.WithContext(ctx).WithError(err).WithField("key", req.Key).Error(errPart)
+					err = fmt.Errorf("while finding peer that owns rate limit '%s': %w", req.Key, err)
+					s.log.LogAttrs(ctx, slog.LevelError, err.Error(),
+						ErrAttr(err),
+						slog.String("key", req.Key),
+					)
 					countError(err, "during GetPeer()")
-					err = fmt.Errorf("%s: %w", errPart, err)
-					resp.Resp = &RateLimitResp{Error: err.Error()}
+					resp.Resp = &RateLimitResponse{Error: err.Error()}
 					break
 				}
 				continue
 			}
 
-			// Not calling `countError()` because we expect the remote end to
-			// report this error.
+			// Not calling `countError()` because we expect the remote end to report this error.
 			err = fmt.Errorf("while fetching rate limit '%s' from peer: %w", req.Key, err)
-			resp.Resp = &RateLimitResp{Error: err.Error()}
+			resp.Resp = &RateLimitResponse{Error: err.Error()}
 			break
 		}
 
 		// Inform the client of the owner key of the key
 		resp.Resp = r
-		resp.Resp.Metadata = map[string]string{"owner": req.Peer.Info().GRPCAddress}
+		resp.Resp.Metadata = map[string]string{"owner": req.Peer.Info().HTTPAddress}
 		break
 	}
 
@@ -391,14 +389,14 @@ func (s *V1Instance) asyncRequest(ctx context.Context, req *AsyncReq) {
 	}
 }
 
-// getGlobalRateLimit handles rate limits that are marked as `Behavior = GLOBAL`. Rate limit responses
+// checkGlobalRateLimit handles rate limits that are marked as `Behavior = GLOBAL`. Rate limit responses
 // are returned from the local cache and the hits are queued to be sent to the owning peer.
-func (s *V1Instance) getGlobalRateLimit(ctx context.Context, req *RateLimitReq) (resp *RateLimitResp, err error) {
-	ctx = tracing.StartNamedScope(ctx, "V1Instance.getGlobalRateLimit", trace.WithAttributes(
+func (s *Service) checkGlobalRateLimit(ctx context.Context, req *RateLimitRequest) (resp *RateLimitResponse, err error) {
+	ctx = tracing.StartNamedScope(ctx, "Service.checkGlobalRateLimit", trace.WithAttributes(
 		attribute.String("ratelimit.key", req.UniqueKey),
 		attribute.String("ratelimit.name", req.Name),
 	))
-	defer prometheus.NewTimer(metricFuncTimeDuration.WithLabelValues("V1Instance.getGlobalRateLimit")).ObserveDuration()
+	defer prometheus.NewTimer(metricFuncTimeDuration.WithLabelValues("Service.checkGlobalRateLimit")).ObserveDuration()
 	defer func() {
 		if err == nil {
 			s.global.QueueHit(req)
@@ -406,85 +404,97 @@ func (s *V1Instance) getGlobalRateLimit(ctx context.Context, req *RateLimitReq) 
 		tracing.EndScope(ctx, err)
 	}()
 
-	req2 := proto.Clone(req).(*RateLimitReq)
+	req2 := proto.Clone(req).(*RateLimitRequest)
 	SetBehavior(&req2.Behavior, Behavior_NO_BATCHING, true)
 	SetBehavior(&req2.Behavior, Behavior_GLOBAL, false)
-	reqState := RateLimitReqState{IsOwner: false}
+	reqState := RateLimitContext{IsOwner: false}
 
 	// Process the rate limit like we own it
-	resp, err = s.getLocalRateLimit(ctx, req2, reqState)
+	resp, err = s.checkLocalRateLimit(ctx, req2, reqState)
 	if err != nil {
-		return nil, errors.Wrap(err, "during in getLocalRateLimit")
+		return nil, fmt.Errorf("during in checkLocalRateLimit: %w", err)
 	}
 
 	metricGetRateLimitCounter.WithLabelValues("global").Inc()
 	return resp, nil
 }
 
-// UpdatePeerGlobals updates the local cache with a list of global rate limits. This method should only
-// be called by a peer who is the owner of a global rate limit.
-func (s *V1Instance) UpdatePeerGlobals(ctx context.Context, r *UpdatePeerGlobalsReq) (*UpdatePeerGlobalsResp, error) {
-	defer prometheus.NewTimer(metricFuncTimeDuration.WithLabelValues("V1Instance.UpdatePeerGlobals")).ObserveDuration()
+// Update updates the local cache with a list of rate limit state from a peer
+// This method should only be called by a peer.
+func (s *Service) Update(ctx context.Context, r *UpdateRequest, _ *v1.Reply) (err error) {
+	ctx = tracing.StartNamedScopeDebug(ctx, "Service.Update")
+	defer func() { tracing.EndScope(ctx, err) }()
+
 	now := MillisecondNow()
+
 	for _, g := range r.Globals {
-		item := &CacheItem{
-			ExpireAt:  g.Status.ResetTime,
-			Algorithm: g.Algorithm,
-			Key:       g.Key,
+		item, _, err := s.cache.GetCacheItem(ctx, g.Key)
+		if err != nil {
+			return err
 		}
+
+		if item == nil {
+			item = &CacheItem{
+				ExpireAt:  g.State.ResetTime,
+				Algorithm: g.Algorithm,
+				Key:       g.Key,
+			}
+			err := s.cache.AddCacheItem(ctx, g.Key, item)
+			if err != nil {
+				return fmt.Errorf("during CacheManager.AddCacheItem(): %w", err)
+			}
+		}
+
+		item.mutex.Lock()
 		switch g.Algorithm {
 		case Algorithm_LEAKY_BUCKET:
 			item.Value = &LeakyBucketItem{
-				Remaining: float64(g.Status.Remaining),
-				Limit:     g.Status.Limit,
+				Remaining: float64(g.State.Remaining),
+				Limit:     g.State.Limit,
 				Duration:  g.Duration,
-				Burst:     g.Status.Limit,
+				Burst:     g.State.Limit,
 				UpdatedAt: now,
 			}
 		case Algorithm_TOKEN_BUCKET:
 			item.Value = &TokenBucketItem{
-				Status:    g.Status.Status,
-				Limit:     g.Status.Limit,
+				Status:    g.State.Status,
+				Limit:     g.State.Limit,
 				Duration:  g.Duration,
-				Remaining: g.Status.Remaining,
+				Remaining: g.State.Remaining,
 				CreatedAt: now,
 			}
 		}
-		err := s.workerPool.AddCacheItem(ctx, g.Key, item)
-		if err != nil {
-			return nil, errors.Wrap(err, "Error in workerPool.AddCacheItem")
-		}
+		item.mutex.Unlock()
 	}
-
-	return &UpdatePeerGlobalsResp{}, nil
+	return nil
 }
 
-// GetPeerRateLimits is called by other peers to get the rate limits owned by this peer.
-func (s *V1Instance) GetPeerRateLimits(ctx context.Context, r *GetPeerRateLimitsReq) (resp *GetPeerRateLimitsResp, err error) {
-	defer prometheus.NewTimer(metricFuncTimeDuration.WithLabelValues("V1Instance.GetPeerRateLimits")).ObserveDuration()
-	if len(r.Requests) > maxBatchSize {
-		err := fmt.Errorf("'PeerRequest.rate_limits' list too large; max size is '%d'", maxBatchSize)
-		metricCheckErrorCounter.WithLabelValues("Request too large").Inc()
-		return nil, status.Error(codes.OutOfRange, err.Error())
+// Forward is called by other peers when forwarding rate limits to this peer
+func (s *Service) Forward(ctx context.Context, req *ForwardRequest, resp *ForwardResponse) (err error) {
+	ctx = tracing.StartNamedScopeDebug(ctx, "Service.Forward")
+	defer func() { tracing.EndScope(ctx, err) }()
+
+	if len(req.Requests) > maxBatchSize {
+		metricCheckErrorCounter.WithLabelValues("Request too large").Add(1)
+		return duh.NewServiceError(duh.CodeBadRequest,
+			fmt.Sprintf("'Forward.requests' list too large; max size is '%d'", maxBatchSize), nil, nil)
 	}
 
 	// Invoke each rate limit request.
 	type reqIn struct {
 		idx int
-		req *RateLimitReq
+		req *RateLimitRequest
 	}
 	type respOut struct {
 		idx int
-		rl  *RateLimitResp
+		rl  *RateLimitResponse
 	}
 
-	resp = &GetPeerRateLimitsResp{
-		RateLimits: make([]*RateLimitResp, len(r.Requests)),
-	}
+	resp.RateLimits = make([]*RateLimitResponse, len(req.Requests))
+	reqState := RateLimitContext{IsOwner: true}
 	respChan := make(chan respOut)
 	var respWg sync.WaitGroup
 	respWg.Add(1)
-	reqState := RateLimitReqState{IsOwner: true}
 
 	go func() {
 		// Capture each response and return in the same order
@@ -497,12 +507,11 @@ func (s *V1Instance) GetPeerRateLimits(ctx context.Context, r *GetPeerRateLimits
 
 	// Fan out requests.
 	fan := syncutil.NewFanOut(s.conf.Workers)
-	for idx, req := range r.Requests {
+	for idx, req := range req.Requests {
 		fan.Run(func(in interface{}) error {
 			rin := in.(reqIn)
 			// Extract the propagated context from the metadata in the request
-			prop := propagation.TraceContext{}
-			ctx := prop.Extract(ctx, &MetadataCarrier{Map: rin.req.Metadata})
+			ctx := s.propagator.Extract(ctx, &MetadataCarrier{Map: rin.req.Metadata})
 
 			// Forwarded global requests must have DRAIN_OVER_LIMIT set so token and leaky algorithms
 			// drain the remaining in the event a peer asks for more than is remaining.
@@ -518,12 +527,10 @@ func (s *V1Instance) GetPeerRateLimits(ctx context.Context, r *GetPeerRateLimits
 				rin.req.CreatedAt = &createdAt
 			}
 
-			rl, err := s.getLocalRateLimit(ctx, rin.req, reqState)
+			rl, err := s.checkLocalRateLimit(ctx, rin.req, reqState)
 			if err != nil {
-				// Return the error for this request
-				err = errors.Wrap(err, "Error in getLocalRateLimit")
-				rl = &RateLimitResp{Error: err.Error()}
-				// metricCheckErrorCounter is updated within getLocalRateLimit(), not in GetPeerRateLimits.
+				rl = &RateLimitResponse{Error: fmt.Errorf("error in checkLocalRateLimit: %w", err).Error()}
+				// metricCheckErrorCounter is updated within checkLocalRateLimit(), not in Forward().
 			}
 
 			respChan <- respOut{rin.idx, rl}
@@ -536,12 +543,11 @@ func (s *V1Instance) GetPeerRateLimits(ctx context.Context, r *GetPeerRateLimits
 	close(respChan)
 	respWg.Wait()
 
-	return resp, nil
+	return nil
 }
 
 // HealthCheck Returns the health of our instance.
-func (s *V1Instance) HealthCheck(ctx context.Context, r *HealthCheckReq) (health *HealthCheckResp, err error) {
-	span := trace.SpanFromContext(ctx)
+func (s *Service) HealthCheck(ctx context.Context, _ *HealthCheckRequest, resp *HealthCheckResponse) (err error) {
 
 	var errs []string
 
@@ -553,7 +559,6 @@ func (s *V1Instance) HealthCheck(ctx context.Context, r *HealthCheckReq) (health
 	for _, peer := range localPeers {
 		for _, errMsg := range peer.GetLastErr() {
 			err := fmt.Errorf("error returned from local peer.GetLastErr: %s", errMsg)
-			span.RecordError(err)
 			errs = append(errs, err.Error())
 		}
 	}
@@ -563,42 +568,34 @@ func (s *V1Instance) HealthCheck(ctx context.Context, r *HealthCheckReq) (health
 	for _, peer := range regionPeers {
 		for _, errMsg := range peer.GetLastErr() {
 			err := fmt.Errorf("error returned from region peer.GetLastErr: %s", errMsg)
-			span.RecordError(err)
 			errs = append(errs, err.Error())
 		}
 	}
 
-	health = &HealthCheckResp{
-		PeerCount: int32(len(localPeers) + len(regionPeers)),
-		Status:    Healthy,
-	}
+	resp.PeerCount = int32(len(localPeers) + len(regionPeers))
+	resp.Status = Healthy
 
 	if len(errs) != 0 {
-		health.Status = UnHealthy
-		health.Message = strings.Join(errs, "|")
+		resp.Status = UnHealthy
+		resp.Message = strings.Join(errs, "|")
 	}
 
-	span.SetAttributes(
-		attribute.Int64("health.peerCount", int64(health.PeerCount)),
-		attribute.String("health.status", health.Status),
-	)
-
-	return health, nil
+	return nil
 }
 
-func (s *V1Instance) getLocalRateLimit(ctx context.Context, r *RateLimitReq, reqState RateLimitReqState) (_ *RateLimitResp, err error) {
-	ctx = tracing.StartNamedScope(ctx, "V1Instance.getLocalRateLimit", trace.WithAttributes(
+func (s *Service) checkLocalRateLimit(ctx context.Context, r *RateLimitRequest, reqState RateLimitContext) (_ *RateLimitResponse, err error) {
+	ctx = tracing.StartNamedScope(ctx, "Service.checkLocalRateLimit", trace.WithAttributes(
 		attribute.String("ratelimit.key", r.UniqueKey),
 		attribute.String("ratelimit.name", r.Name),
 		attribute.Int64("ratelimit.limit", r.Limit),
 		attribute.Int64("ratelimit.hits", r.Hits),
 	))
 	defer func() { tracing.EndScope(ctx, err) }()
-	defer prometheus.NewTimer(metricFuncTimeDuration.WithLabelValues("V1Instance.getLocalRateLimit")).ObserveDuration()
+	defer prometheus.NewTimer(metricFuncTimeDuration.WithLabelValues("Service.checkLocalRateLimit")).ObserveDuration()
 
-	resp, err := s.workerPool.GetRateLimit(ctx, r, reqState)
+	resp, err := s.cache.CheckRateLimit(ctx, r, reqState)
 	if err != nil {
-		return nil, errors.Wrap(err, "during workerPool.GetRateLimit")
+		return nil, fmt.Errorf("during CacheManager.CheckRateLimit: %w", err)
 	}
 
 	// If global behavior, then broadcast update to all peers.
@@ -625,8 +622,7 @@ func (s *V1Instance) getLocalRateLimit(ctx context.Context, r *RateLimitReq, req
 }
 
 // SetPeers replaces the peers and shuts down all the previous peers.
-// TODO this should return an error if we failed to connect to any of the new peers
-func (s *V1Instance) SetPeers(peerInfo []PeerInfo) {
+func (s *Service) SetPeers(peerInfo []PeerInfo) {
 	localPicker := s.conf.LocalPicker.New()
 	regionPicker := s.conf.RegionPicker.New()
 
@@ -634,37 +630,41 @@ func (s *V1Instance) SetPeers(peerInfo []PeerInfo) {
 		// Add peers that are not in our local DC to the RegionPicker
 		if info.DataCenter != s.conf.DataCenter {
 			peer := s.conf.RegionPicker.GetByPeerInfo(info)
-			// If we don't have an existing PeerClient create a new one
+			// If we don't have an existing Peer create a new one
 			if peer == nil {
 				var err error
-				peer, err = NewPeerClient(PeerConfig{
-					TraceGRPC: s.conf.PeerTraceGRPC,
-					Behavior:  s.conf.Behaviors,
-					TLS:       s.conf.PeerTLS,
-					Log:       s.log,
-					Info:      info,
+				peer, err = NewPeer(PeerConfig{
+					PeerClient: s.conf.PeerClientFactory(info),
+					Behavior:   s.conf.Behaviors,
+					Log:        s.log,
+					Info:       info,
 				})
 				if err != nil {
-					s.log.Errorf("error connecting to peer %s: %s", info.GRPCAddress, err)
+					s.log.LogAttrs(context.TODO(), slog.LevelError, "during NewPeer() call",
+						ErrAttr(err),
+						slog.String("http_address", info.HTTPAddress),
+					)
 					return
 				}
 			}
 			regionPicker.Add(peer)
 			continue
 		}
-		// If we don't have an existing PeerClient create a new one
+		// If we don't have an existing Peer create a new one
 		peer := s.conf.LocalPicker.GetByPeerInfo(info)
 		if peer == nil {
 			var err error
-			peer, err = NewPeerClient(PeerConfig{
-				TraceGRPC: s.conf.PeerTraceGRPC,
-				Behavior:  s.conf.Behaviors,
-				TLS:       s.conf.PeerTLS,
-				Log:       s.log,
-				Info:      info,
+			peer, err = NewPeer(PeerConfig{
+				PeerClient: s.conf.PeerClientFactory(info),
+				Behavior:   s.conf.Behaviors,
+				Log:        s.log,
+				Info:       info,
 			})
 			if err != nil {
-				s.log.Errorf("error connecting to peer %s: %s", info.GRPCAddress, err)
+				s.log.LogAttrs(context.TODO(), slog.LevelError, "during NewPeer() call",
+					ErrAttr(err),
+					slog.String("http_address", info.HTTPAddress),
+				)
 				return
 			}
 		}
@@ -680,13 +680,15 @@ func (s *V1Instance) SetPeers(peerInfo []PeerInfo) {
 	s.conf.RegionPicker = regionPicker
 	s.peerMutex.Unlock()
 
-	s.log.WithField("peers", peerInfo).Debug("peers updated")
+	s.log.LogAttrs(context.TODO(), slog.LevelDebug, "peers updated",
+		slog.Any("peers", peerInfo),
+	)
 
 	// Shutdown any old peers we no longer need
 	ctx, cancel := context.WithTimeout(context.Background(), s.conf.Behaviors.BatchTimeout)
 	defer cancel()
 
-	var shutdownPeers []*PeerClient
+	var shutdownPeers []*Peer
 	for _, peer := range oldLocalPicker.Peers() {
 		if peerInfo := s.conf.LocalPicker.GetByPeerInfo(peer.Info()); peerInfo == nil {
 			shutdownPeers = append(shutdownPeers, peer)
@@ -704,10 +706,13 @@ func (s *V1Instance) SetPeers(peerInfo []PeerInfo) {
 	var wg syncutil.WaitGroup
 	for _, p := range shutdownPeers {
 		wg.Run(func(obj interface{}) error {
-			pc := obj.(*PeerClient)
-			err := pc.Shutdown(ctx)
+			pc := obj.(*Peer)
+			err := pc.Close(ctx)
 			if err != nil {
-				s.log.WithError(err).WithField("peer", pc).Error("while shutting down peer")
+				s.log.LogAttrs(context.TODO(), slog.LevelError, "while shutting down peer",
+					ErrAttr(err),
+					slog.Any("peer", pc),
+				)
 			}
 			return nil
 		}, p)
@@ -717,50 +722,49 @@ func (s *V1Instance) SetPeers(peerInfo []PeerInfo) {
 	if len(shutdownPeers) > 0 {
 		var peers []string
 		for _, p := range shutdownPeers {
-			peers = append(peers, p.Info().GRPCAddress)
+			peers = append(peers, p.Info().HTTPAddress)
 		}
-		s.log.WithField("peers", peers).Debug("peers shutdown")
+		s.log.LogAttrs(context.TODO(), slog.LevelDebug, "peers shutdown",
+			slog.Any("peers", peers),
+		)
 	}
 }
 
 // GetPeer returns a peer client for the hash key provided
-func (s *V1Instance) GetPeer(ctx context.Context, key string) (p *PeerClient, err error) {
-	defer prometheus.NewTimer(metricFuncTimeDuration.WithLabelValues("V1Instance.GetPeer")).ObserveDuration()
-
+func (s *Service) GetPeer(_ context.Context, key string) (p *Peer, err error) {
 	s.peerMutex.RLock()
 	defer s.peerMutex.RUnlock()
+
 	p, err = s.conf.LocalPicker.Get(key)
 	if err != nil {
-		return nil, errors.Wrap(err, "Error in conf.LocalPicker.Get")
+		return nil, fmt.Errorf("error in conf.LocalPicker.Get: %w", err)
 	}
 
 	return p, nil
 }
 
-func (s *V1Instance) GetPeerList() []*PeerClient {
+func (s *Service) GetPeerList() []*Peer {
 	s.peerMutex.RLock()
 	defer s.peerMutex.RUnlock()
 	return s.conf.LocalPicker.Peers()
 }
 
-func (s *V1Instance) GetRegionPickers() map[string]PeerPicker {
+func (s *Service) GetRegionPickers() map[string]PeerPicker {
 	s.peerMutex.RLock()
 	defer s.peerMutex.RUnlock()
 	return s.conf.RegionPicker.Pickers()
 }
 
 // Describe fetches prometheus metrics to be registered
-func (s *V1Instance) Describe(ch chan<- *prometheus.Desc) {
+func (s *Service) Describe(ch chan<- *prometheus.Desc) {
 	metricBatchQueueLength.Describe(ch)
 	metricBatchSendDuration.Describe(ch)
 	metricBatchSendRetries.Describe(ch)
 	metricCheckErrorCounter.Describe(ch)
-	metricCommandCounter.Describe(ch)
 	metricConcurrentChecks.Describe(ch)
 	metricFuncTimeDuration.Describe(ch)
 	metricGetRateLimitCounter.Describe(ch)
 	metricOverLimitCounter.Describe(ch)
-	metricWorkerQueue.Describe(ch)
 	s.global.metricBroadcastDuration.Describe(ch)
 	s.global.metricGlobalQueueLength.Describe(ch)
 	s.global.metricGlobalSendDuration.Describe(ch)
@@ -768,17 +772,15 @@ func (s *V1Instance) Describe(ch chan<- *prometheus.Desc) {
 }
 
 // Collect fetches metrics from the server for use by prometheus
-func (s *V1Instance) Collect(ch chan<- prometheus.Metric) {
+func (s *Service) Collect(ch chan<- prometheus.Metric) {
 	metricBatchQueueLength.Collect(ch)
 	metricBatchSendDuration.Collect(ch)
 	metricBatchSendRetries.Collect(ch)
 	metricCheckErrorCounter.Collect(ch)
-	metricCommandCounter.Collect(ch)
 	metricConcurrentChecks.Collect(ch)
 	metricFuncTimeDuration.Collect(ch)
 	metricGetRateLimitCounter.Collect(ch)
 	metricOverLimitCounter.Collect(ch)
-	metricWorkerQueue.Collect(ch)
 	s.global.metricBroadcastDuration.Collect(ch)
 	s.global.metricGlobalQueueLength.Collect(ch)
 	s.global.metricGlobalSendDuration.Collect(ch)

@@ -19,7 +19,7 @@ import (
 	"github.com/stretchr/testify/require"
 	"golang.org/x/net/proxy"
 
-	cli "github.com/gubernator-io/gubernator/v2/cmd/gubernator"
+	cli "github.com/gubernator-io/gubernator/v3/cmd/gubernator"
 )
 
 var cliRunning = flag.Bool("test_cli_running", false, "True if running as a child process; used by TestCLI")
@@ -46,11 +46,10 @@ func TestCLI(t *testing.T) {
 		{
 			name: "Should start with no config provided",
 			env: []string{
-				"GUBER_GRPC_ADDRESS=localhost:1050",
-				"GUBER_HTTP_ADDRESS=localhost:1051",
+				"GUBER_HTTP_ADDRESS=localhost:8080",
 			},
 			args:     []string{},
-			contains: "HTTP Gateway Listening on",
+			contains: "HTTP Listening",
 		},
 	}
 	for _, tt := range tests {
@@ -79,9 +78,9 @@ func TestCLI(t *testing.T) {
 			time.Sleep(time.Second * 1)
 
 			err = c.Process.Signal(syscall.SIGTERM)
-			require.NoError(t, err)
 
 			<-waitCh
+			require.NoError(t, err, out.String())
 			assert.Contains(t, out.String(), tt.contains)
 		})
 	}

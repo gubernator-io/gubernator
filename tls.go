@@ -18,6 +18,7 @@ package gubernator
 
 import (
 	"bytes"
+	"context"
 	"crypto/ecdsa"
 	"crypto/elliptic"
 	"crypto/rand"
@@ -25,6 +26,7 @@ import (
 	"crypto/x509"
 	"crypto/x509/pkix"
 	"encoding/pem"
+	"log/slog"
 	"math/big"
 	"net"
 	"os"
@@ -33,7 +35,6 @@ import (
 
 	"github.com/mailgun/holster/v4/setter"
 	"github.com/pkg/errors"
-	"github.com/sirupsen/logrus"
 )
 
 const (
@@ -154,7 +155,7 @@ func SetupTLS(conf *TLSConfig) error {
 		minServerTLSVersion = tls.VersionTLS13
 	}
 
-	setter.SetDefault(&conf.Logger, logrus.WithField("category", "gubernator"))
+	setter.SetDefault(&conf.Logger, slog.Default().With("category", "gubernator"))
 	conf.Logger.Info("Detected TLS Configuration")
 
 	// Basic config with reasonably secure defaults
@@ -239,7 +240,9 @@ func SetupTLS(conf *TLSConfig) error {
 	if conf.CaPEM != nil {
 		rootPool, err := x509.SystemCertPool()
 		if err != nil {
-			conf.Logger.Warnf("while loading system CA Certs '%s'; using provided pool instead", err)
+			conf.Logger.LogAttrs(context.TODO(), slog.LevelWarn, "while loading system CA Certs; using provided pool instead",
+				ErrAttr(err),
+			)
 			rootPool = x509.NewCertPool()
 		}
 		rootPool.AppendCertsFromPEM(conf.CaPEM.Bytes())
@@ -259,17 +262,20 @@ func SetupTLS(conf *TLSConfig) error {
 	// If user asked for client auth
 	if conf.ClientAuth != tls.NoClientCert {
 		clientPool := x509.NewCertPool()
+		var certProvided bool
 		if conf.ClientAuthCaPEM != nil {
 			// If client auth CA was provided
 			clientPool.AppendCertsFromPEM(conf.ClientAuthCaPEM.Bytes())
+			certProvided = true
 
 		} else if conf.CaPEM != nil {
 			// else use the servers CA
 			clientPool.AppendCertsFromPEM(conf.CaPEM.Bytes())
+			certProvided = true
 		}
 
-		// error if neither was provided
-		if len(clientPool.Subjects()) == 0 { //nolint:all
+		// error if neither cert was provided
+		if !certProvided {
 			return errors.New("client auth enabled, but no CA's provided")
 		}
 
@@ -324,15 +330,16 @@ func selfCert(conf *TLSConfig) error {
 		}
 	}
 
-	conf.Logger.Info("Generating Server Private Key and Certificate....")
-	conf.Logger.Infof("Cert DNS names: (%s)", strings.Join(cert.DNSNames, ","))
-	conf.Logger.Infof("Cert IPs: (%s)", func() string {
-		var r []string
-		for i := range cert.IPAddresses {
-			r = append(r, cert.IPAddresses[i].String())
-		}
-		return strings.Join(r, ",")
-	}())
+	conf.Logger.LogAttrs(context.TODO(), slog.LevelInfo, "Generating Server Private Key and Certificate....",
+		slog.String("dns_names", strings.Join(cert.DNSNames, ",")),
+		slog.String("cert_ips", func() string {
+			var r []string
+			for i := range cert.IPAddresses {
+				r = append(r, cert.IPAddresses[i].String())
+			}
+			return strings.Join(r, ",")
+		}()),
+	)
 
 	// Generate a public / private key
 	privKey, err := ecdsa.GenerateKey(elliptic.P521(), rand.Reader)

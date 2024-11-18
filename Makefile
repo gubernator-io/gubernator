@@ -15,6 +15,15 @@ $(GOLANGCI_LINT): ## Download Go linter
 lint: $(GOLANGCI_LINT) ## Run Go linter
 	$(GOLANGCI_LINT) run -v -c .golangci.yml ./...
 
+.PHONY: tidy
+tidy:
+	go mod tidy && git diff --exit-code
+
+.PHONY: validate
+validate: tidy lint test bench
+	@echo
+	@echo "\033[32mEVERYTHING PASSED!\033[0m"
+
 .PHONY: test
 test: ## Run unit tests and measure code coverage
 	(go test -v -race -p=1 -count=1 -tags holster_test_mode -coverprofile coverage.out ./...; ret=$$?; \
@@ -24,7 +33,7 @@ test: ## Run unit tests and measure code coverage
 
 .PHONY: bench
 bench: ## Run Go benchmarks
-	go test ./... -bench . -benchtime 5s -timeout 0 -run='^$$' -benchmem
+	go test ./... -bench . -timeout 6m -run='^$$' -benchmem
 
 .PHONY: docker
 docker: ## Build Docker image
@@ -44,7 +53,6 @@ clean-proto: ## Clean the generated source files from the protobuf sources
 	@echo "==> Cleaning up the go generated files from proto"
 	@find . -name "*.pb.go" -type f -delete
 	@find . -name "*.pb.*.go" -type f -delete
-
 
 .PHONY: proto
 proto: ## Build protos

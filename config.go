@@ -18,12 +18,14 @@ package gubernator
 
 import (
 	"bufio"
+	"context"
 	"crypto/rand"
 	"crypto/tls"
 	"crypto/x509"
 	"encoding/hex"
 	"fmt"
 	"io"
+	"log/slog"
 	"net"
 	"os"
 	"runtime"
@@ -39,9 +41,7 @@ import (
 	"github.com/pkg/errors"
 	"github.com/segmentio/fasthash/fnv1"
 	"github.com/segmentio/fasthash/fnv1a"
-	"github.com/sirupsen/logrus"
 	etcd "go.etcd.io/etcd/client/v3"
-	"google.golang.org/grpc"
 )
 
 // BehaviorConfig controls the handling of rate limits in the cluster
@@ -72,14 +72,14 @@ type BehaviorConfig struct {
 type Config struct {
 	InstanceID string
 
-	// (Required) A list of GRPC servers to register our instance with
-	GRPCServers []*grpc.Server
+	// (Optional) The PeerClient gubernator should use when making requests to other peers in the cluster.
+	PeerClientFactory func(PeerInfo) PeerClient
 
 	// (Optional) Adjust how gubernator behaviors are configured
 	Behaviors BehaviorConfig
 
 	// (Optional) The cache implementation
-	CacheFactory func(maxSize int) Cache
+	CacheFactory func(maxSize int) (Cache, error)
 
 	// (Optional) A persistent store implementation. Allows the implementor the ability to store the rate limits this
 	// instance of gubernator owns. It's up to the implementor to decide what rate limits to persist.
@@ -107,12 +107,6 @@ type Config struct {
 	// (Optional) A Logger which implements the declared logger interface (typically *logrus.Entry)
 	Logger FieldLogger
 
-	// (Optional) The TLS config used when connecting to gubernator peers
-	PeerTLS *tls.Config
-
-	// (Optional) If true, will emit traces for GRPC client requests to other peers
-	PeerTraceGRPC bool
-
 	// (Optional) The number of go routine workers used to process concurrent rate limit requests
 	// Default is set to number of CPUs.
 	Workers int
@@ -125,8 +119,8 @@ type Config struct {
 }
 
 type HitEvent struct {
-	Request  *RateLimitReq
-	Response *RateLimitResp
+	Request  *RateLimitRequest
+	Response *RateLimitResponse
 }
 
 func (c *Config) SetDefaults() error {
@@ -140,16 +134,16 @@ func (c *Config) SetDefaults() error {
 
 	setter.SetDefault(&c.Behaviors.GlobalPeerRequestsConcurrency, 100)
 
-	setter.SetDefault(&c.LocalPicker, NewReplicatedConsistentHash(nil, defaultReplicas))
+	setter.SetDefault(&c.LocalPicker, NewReplicatedConsistentHash(nil, DefaultReplicas))
 	setter.SetDefault(&c.RegionPicker, NewRegionPicker(nil))
 
 	setter.SetDefault(&c.CacheSize, 50_000)
 	setter.SetDefault(&c.Workers, runtime.NumCPU())
-	setter.SetDefault(&c.Logger, logrus.New().WithField("category", "gubernator"))
+	setter.SetDefault(&c.Logger, slog.Default().With("category", "gubernator"))
 
 	if c.CacheFactory == nil {
-		c.CacheFactory = func(maxSize int) Cache {
-			return NewLRUCache(maxSize)
+		c.CacheFactory = func(maxSize int) (Cache, error) {
+			return NewOtterCache(maxSize)
 		}
 	}
 
@@ -158,9 +152,10 @@ func (c *Config) SetDefaults() error {
 	}
 
 	// Make a copy of the TLS config in case our caller decides to make changes
-	if c.PeerTLS != nil {
-		c.PeerTLS = c.PeerTLS.Clone()
-	}
+	// TODO(thrawn01): Fix Peer TLS
+	//if c.PeerTLS != nil {
+	//	c.PeerTLS = c.PeerTLS.Clone()
+	//}
 
 	return nil
 }
@@ -170,15 +165,29 @@ type PeerInfo struct {
 	DataCenter string `json:"data-center"`
 	// (Optional) The http address:port of the peer
 	HTTPAddress string `json:"http-address"`
-	// (Required) The grpc address:port of the peer
-	GRPCAddress string `json:"grpc-address"`
 	// (Optional) Is true if PeerInfo is for this instance of gubernator
 	IsOwner bool `json:"is-owner,omitempty"`
+	// tls is private so that will not be serialized if marshalled to json, yaml, etc...
+	tls *tls.Config
 }
 
 // HashKey returns the hash key used to identify this peer in the Picker.
-func (p PeerInfo) HashKey() string {
-	return p.GRPCAddress
+func (p *PeerInfo) HashKey() string {
+	return p.HTTPAddress
+}
+
+// GetTLS returns the TLS config for this peer if it exists
+func (p *PeerInfo) GetTLS() *tls.Config {
+	return p.tls
+}
+
+// SetTLS sets the TLS config
+func (p *PeerInfo) SetTLS(t *tls.Config) {
+	// SetTLS() is called by Daemon when SetPeers() is called. If a user has already provided a tls config when
+	// this PeerInfo was created, then we should not overwrite the user provided config.
+	if p.tls == nil {
+		p.tls = t
+	}
 }
 
 type UpdateFunc func([]PeerInfo)
@@ -186,9 +195,6 @@ type UpdateFunc func([]PeerInfo)
 var DebugEnabled = false
 
 type DaemonConfig struct {
-	// (Required) The `address:port` that will accept GRPC requests
-	GRPCListenAddress string
-
 	// (Required) The `address:port` that will accept HTTP requests
 	HTTPListenAddress string
 
@@ -199,12 +205,8 @@ type DaemonConfig struct {
 	// provide client certificate but you want to enforce mTLS in other RPCs (like in K8s)
 	HTTPStatusListenAddress string
 
-	// (Optional) Defines the max age connection from client in seconds.
-	// Default is infinity
-	GRPCMaxConnectionAgeSeconds int
-
 	// (Optional) The `address:port` that is advertised to other Gubernator peers.
-	// Defaults to `GRPCListenAddress`
+	// Defaults to `HTTPListenAddress`
 	AdvertiseAddress string
 
 	// (Optional) The number of items in the cache. Defaults to 50,000
@@ -243,6 +245,16 @@ type DaemonConfig struct {
 	// (Optional) A Logger which implements the declared logger interface (typically *logrus.Entry)
 	Logger FieldLogger
 
+	// (Optional) A loader from a persistent store. Allows the implementor the ability to load and save
+	// the contents of the cache when the gubernator instance is started and stopped
+	Loader Loader
+
+	// (Optional) A persistent store implementation. Allows the implementor the ability to store the rate limits this
+	// instance of gubernator owns. It's up to the implementor to decide what rate limits to persist.
+	// For instance, an implementor might only persist rate limits that have an expiration of
+	// longer than 1 hour.
+	Store Store
+
 	// (Optional) TLS Configuration; SpawnDaemon() will modify the passed TLS config in an
 	// attempt to build a complete TLS config if one is not provided.
 	TLS *TLSConfig
@@ -259,6 +271,9 @@ type DaemonConfig struct {
 
 	// (Optional) EventChannel receives hit events
 	EventChannel chan<- HitEvent
+
+	// (Optional) CacheProvider specifies which cache implementation to store rate limits in
+	CacheProvider string
 }
 
 func (d *DaemonConfig) ClientTLS() *tls.Config {
@@ -277,8 +292,8 @@ func (d *DaemonConfig) ServerTLS() *tls.Config {
 
 // SetupDaemonConfig returns a DaemonConfig object that is the result of merging the lines
 // in the provided configFile and the environment variables. See `example.conf` for all available config options and their descriptions.
-func SetupDaemonConfig(logger *logrus.Logger, configFile io.Reader) (DaemonConfig, error) {
-	log := logrus.NewEntry(logger)
+func SetupDaemonConfig(logger *slog.Logger, configFile io.Reader) (DaemonConfig, error) {
+	log := logger.With()
 	var conf DaemonConfig
 	var logLevel string
 	var logFormat string
@@ -286,7 +301,6 @@ func SetupDaemonConfig(logger *logrus.Logger, configFile io.Reader) (DaemonConfi
 	var err error
 
 	if configFile != nil {
-		log.Infof("Loading env config: %s", configFile)
 		if err := fromEnvFile(log, configFile); err != nil {
 			return conf, err
 		}
@@ -294,12 +308,17 @@ func SetupDaemonConfig(logger *logrus.Logger, configFile io.Reader) (DaemonConfi
 
 	// Log config
 	setter.SetDefault(&logFormat, os.Getenv("GUBER_LOG_FORMAT"))
+	slogLevel := &slog.LevelVar{}
 	if logFormat != "" {
 		switch logFormat {
 		case "json":
-			logger.SetFormatter(&logrus.JSONFormatter{})
+			log = slog.New(slog.NewJSONHandler(os.Stderr, &slog.HandlerOptions{
+				Level: slogLevel,
+			}))
 		case "text":
-			logger.SetFormatter(&logrus.TextFormatter{})
+			log = slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{
+				Level: slogLevel,
+			}))
 		default:
 			return conf, errors.New("GUBER_LOG_FORMAT is invalid; expected value is either json or text")
 		}
@@ -308,28 +327,23 @@ func SetupDaemonConfig(logger *logrus.Logger, configFile io.Reader) (DaemonConfi
 	setter.SetDefault(&DebugEnabled, getEnvBool(log, "GUBER_DEBUG"))
 	setter.SetDefault(&logLevel, os.Getenv("GUBER_LOG_LEVEL"))
 	if DebugEnabled {
-		logger.SetLevel(logrus.DebugLevel)
+		slogLevel.Set(slog.LevelDebug)
 		log.Debug("Debug enabled")
 	} else if logLevel != "" {
-		logrusLogLevel, err := logrus.ParseLevel(logLevel)
+		err = slogLevel.UnmarshalText([]byte(logLevel))
 		if err != nil {
 			return conf, errors.Wrap(err, "invalid log level")
 		}
-
-		logger.SetLevel(logrusLogLevel)
 	}
 
 	// Main config
-	setter.SetDefault(&conf.GRPCListenAddress, os.Getenv("GUBER_GRPC_ADDRESS"),
-		fmt.Sprintf("%s:1051", LocalHost()))
 	setter.SetDefault(&conf.HTTPListenAddress, os.Getenv("GUBER_HTTP_ADDRESS"),
 		fmt.Sprintf("%s:1050", LocalHost()))
 	setter.SetDefault(&conf.InstanceID, GetInstanceID())
 	setter.SetDefault(&conf.HTTPStatusListenAddress, os.Getenv("GUBER_STATUS_HTTP_ADDRESS"), "")
-	setter.SetDefault(&conf.GRPCMaxConnectionAgeSeconds, getEnvInteger(log, "GUBER_GRPC_MAX_CONN_AGE_SEC"), 0)
 	setter.SetDefault(&conf.CacheSize, getEnvInteger(log, "GUBER_CACHE_SIZE"), 50_000)
 	setter.SetDefault(&conf.Workers, getEnvInteger(log, "GUBER_WORKER_COUNT"), 0)
-	setter.SetDefault(&conf.AdvertiseAddress, os.Getenv("GUBER_ADVERTISE_ADDRESS"), conf.GRPCListenAddress)
+	setter.SetDefault(&conf.AdvertiseAddress, os.Getenv("GUBER_ADVERTISE_ADDRESS"), conf.HTTPListenAddress)
 	setter.SetDefault(&conf.DataCenter, os.Getenv("GUBER_DATA_CENTER"), "")
 	setter.SetDefault(&conf.MetricFlags, getEnvMetricFlags(log, "GUBER_METRIC_FLAGS"))
 
@@ -402,10 +416,10 @@ func SetupDaemonConfig(logger *logrus.Logger, configFile io.Reader) (DaemonConfi
 	setter.SetDefault(&conf.EtcdPoolConf.EtcdConfig.DialTimeout, getEnvDuration(log, "GUBER_ETCD_DIAL_TIMEOUT"), clock.Second*5)
 	setter.SetDefault(&conf.EtcdPoolConf.EtcdConfig.Username, os.Getenv("GUBER_ETCD_USER"))
 	setter.SetDefault(&conf.EtcdPoolConf.EtcdConfig.Password, os.Getenv("GUBER_ETCD_PASSWORD"))
-	setter.SetDefault(&conf.EtcdPoolConf.Advertise.GRPCAddress, os.Getenv("GUBER_ETCD_ADVERTISE_ADDRESS"), conf.AdvertiseAddress)
+	setter.SetDefault(&conf.EtcdPoolConf.Advertise.HTTPAddress, os.Getenv("GUBER_ETCD_ADVERTISE_ADDRESS"), conf.AdvertiseAddress)
 	setter.SetDefault(&conf.EtcdPoolConf.Advertise.DataCenter, os.Getenv("GUBER_ETCD_DATA_CENTER"), conf.DataCenter)
 
-	setter.SetDefault(&conf.MemberListPoolConf.Advertise.GRPCAddress, os.Getenv("GUBER_MEMBERLIST_ADVERTISE_ADDRESS"), conf.AdvertiseAddress)
+	setter.SetDefault(&conf.MemberListPoolConf.Advertise.HTTPAddress, os.Getenv("GUBER_MEMBERLIST_ADVERTISE_ADDRESS"), conf.AdvertiseAddress)
 	setter.SetDefault(&conf.MemberListPoolConf.MemberListAddress, os.Getenv("GUBER_MEMBERLIST_ADDRESS"), fmt.Sprintf("%s:7946", advAddr))
 	setter.SetDefault(&conf.MemberListPoolConf.KnownNodes, getEnvSlice("GUBER_MEMBERLIST_KNOWN_NODES"), []string{})
 	setter.SetDefault(&conf.MemberListPoolConf.Advertise.DataCenter, conf.DataCenter)
@@ -430,14 +444,17 @@ func SetupDaemonConfig(logger *logrus.Logger, configFile io.Reader) (DaemonConfi
 	setter.SetDefault(&conf.DNSPoolConf.ResolvConf, os.Getenv("GUBER_RESOLV_CONF"), "/etc/resolv.conf")
 	setter.SetDefault(&conf.DNSPoolConf.OwnAddress, conf.AdvertiseAddress)
 
+	setter.SetDefault(&conf.CacheProvider, os.Getenv("GUBER_CACHE_PROVIDER"), "default-lru")
+
 	// PeerPicker Config
+	// TODO: Deprecated: Remove in GUBER_PEER_PICKER in v3
 	if pp := os.Getenv("GUBER_PEER_PICKER"); pp != "" {
 		var replicas int
 		var hash string
 
 		switch pp {
 		case "replicated-hash":
-			setter.SetDefault(&replicas, getEnvInteger(log, "GUBER_REPLICATED_HASH_REPLICAS"), defaultReplicas)
+			setter.SetDefault(&replicas, getEnvInteger(log, "GUBER_REPLICATED_HASH_REPLICAS"), DefaultReplicas)
 			conf.Picker = NewReplicatedConsistentHash(nil, replicas)
 			setter.SetDefault(&hash, os.Getenv("GUBER_PEER_PICKER_HASH"), "fnv1a")
 			hashFuncs := map[string]HashString64{
@@ -577,20 +594,20 @@ func anyHasPrefix(prefix string, items []string) bool {
 	return false
 }
 
-func getEnvBool(log logrus.FieldLogger, name string) bool {
+func getEnvBool(log FieldLogger, name string) bool {
 	v := os.Getenv(name)
 	if v == "" {
 		return false
 	}
 	b, err := strconv.ParseBool(v)
 	if err != nil {
-		log.WithError(err).Errorf("while parsing '%s' as an boolean", name)
+		log.LogAttrs(context.TODO(), slog.LevelError, "while parsing boolean", ErrAttr(err), slog.String("name", name))
 		return false
 	}
 	return b
 }
 
-func getEnvMinVersion(log logrus.FieldLogger, name string) uint16 {
+func getEnvMinVersion(log FieldLogger, name string) uint16 {
 	v := os.Getenv(name)
 	if v == "" {
 		return tls.VersionTLS13
@@ -603,33 +620,42 @@ func getEnvMinVersion(log logrus.FieldLogger, name string) uint16 {
 	}
 	version, ok := minVersion[v]
 	if !ok {
-		log.WithError(fmt.Errorf("unknown tls version: %s", v)).Errorf("while parsing '%s' as an min tls version, defaulting to 1.3", name)
+		log.LogAttrs(context.TODO(), slog.LevelError, "while parsing min tls version, defaulting to 1.3",
+			ErrAttr(fmt.Errorf("unknown tls version: %s", v)),
+			slog.String("name", name),
+		)
 		return tls.VersionTLS13
 	}
 	return version
 }
 
-func getEnvInteger(log logrus.FieldLogger, name string) int {
+func getEnvInteger(log FieldLogger, name string) int {
 	v := os.Getenv(name)
 	if v == "" {
 		return 0
 	}
 	i, err := strconv.ParseInt(v, 10, 64)
 	if err != nil {
-		log.WithError(err).Errorf("while parsing '%s' as an integer", name)
+		log.LogAttrs(context.TODO(), slog.LevelError, "while parsing as an integer",
+			ErrAttr(err),
+			slog.String("name", name),
+		)
 		return 0
 	}
 	return int(i)
 }
 
-func getEnvDuration(log logrus.FieldLogger, name string) time.Duration {
+func getEnvDuration(log FieldLogger, name string) time.Duration {
 	v := os.Getenv(name)
 	if v == "" {
 		return 0
 	}
 	d, err := time.ParseDuration(v)
 	if err != nil {
-		log.WithError(err).Errorf("while parsing '%s' as a duration", name)
+		log.LogAttrs(context.TODO(), slog.LevelError, "while parsing as a duration",
+			ErrAttr(err),
+			slog.String("name", name),
+		)
 		return 0
 	}
 	return d
@@ -645,7 +671,7 @@ func getEnvSlice(name string) []string {
 
 // Take values from a file in the format `GUBER_CONF_ITEM=my-value` and sets them as environment variables.
 // Lines that begin with `#` are ignored
-func fromEnvFile(log logrus.FieldLogger, configFile io.Reader) error {
+func fromEnvFile(log FieldLogger, configFile io.Reader) error {
 	contents, err := io.ReadAll(configFile)
 	if err != nil {
 		return fmt.Errorf("while reading config file '%s': %s", configFile, err)
@@ -657,7 +683,7 @@ func fromEnvFile(log logrus.FieldLogger, configFile io.Reader) error {
 			continue
 		}
 
-		log.Debugf("config: [%d] '%s'", i, line)
+		log.Debug("config", "i", i, "line", line)
 		parts := strings.SplitN(line, "=", 2)
 		if len(parts) != 2 {
 			return errors.Errorf("malformed key=value on line '%d'", i)
@@ -739,27 +765,3 @@ func GetTracingLevel() tracing.Level {
 	}
 	return tracing.InfoLevel
 }
-
-// TraceLevelInfoFilter is used with otelgrpc.WithInterceptorFilter() to
-// reduce noise by filtering trace propagation on some gRPC methods.
-// otelgrpc deprecated use of interceptors in v0.45.0 in favor of stats
-// handlers to propagate trace context.
-// However, stats handlers do not have a filter feature.
-// See: https://github.com/open-telemetry/opentelemetry-go-contrib/issues/4575
-// var TraceLevelInfoFilter = otelgrpc.Filter(func(info *otelgrpc.InterceptorInfo) bool {
-// 	if info.UnaryServerInfo != nil {
-// 		if info.UnaryServerInfo.FullMethod == "/pb.gubernator.PeersV1/GetPeerRateLimits" {
-// 			return false
-// 		}
-// 		if info.UnaryServerInfo.FullMethod == "/pb.gubernator.V1/HealthCheck" {
-// 			return false
-// 		}
-// 	}
-// 	if info.Method == "/pb.gubernator.PeersV1/GetPeerRateLimits" {
-// 		return false
-// 	}
-// 	if info.Method == "/pb.gubernator.V1/HealthCheck" {
-// 		return false
-// 	}
-// 	return true
-// })

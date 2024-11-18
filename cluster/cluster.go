@@ -19,12 +19,13 @@ package cluster
 import (
 	"context"
 	"fmt"
+	"log/slog"
 	"math/rand"
 
-	"github.com/gubernator-io/gubernator/v2"
 	"github.com/mailgun/holster/v4/clock"
 	"github.com/mailgun/holster/v4/errors"
-	"github.com/sirupsen/logrus"
+
+	"github.com/gubernator-io/gubernator/v3"
 )
 
 const (
@@ -36,8 +37,14 @@ const (
 var daemons []*gubernator.Daemon
 var peers []gubernator.PeerInfo
 
-// GetRandomPeer returns a random peer from the cluster
-func GetRandomPeer(dc string) gubernator.PeerInfo {
+// GetRandomPeerOptions returns gubernator.ClientOptions for a random peer in the cluster
+func GetRandomPeerOptions(dc string) gubernator.ClientOptions {
+	info := GetRandomPeerInfo(dc)
+	return gubernator.WithNoTLS(info.HTTPAddress)
+}
+
+// GetRandomPeerInfo returns a random peer from the cluster
+func GetRandomPeerInfo(dc string) gubernator.PeerInfo {
 	var local []gubernator.PeerInfo
 
 	for _, p := range peers {
@@ -48,6 +55,23 @@ func GetRandomPeer(dc string) gubernator.PeerInfo {
 
 	if len(local) == 0 {
 		panic(fmt.Sprintf("failed to find random peer for dc '%s'", dc))
+	}
+
+	return local[rand.Intn(len(local))]
+}
+
+// GetRandomDaemon returns a random daemon from the cluster
+func GetRandomDaemon(dc string) *gubernator.Daemon {
+	var local []*gubernator.Daemon
+
+	for _, d := range daemons {
+		if d.PeerInfo.DataCenter == dc {
+			local = append(local, d)
+		}
+	}
+
+	if len(local) == 0 {
+		panic(fmt.Sprintf("failed to find random daemon for dc '%s'", dc))
 	}
 
 	return local[rand.Intn(len(local))]
@@ -70,7 +94,7 @@ func PeerAt(idx int) gubernator.PeerInfo {
 
 // FindOwningPeer finds the peer which owns the rate limit with the provided name and unique key
 func FindOwningPeer(name, key string) (gubernator.PeerInfo, error) {
-	p, err := daemons[0].V1Server.GetPeer(context.Background(), name+"_"+key)
+	p, err := daemons[0].Service.GetPeer(context.Background(), name+"_"+key)
 	if err != nil {
 		return gubernator.PeerInfo{}, err
 	}
@@ -79,13 +103,13 @@ func FindOwningPeer(name, key string) (gubernator.PeerInfo, error) {
 
 // FindOwningDaemon finds the daemon which owns the rate limit with the provided name and unique key
 func FindOwningDaemon(name, key string) (*gubernator.Daemon, error) {
-	p, err := daemons[0].V1Server.GetPeer(context.Background(), name+"_"+key)
+	p, err := daemons[0].Service.GetPeer(context.Background(), name+"_"+key)
 	if err != nil {
 		return &gubernator.Daemon{}, err
 	}
 
 	for i, d := range daemons {
-		if d.PeerInfo.GRPCAddress == p.Info().GRPCAddress {
+		if d.Config().HTTPListenAddress == p.Info().HTTPAddress {
 			return daemons[i], nil
 		}
 	}
@@ -102,7 +126,7 @@ func ListNonOwningDaemons(name, key string) ([]*gubernator.Daemon, error) {
 
 	var daemons []*gubernator.Daemon
 	for _, d := range GetDaemons() {
-		if d.PeerInfo.GRPCAddress != owner.PeerInfo.GRPCAddress {
+		if d.Config().HTTPListenAddress != owner.Config().HTTPListenAddress {
 			daemons = append(daemons, d)
 		}
 	}
@@ -121,16 +145,15 @@ func NumOfDaemons() int {
 
 // Start a local cluster of gubernator servers
 func Start(numInstances int) error {
-	// Ideally we should let the socket choose the port, but then
+	// Ideally, we should let the socket choose the port, but then
 	// some things like the logger will not be set correctly.
 	var peers []gubernator.PeerInfo
 	port := 1111
 	for i := 0; i < numInstances; i++ {
 		peers = append(peers, gubernator.PeerInfo{
 			HTTPAddress: fmt.Sprintf("localhost:%d", port),
-			GRPCAddress: fmt.Sprintf("localhost:%d", port+1),
 		})
-		port += 2
+		port += 1
 	}
 	return StartWith(peers)
 }
@@ -138,7 +161,9 @@ func Start(numInstances int) error {
 // Restart the cluster
 func Restart(ctx context.Context) error {
 	for i := 0; i < len(daemons); i++ {
-		daemons[i].Close()
+		if err := daemons[i].Close(ctx); err != nil {
+			return err
+		}
 		if err := daemons[i].Start(ctx); err != nil {
 			return err
 		}
@@ -148,15 +173,16 @@ func Restart(ctx context.Context) error {
 }
 
 // StartWith a local cluster with specific addresses
-func StartWith(localPeers []gubernator.PeerInfo, opts ...option) error {
+func StartWith(localPeers []gubernator.PeerInfo, opts ...Option) error {
 	for _, peer := range localPeers {
 		ctx, cancel := context.WithTimeout(context.Background(), clock.Second*10)
 		cfg := gubernator.DaemonConfig{
-			Logger:            logrus.WithField("instance", peer.GRPCAddress),
-			InstanceID:        peer.GRPCAddress,
-			GRPCListenAddress: peer.GRPCAddress,
+			Logger:            slog.Default().With("instance", peer.HTTPAddress),
+			InstanceID:        peer.HTTPAddress,
 			HTTPListenAddress: peer.HTTPAddress,
+			AdvertiseAddress:  peer.HTTPAddress,
 			DataCenter:        peer.DataCenter,
+			CacheProvider:     "otter",
 			Behaviors: gubernator.BehaviorConfig{
 				// Suitable for testing but not production
 				GlobalSyncWait: clock.Millisecond * 50,
@@ -164,24 +190,18 @@ func StartWith(localPeers []gubernator.PeerInfo, opts ...option) error {
 				BatchTimeout:   clock.Second * 5,
 			},
 		}
+
 		for _, opt := range opts {
 			opt.Apply(&cfg)
 		}
 		d, err := gubernator.SpawnDaemon(ctx, cfg)
 		cancel()
 		if err != nil {
-			return errors.Wrapf(err, "while starting server for addr '%s'", peer.GRPCAddress)
+			return fmt.Errorf("while starting server for addr '%s': %w", peer.HTTPAddress, err)
 		}
-
-		p := gubernator.PeerInfo{
-			GRPCAddress: d.GRPCListeners[0].Addr().String(),
-			HTTPAddress: d.HTTPListener.Addr().String(),
-			DataCenter:  peer.DataCenter,
-		}
-		d.PeerInfo = p
 
 		// Add the peers and daemons to the package level variables
-		peers = append(peers, p)
+		peers = append(peers, d.PeerInfo)
 		daemons = append(daemons, d)
 	}
 
@@ -193,15 +213,15 @@ func StartWith(localPeers []gubernator.PeerInfo, opts ...option) error {
 }
 
 // Stop all daemons in the cluster
-func Stop() {
+func Stop(ctx context.Context) {
 	for _, d := range daemons {
-		d.Close()
+		_ = d.Close(ctx)
 	}
 	peers = nil
 	daemons = nil
 }
 
-type option interface {
+type Option interface {
 	Apply(cfg *gubernator.DaemonConfig)
 }
 
@@ -214,6 +234,6 @@ func (o *eventChannelOption) Apply(cfg *gubernator.DaemonConfig) {
 }
 
 // WithEventChannel sets EventChannel to Gubernator config.
-func WithEventChannel(eventChannel chan<- gubernator.HitEvent) option {
+func WithEventChannel(eventChannel chan<- gubernator.HitEvent) Option {
 	return &eventChannelOption{eventChannel: eventChannel}
 }

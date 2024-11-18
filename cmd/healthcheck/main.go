@@ -23,7 +23,7 @@ import (
 	"net/http"
 	"os"
 
-	guber "github.com/gubernator-io/gubernator/v2"
+	guber "github.com/gubernator-io/gubernator/v3"
 )
 
 func main() {
@@ -31,7 +31,8 @@ func main() {
 	if url == "" {
 		url = "localhost:1050"
 	}
-	resp, err := http.DefaultClient.Get(fmt.Sprintf("http://%s/v1/HealthCheck", url))
+
+	resp, err := http.DefaultClient.Get(fmt.Sprintf("http://%s/healthz", url))
 	if err != nil {
 		panic(err)
 	}
@@ -42,7 +43,7 @@ func main() {
 		panic(err)
 	}
 
-	var hc guber.HealthCheckResp
+	var hc guber.HealthCheckResponse
 	if err := json.Unmarshal(body, &hc); err != nil {
 		panic(err)
 	}
