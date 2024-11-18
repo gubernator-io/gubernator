@@ -20,26 +20,27 @@ import (
 	"context"
 	"flag"
 	"fmt"
+	"log/slog"
 	"math/rand"
 	"os"
 	"strings"
 	"time"
 
 	"github.com/davecgh/go-spew/spew"
-	guber "github.com/gubernator-io/gubernator/v3"
 	"github.com/mailgun/holster/v4/clock"
 	"github.com/mailgun/holster/v4/errors"
 	"github.com/mailgun/holster/v4/setter"
 	"github.com/mailgun/holster/v4/syncutil"
 	"github.com/mailgun/holster/v4/tracing"
-	"github.com/sirupsen/logrus"
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/trace"
 	"golang.org/x/time/rate"
+
+	guber "github.com/gubernator-io/gubernator/v3"
 )
 
 var (
-	log                     *logrus.Logger
+	log                     *slog.Logger
 	configFile, httpAddress string
 	concurrency             uint64
 	timeout                 time.Duration
@@ -49,7 +50,6 @@ var (
 )
 
 func main() {
-	log = logrus.StandardLogger()
 	flag.StringVar(&configFile, "config", "", "Environment config file")
 	flag.StringVar(&httpAddress, "e", "", "Gubernator HTTP endpoint address")
 	flag.Uint64Var(&concurrency, "concurrency", 1, "Concurrent threads (default 1)")
@@ -59,14 +59,22 @@ func main() {
 	flag.BoolVar(&quiet, "q", false, "Quiet logging")
 	flag.Parse()
 
-	if quiet {
-		log.SetLevel(logrus.ErrorLevel)
-	}
+	log = slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{
+		Level: func() slog.Level {
+			if quiet {
+				return slog.LevelError
+			}
+			return slog.LevelInfo
+		}(),
+	}))
 
 	// Initialize tracing.
 	res, err := tracing.NewResource("gubernator-cli", "")
 	if err != nil {
-		log.WithError(err).Fatal("Error in tracing.NewResource")
+		log.LogAttrs(context.TODO(), slog.LevelError, "Error in tracing.NewResource",
+			guber.ErrAttr(err),
+		)
+		return
 	}
 	ctx := context.Background()
 	err = tracing.InitTracing(ctx,
@@ -74,7 +82,9 @@ func main() {
 		tracing.WithResource(res),
 	)
 	if err != nil {
-		log.WithError(err).Warn("Error in tracing.InitTracing")
+		log.LogAttrs(context.TODO(), slog.LevelWarn, "Error in tracing.InitTracing",
+			guber.ErrAttr(err),
+		)
 	}
 
 	// Print startup message.
@@ -87,7 +97,9 @@ func main() {
 	err = tracing.CallScope(ctx, func(ctx context.Context) error {
 		// Print startup message.
 		cmdLine := strings.Join(os.Args[1:], " ")
-		logrus.WithContext(ctx).Info("Command line: " + cmdLine)
+		log.LogAttrs(ctx, slog.LevelInfo, "Command Line",
+			slog.String("cmdLine", cmdLine),
+		)
 
 		configFileReader, err := os.Open(configFile)
 		if err != nil {
@@ -109,12 +121,19 @@ func main() {
 			return err
 		}
 
-		log.WithContext(ctx).Infof("Connecting to '%s'...", conf.HTTPListenAddress)
+		log.LogAttrs(context.TODO(), slog.LevelInfo, "Connecting to",
+			slog.String("address", conf.HTTPListenAddress),
+		)
 		client, err = guber.NewClient(guber.WithDaemonConfig(conf, conf.HTTPListenAddress))
 		return err
 	})
 
-	checkErr(err)
+	if err != nil {
+		log.LogAttrs(context.TODO(), slog.LevelError, err.Error(),
+			guber.ErrAttr(err),
+		)
+		return
+	}
 
 	// Generate a selection of rate limits with random limits.
 	var rateLimits []*guber.RateLimitRequest
@@ -135,7 +154,9 @@ func main() {
 	var limiter *rate.Limiter
 	if reqRate > 0 {
 		l := rate.Limit(reqRate)
-		log.WithField("reqRate", reqRate).Info("")
+		log.LogAttrs(context.TODO(), slog.LevelInfo, "rate",
+			slog.Float64("rate", reqRate),
+		)
 		limiter = rate.NewLimiter(l, 1)
 	}
 
@@ -168,12 +189,6 @@ func min(a, b int) int {
 	return b
 }
 
-func checkErr(err error) {
-	if err != nil {
-		log.Fatal(err.Error())
-	}
-}
-
 func randInt(min, max int) int {
 	return rand.Intn(max-min) + min
 }
@@ -188,13 +203,15 @@ func sendRequest(ctx context.Context, client guber.Client, req *guber.CheckRateL
 	// Now hit our cluster with the rate limits
 	var resp guber.CheckRateLimitsResponse
 	if err := client.CheckRateLimits(ctx, req, &resp); err != nil {
-		log.WithContext(ctx).WithError(err).Error("Error in client.GetRateLimits")
+		log.LogAttrs(ctx, slog.LevelError, "Error in client.GetRateLimits",
+			guber.ErrAttr(err),
+		)
 		return
 	}
 
 	// Sanity checks.
 	if resp.Responses == nil {
-		log.WithContext(ctx).Error("Responses array is unexpectedly nil")
+		log.LogAttrs(ctx, slog.LevelError, "Responses array is unexpectedly nil")
 		return
 	}
 
@@ -204,8 +221,9 @@ func sendRequest(ctx context.Context, client guber.Client, req *guber.CheckRateL
 	for itemNum, resp := range resp.Responses {
 		if resp.Status == guber.Status_OVER_LIMIT {
 			overLimit = true
-			log.WithContext(ctx).WithField("name", req.Requests[itemNum].Name).
-				Info("Overlimit!")
+			log.LogAttrs(ctx, slog.LevelInfo, "Overlimit!",
+				slog.String("name", req.Requests[itemNum].Name),
+			)
 		}
 	}
 
@@ -217,7 +235,9 @@ func sendRequest(ctx context.Context, client guber.Client, req *guber.CheckRateL
 
 		if !quiet {
 			dumpResp := spew.Sdump(&resp)
-			log.WithContext(ctx).Info(dumpResp)
+			log.LogAttrs(ctx, slog.LevelInfo, "Dump",
+				slog.String("value", dumpResp),
+			)
 		}
 	}
 }

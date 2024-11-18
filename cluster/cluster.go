@@ -19,12 +19,13 @@ package cluster
 import (
 	"context"
 	"fmt"
+	"log/slog"
 	"math/rand"
 
-	"github.com/gubernator-io/gubernator/v3"
 	"github.com/mailgun/holster/v4/clock"
 	"github.com/mailgun/holster/v4/errors"
-	"github.com/sirupsen/logrus"
+
+	"github.com/gubernator-io/gubernator/v3"
 )
 
 const (
@@ -176,7 +177,7 @@ func StartWith(localPeers []gubernator.PeerInfo, opts ...Option) error {
 	for _, peer := range localPeers {
 		ctx, cancel := context.WithTimeout(context.Background(), clock.Second*10)
 		cfg := gubernator.DaemonConfig{
-			Logger:            logrus.WithField("instance", peer.HTTPAddress),
+			Logger:            slog.Default().With("instance", peer.HTTPAddress),
 			InstanceID:        peer.HTTPAddress,
 			HTTPListenAddress: peer.HTTPAddress,
 			AdvertiseAddress:  peer.HTTPAddress,

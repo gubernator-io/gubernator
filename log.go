@@ -4,36 +4,29 @@ import (
 	"bufio"
 	"context"
 	"io"
+	"log/slog"
 	"sync"
-	"time"
-
-	"github.com/sirupsen/logrus"
 )
 
-// The FieldLogger interface generalizes the Entry and Logger types
 type FieldLogger interface {
-	WithField(key string, value interface{}) *logrus.Entry
-	WithFields(fields logrus.Fields) *logrus.Entry
-	WithError(err error) *logrus.Entry
-	WithContext(ctx context.Context) *logrus.Entry
-	WithTime(t time.Time) *logrus.Entry
+	Handler() slog.Handler
+	With(args ...any) *slog.Logger
+	WithGroup(name string) *slog.Logger
+	Enabled(ctx context.Context, level slog.Level) bool
+	Log(ctx context.Context, level slog.Level, msg string, args ...any)
+	LogAttrs(ctx context.Context, level slog.Level, msg string, attrs ...slog.Attr)
+	Debug(msg string, args ...any)
+	DebugContext(ctx context.Context, msg string, args ...any)
+	Info(msg string, args ...any)
+	InfoContext(ctx context.Context, msg string, args ...any)
+	Warn(msg string, args ...any)
+	WarnContext(ctx context.Context, msg string, args ...any)
+	Error(msg string, args ...any)
+	ErrorContext(ctx context.Context, msg string, args ...any)
+}
 
-	Tracef(format string, args ...interface{})
-	Debugf(format string, args ...interface{})
-	Infof(format string, args ...interface{})
-	Printf(format string, args ...interface{})
-	Warnf(format string, args ...interface{})
-	Warningf(format string, args ...interface{})
-	Errorf(format string, args ...interface{})
-	Fatalf(format string, args ...interface{})
-
-	Log(level logrus.Level, args ...interface{})
-	Debug(args ...interface{})
-	Info(args ...interface{})
-	Print(args ...interface{})
-	Warn(args ...interface{})
-	Warning(args ...interface{})
-	Error(args ...interface{})
+func ErrAttr(err error) slog.Attr {
+	return slog.Any("error", err)
 }
 
 type logAdaptor struct {
@@ -61,7 +54,9 @@ func newLogAdaptor(log FieldLogger) *logAdaptor {
 			log.Info(scanner.Text())
 		}
 		if err := scanner.Err(); err != nil {
-			log.Errorf("Error while reading from Writer: %s", err)
+			log.LogAttrs(context.TODO(), slog.LevelError, "Error while reading from Writer",
+				ErrAttr(err),
+			)
 		}
 		_ = reader.Close()
 		wg.Done()

@@ -18,6 +18,7 @@ package gubernator
 
 import (
 	"context"
+	"log/slog"
 
 	"github.com/mailgun/holster/v4/syncutil"
 	"github.com/pkg/errors"
@@ -153,7 +154,10 @@ func (gm *globalManager) sendHits(hits map[string]*RateLimitRequest) {
 	for _, r := range hits {
 		peer, err := gm.instance.GetPeer(context.Background(), r.HashKey())
 		if err != nil {
-			gm.log.WithError(err).Errorf("while getting peer for hash key '%s'", r.HashKey())
+			gm.log.LogAttrs(context.TODO(), slog.LevelError, "while getting peer for hash key",
+				ErrAttr(err),
+				slog.String("hash_key", r.HashKey()),
+			)
 			continue
 		}
 		p, ok := peerRequests[peer.Info().HTTPAddress]
@@ -178,8 +182,10 @@ func (gm *globalManager) sendHits(hits map[string]*RateLimitRequest) {
 			cancel()
 
 			if err != nil {
-				gm.log.WithError(err).
-					Errorf("while sending global hits to '%s'", p.client.Info().HTTPAddress)
+				gm.log.LogAttrs(context.TODO(), slog.LevelError, "while sending global hits",
+					ErrAttr(err),
+					slog.String("address", p.client.Info().HTTPAddress),
+				)
 			}
 			return nil
 		}, p)
@@ -244,7 +250,9 @@ func (gm *globalManager) broadcastPeers(ctx context.Context, updates map[string]
 		grlReq.Hits = 0
 		state, err := gm.instance.cache.CheckRateLimit(ctx, grlReq, reqState)
 		if err != nil {
-			gm.log.WithError(err).Error("while retrieving rate limit status")
+			gm.log.LogAttrs(context.TODO(), slog.LevelError, "while retrieving rate limit status",
+				ErrAttr(err),
+			)
 			continue
 		}
 		updateReq := &UpdateRateLimit{
@@ -273,7 +281,10 @@ func (gm *globalManager) broadcastPeers(ctx context.Context, updates map[string]
 			if err != nil {
 				// Only log if it's an unknown error
 				if !errors.Is(err, context.Canceled) && errors.Is(err, context.DeadlineExceeded) {
-					gm.log.WithError(err).Errorf("while broadcasting global updates to '%s'", peer.Info().HTTPAddress)
+					gm.log.LogAttrs(context.TODO(), slog.LevelError, "while broadcasting global updates",
+						ErrAttr(err),
+						slog.String("address", peer.Info().HTTPAddress),
+					)
 				}
 			}
 			return nil

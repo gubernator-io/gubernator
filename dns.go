@@ -18,6 +18,7 @@ package gubernator
 
 import (
 	"context"
+	"log/slog"
 	"math/rand"
 	"net"
 	"os"
@@ -26,7 +27,6 @@ import (
 	"github.com/mailgun/holster/v4/setter"
 	"github.com/miekg/dns"
 	"github.com/pkg/errors"
-	"github.com/sirupsen/logrus"
 )
 
 // DNSResolver represents a dns resolver
@@ -135,7 +135,7 @@ type DNSPool struct {
 }
 
 func NewDNSPool(conf DNSPoolConfig) (*DNSPool, error) {
-	setter.SetDefault(&conf.Logger, logrus.WithField("category", "gubernator"))
+	setter.SetDefault(&conf.Logger, slog.New(slog.NewTextHandler(os.Stderr, nil)).With("category", "gubernator"))
 
 	if conf.OwnAddress == "" {
 		return nil, errors.New("AdvertiseAddress is required")

@@ -21,16 +21,17 @@ import (
 	"crypto/tls"
 	"fmt"
 	"io"
+	"log/slog"
 	"math/rand"
 	"net/http"
 	"strings"
 	"testing"
 
-	"github.com/gubernator-io/gubernator/v3"
 	"github.com/mailgun/holster/v4/clock"
-	"github.com/sirupsen/logrus"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"github.com/gubernator-io/gubernator/v3"
 )
 
 func spawnDaemon(t *testing.T, conf gubernator.DaemonConfig) *gubernator.Daemon {
@@ -352,7 +353,7 @@ func TestHTTPSDaemonPeerAuth(t *testing.T) {
 	} {
 		ctx, cancel := context.WithTimeout(context.Background(), clock.Second*10)
 		d, err := gubernator.SpawnDaemon(ctx, gubernator.DaemonConfig{
-			Logger:            logrus.WithField("instance", peer.HTTPAddress),
+			Logger:            slog.Default().With("instance", peer.HTTPAddress),
 			InstanceID:        peer.HTTPAddress,
 			HTTPListenAddress: peer.HTTPAddress,
 			AdvertiseAddress:  peer.HTTPAddress,

@@ -24,12 +24,10 @@ import (
 
 	"github.com/gubernator-io/gubernator/v3"
 	"github.com/gubernator-io/gubernator/v3/cluster"
-	"github.com/sirupsen/logrus"
 )
 
 // Start a cluster of gubernator instances for use in testing clients
 func main() {
-	logrus.SetLevel(logrus.InfoLevel)
 	// Start a local cluster
 	err := cluster.StartWith([]gubernator.PeerInfo{
 		{HTTPAddress: "127.0.0.1:9980"},

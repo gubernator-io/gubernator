@@ -20,6 +20,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"strings"
 	"sync"
 	"time"
@@ -144,16 +145,18 @@ func (s *Service) Close(ctx context.Context) (err error) {
 	if s.conf.Loader != nil {
 		err = s.cache.Store(ctx)
 		if err != nil {
-			s.log.WithError(err).
-				Error("Error in workerPool.Store")
+			s.log.LogAttrs(context.TODO(), slog.LevelError, "Error in workerPool.Store",
+				ErrAttr(err),
+			)
 			return fmt.Errorf("error in CacheManager.Store: %w", err)
 		}
 	}
 
 	err = s.cache.Close()
 	if err != nil {
-		s.log.WithError(err).
-			Error("Error in workerPool.Close")
+		s.log.LogAttrs(context.TODO(), slog.LevelError, "Error in workerPool.Close",
+			ErrAttr(err),
+		)
 		return fmt.Errorf("error in CacheManager.Close: %w", err)
 	}
 
@@ -318,10 +321,10 @@ func (s *Service) asyncRequest(ctx context.Context, req *AsyncReq) {
 		if attempts > 5 {
 			err = fmt.Errorf("attempts exhausted while communicating with '%s' for '%s': %w",
 				req.Peer.Info().HTTPAddress, req.Key, err)
-			s.log.WithContext(ctx).
-				WithError(err).
-				WithField("key", req.Key).
-				Error("attempts exhausted while communicating with peer")
+			s.log.LogAttrs(ctx, slog.LevelError, "attempts exhausted while communicating with peer",
+				ErrAttr(err),
+				slog.String("key", req.Key),
+			)
 			countError(err, "peer communication failed")
 			resp.Resp = &RateLimitResponse{Error: err.Error()}
 			break
@@ -333,10 +336,10 @@ func (s *Service) asyncRequest(ctx context.Context, req *AsyncReq) {
 				resp.Resp, err = s.checkLocalRateLimit(ctx, req.Req, reqState)
 				if err != nil {
 					err = fmt.Errorf("during checkLocalRateLimit() for '%s': %w", req.Key, err)
-					s.log.WithContext(ctx).
-						WithError(err).
-						WithField("key", req.Key).
-						Error("while applying rate limit")
+					s.log.LogAttrs(ctx, slog.LevelError, "while applying rate limit",
+						ErrAttr(err),
+						slog.String("key", req.Key),
+					)
 					resp.Resp = &RateLimitResponse{Error: err.Error()}
 				}
 				break
@@ -355,7 +358,10 @@ func (s *Service) asyncRequest(ctx context.Context, req *AsyncReq) {
 				req.Peer, err = s.GetPeer(ctx, req.Key)
 				if err != nil {
 					err = fmt.Errorf("while finding peer that owns rate limit '%s': %w", req.Key, err)
-					s.log.WithContext(ctx).WithError(err).WithField("key", req.Key).Error(err)
+					s.log.LogAttrs(ctx, slog.LevelError, err.Error(),
+						ErrAttr(err),
+						slog.String("key", req.Key),
+					)
 					countError(err, "during GetPeer()")
 					resp.Resp = &RateLimitResponse{Error: err.Error()}
 					break
@@ -634,7 +640,10 @@ func (s *Service) SetPeers(peerInfo []PeerInfo) {
 					Info:       info,
 				})
 				if err != nil {
-					s.log.Errorf("during NewPeer() call for '%s' - %s", info.HTTPAddress, err)
+					s.log.LogAttrs(context.TODO(), slog.LevelError, "during NewPeer() call",
+						ErrAttr(err),
+						slog.String("http_address", info.HTTPAddress),
+					)
 					return
 				}
 			}
@@ -652,7 +661,10 @@ func (s *Service) SetPeers(peerInfo []PeerInfo) {
 				Info:       info,
 			})
 			if err != nil {
-				s.log.Errorf("during NewPeer() call for '%s' - %s", info.HTTPAddress, err)
+				s.log.LogAttrs(context.TODO(), slog.LevelError, "during NewPeer() call",
+					ErrAttr(err),
+					slog.String("http_address", info.HTTPAddress),
+				)
 				return
 			}
 		}
@@ -668,7 +680,9 @@ func (s *Service) SetPeers(peerInfo []PeerInfo) {
 	s.conf.RegionPicker = regionPicker
 	s.peerMutex.Unlock()
 
-	s.log.WithField("peers", peerInfo).Debug("peers updated")
+	s.log.LogAttrs(context.TODO(), slog.LevelDebug, "peers updated",
+		slog.Any("peers", peerInfo),
+	)
 
 	// Shutdown any old peers we no longer need
 	ctx, cancel := context.WithTimeout(context.Background(), s.conf.Behaviors.BatchTimeout)
@@ -695,7 +709,10 @@ func (s *Service) SetPeers(peerInfo []PeerInfo) {
 			pc := obj.(*Peer)
 			err := pc.Close(ctx)
 			if err != nil {
-				s.log.WithError(err).WithField("peer", pc).Error("while shutting down peer")
+				s.log.LogAttrs(context.TODO(), slog.LevelError, "while shutting down peer",
+					ErrAttr(err),
+					slog.Any("peer", pc),
+				)
 			}
 			return nil
 		}, p)
@@ -707,7 +724,9 @@ func (s *Service) SetPeers(peerInfo []PeerInfo) {
 		for _, p := range shutdownPeers {
 			peers = append(peers, p.Info().HTTPAddress)
 		}
-		s.log.WithField("peers", peers).Debug("peers shutdown")
+		s.log.LogAttrs(context.TODO(), slog.LevelDebug, "peers shutdown",
+			slog.Any("peers", peers),
+		)
 	}
 }
 

@@ -18,12 +18,14 @@ package gubernator
 
 import (
 	"bufio"
+	"context"
 	"crypto/rand"
 	"crypto/tls"
 	"crypto/x509"
 	"encoding/hex"
 	"fmt"
 	"io"
+	"log/slog"
 	"net"
 	"os"
 	"runtime"
@@ -39,7 +41,6 @@ import (
 	"github.com/pkg/errors"
 	"github.com/segmentio/fasthash/fnv1"
 	"github.com/segmentio/fasthash/fnv1a"
-	"github.com/sirupsen/logrus"
 	etcd "go.etcd.io/etcd/client/v3"
 )
 
@@ -138,7 +139,7 @@ func (c *Config) SetDefaults() error {
 
 	setter.SetDefault(&c.CacheSize, 50_000)
 	setter.SetDefault(&c.Workers, runtime.NumCPU())
-	setter.SetDefault(&c.Logger, logrus.New().WithField("category", "gubernator"))
+	setter.SetDefault(&c.Logger, slog.Default().With("category", "gubernator"))
 
 	if c.CacheFactory == nil {
 		c.CacheFactory = func(maxSize int) (Cache, error) {
@@ -291,8 +292,8 @@ func (d *DaemonConfig) ServerTLS() *tls.Config {
 
 // SetupDaemonConfig returns a DaemonConfig object that is the result of merging the lines
 // in the provided configFile and the environment variables. See `example.conf` for all available config options and their descriptions.
-func SetupDaemonConfig(logger *logrus.Logger, configFile io.Reader) (DaemonConfig, error) {
-	log := logrus.NewEntry(logger)
+func SetupDaemonConfig(logger *slog.Logger, configFile io.Reader) (DaemonConfig, error) {
+	log := logger.With()
 	var conf DaemonConfig
 	var logLevel string
 	var logFormat string
@@ -307,12 +308,17 @@ func SetupDaemonConfig(logger *logrus.Logger, configFile io.Reader) (DaemonConfi
 
 	// Log config
 	setter.SetDefault(&logFormat, os.Getenv("GUBER_LOG_FORMAT"))
+	slogLevel := &slog.LevelVar{}
 	if logFormat != "" {
 		switch logFormat {
 		case "json":
-			logger.SetFormatter(&logrus.JSONFormatter{})
+			log = slog.New(slog.NewJSONHandler(os.Stderr, &slog.HandlerOptions{
+				Level: slogLevel,
+			}))
 		case "text":
-			logger.SetFormatter(&logrus.TextFormatter{})
+			log = slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{
+				Level: slogLevel,
+			}))
 		default:
 			return conf, errors.New("GUBER_LOG_FORMAT is invalid; expected value is either json or text")
 		}
@@ -321,15 +327,13 @@ func SetupDaemonConfig(logger *logrus.Logger, configFile io.Reader) (DaemonConfi
 	setter.SetDefault(&DebugEnabled, getEnvBool(log, "GUBER_DEBUG"))
 	setter.SetDefault(&logLevel, os.Getenv("GUBER_LOG_LEVEL"))
 	if DebugEnabled {
-		logger.SetLevel(logrus.DebugLevel)
+		slogLevel.Set(slog.LevelDebug)
 		log.Debug("Debug enabled")
 	} else if logLevel != "" {
-		logrusLogLevel, err := logrus.ParseLevel(logLevel)
+		err = slogLevel.UnmarshalText([]byte(logLevel))
 		if err != nil {
 			return conf, errors.Wrap(err, "invalid log level")
 		}
-
-		logger.SetLevel(logrusLogLevel)
 	}
 
 	// Main config
@@ -590,20 +594,20 @@ func anyHasPrefix(prefix string, items []string) bool {
 	return false
 }
 
-func getEnvBool(log logrus.FieldLogger, name string) bool {
+func getEnvBool(log FieldLogger, name string) bool {
 	v := os.Getenv(name)
 	if v == "" {
 		return false
 	}
 	b, err := strconv.ParseBool(v)
 	if err != nil {
-		log.WithError(err).Errorf("while parsing '%s' as an boolean", name)
+		log.LogAttrs(context.TODO(), slog.LevelError, "while parsing boolean", ErrAttr(err), slog.String("name", name))
 		return false
 	}
 	return b
 }
 
-func getEnvMinVersion(log logrus.FieldLogger, name string) uint16 {
+func getEnvMinVersion(log FieldLogger, name string) uint16 {
 	v := os.Getenv(name)
 	if v == "" {
 		return tls.VersionTLS13
@@ -616,33 +620,42 @@ func getEnvMinVersion(log logrus.FieldLogger, name string) uint16 {
 	}
 	version, ok := minVersion[v]
 	if !ok {
-		log.WithError(fmt.Errorf("unknown tls version: %s", v)).Errorf("while parsing '%s' as an min tls version, defaulting to 1.3", name)
+		log.LogAttrs(context.TODO(), slog.LevelError, "while parsing min tls version, defaulting to 1.3",
+			ErrAttr(fmt.Errorf("unknown tls version: %s", v)),
+			slog.String("name", name),
+		)
 		return tls.VersionTLS13
 	}
 	return version
 }
 
-func getEnvInteger(log logrus.FieldLogger, name string) int {
+func getEnvInteger(log FieldLogger, name string) int {
 	v := os.Getenv(name)
 	if v == "" {
 		return 0
 	}
 	i, err := strconv.ParseInt(v, 10, 64)
 	if err != nil {
-		log.WithError(err).Errorf("while parsing '%s' as an integer", name)
+		log.LogAttrs(context.TODO(), slog.LevelError, "while parsing as an integer",
+			ErrAttr(err),
+			slog.String("name", name),
+		)
 		return 0
 	}
 	return int(i)
 }
 
-func getEnvDuration(log logrus.FieldLogger, name string) time.Duration {
+func getEnvDuration(log FieldLogger, name string) time.Duration {
 	v := os.Getenv(name)
 	if v == "" {
 		return 0
 	}
 	d, err := time.ParseDuration(v)
 	if err != nil {
-		log.WithError(err).Errorf("while parsing '%s' as a duration", name)
+		log.LogAttrs(context.TODO(), slog.LevelError, "while parsing as a duration",
+			ErrAttr(err),
+			slog.String("name", name),
+		)
 		return 0
 	}
 	return d
@@ -658,7 +671,7 @@ func getEnvSlice(name string) []string {
 
 // Take values from a file in the format `GUBER_CONF_ITEM=my-value` and sets them as environment variables.
 // Lines that begin with `#` are ignored
-func fromEnvFile(log logrus.FieldLogger, configFile io.Reader) error {
+func fromEnvFile(log FieldLogger, configFile io.Reader) error {
 	contents, err := io.ReadAll(configFile)
 	if err != nil {
 		return fmt.Errorf("while reading config file '%s': %s", configFile, err)
@@ -670,7 +683,7 @@ func fromEnvFile(log logrus.FieldLogger, configFile io.Reader) error {
 			continue
 		}
 
-		log.Debugf("config: [%d] '%s'", i, line)
+		log.Debug("config", "i", i, "line", line)
 		parts := strings.SplitN(line, "=", 2)
 		if len(parts) != 2 {
 			return errors.Errorf("malformed key=value on line '%d'", i)
