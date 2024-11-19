@@ -22,11 +22,17 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"os"
+	"os/signal"
 	"strings"
+	"syscall"
 	"testing"
+	"time"
 
 	"github.com/gubernator-io/gubernator/v2"
 	"github.com/mailgun/holster/v4/clock"
+	"github.com/mailgun/holster/v4/retry"
+	"github.com/sirupsen/logrus"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"golang.org/x/net/http2"
@@ -340,4 +346,43 @@ func TestHTTPSClientAuth(t *testing.T) {
 	b, err = io.ReadAll(resp2.Body)
 	require.NoError(t, err)
 	assert.Equal(t, `{"status":"healthy","message":"","peer_count":1}`, strings.ReplaceAll(string(b), " ", ""))
+
+}
+
+func TestReloadTLS(t *testing.T) {
+	reloader, err := gubernator.NewKeypairReloader(logrus.WithField("category", "gubernator"),
+		"contrib/certs/gubernator.pem",
+		"contrib/certs/gubernator.key",
+		[]tls.Certificate{})
+	require.NoError(t, err)
+
+	// Get the cert for the first time
+	certFn := reloader.GetCertificateFunc()
+	cert1, err := certFn(&tls.ClientHelloInfo{})
+	require.NoError(t, err)
+
+	// update the cert file and first a SIGHUP signal
+	reloader.UpdatePath("contrib/certs/client-auth.pem", "contrib/certs/client-auth.key")
+	c := make(chan os.Signal, 10)
+	signal.Notify(c, syscall.SIGHUP)
+	err = syscall.Kill(syscall.Getpid(), syscall.SIGHUP)
+	require.NoError(t, err)
+	<-c
+
+	// Wait until cert is reloaded
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	err = retry.Until(ctx, retry.Interval(clock.Millisecond*300),
+		func(ctx context.Context, i int) error {
+			cert2, err := certFn(&tls.ClientHelloInfo{})
+			if err != nil {
+				return err
+			}
+			if cert1 == cert2 {
+				return fmt.Errorf("cert not updated")
+			}
+			t.Logf("tls reloaded successfully after retry %d times", i)
+			return nil
+		})
+	require.NoError(t, err)
 }

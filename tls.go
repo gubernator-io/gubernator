@@ -344,7 +344,8 @@ func NewKeypairReloader(logger FieldLogger, certPath, keyPath string, clientCert
 }
 
 // maybeReload reloads TLS cert and updates client certificates.
-// Client certificates are used to conenct to gubernator peers.
+// Client certificates are used to conenct to gubernator peers. Note that
+// maybeReload is triggered upon SIGHUP
 func (kpr *keypairReloader) maybeReload() error {
 	newCert, err := tls.LoadX509KeyPair(kpr.certPath, kpr.keyPath)
 	if err != nil {
@@ -355,6 +356,11 @@ func (kpr *keypairReloader) maybeReload() error {
 	kpr.cert = &newCert
 	kpr.clientCerts = []tls.Certificate{newCert}
 	return nil
+}
+
+func (kpr *keypairReloader) UpdatePath(certPath, keyPath string) {
+	kpr.certPath = certPath
+	kpr.keyPath = keyPath
 }
 
 func (kpr *keypairReloader) GetCertificateFunc() func(*tls.ClientHelloInfo) (*tls.Certificate, error) {
