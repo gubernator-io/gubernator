@@ -138,7 +138,11 @@ func (c *Config) SetDefaults() error {
 
 	set.Default(&c.CacheSize, 50_000)
 	set.Default(&c.Workers, runtime.NumCPU())
-	set.Default(&c.Logger, slog.Default().With("category", "gubernator"))
+	set.Default(&c.InstanceID, GetInstanceID())
+	set.Default(&c.Logger, slog.Default().With(
+		"instance", c.InstanceID,
+		"category", "gubernator",
+	))
 
 	if c.CacheFactory == nil {
 		c.CacheFactory = func(maxSize int) (Cache, error) {
