@@ -21,6 +21,7 @@ import (
 	"fmt"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/mailgun/errors"
@@ -49,7 +50,7 @@ type V1Instance struct {
 	peerMutex  sync.RWMutex
 	log        FieldLogger
 	conf       Config
-	isClosed   bool
+	isClosed   atomic.Bool
 	workerPool *WorkerPool
 }
 
@@ -149,16 +150,14 @@ func NewV1Instance(conf Config) (s *V1Instance, err error) {
 }
 
 func (s *V1Instance) Close() (err error) {
-	ctx := context.Background()
-
-	if s.isClosed {
+	if !s.isClosed.CompareAndSwap(false, true) {
 		return nil
 	}
 
 	s.global.Close()
 
 	if s.conf.Loader != nil {
-		err = s.workerPool.Store(ctx)
+		err = s.workerPool.Store(context.Background())
 		if err != nil {
 			s.log.WithError(err).
 				Error("Error in workerPool.Store")
@@ -173,7 +172,6 @@ func (s *V1Instance) Close() (err error) {
 		return errors.Wrap(err, "Error in workerPool.Close")
 	}
 
-	s.isClosed = true
 	return nil
 }
 
