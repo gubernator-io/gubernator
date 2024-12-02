@@ -4,6 +4,6 @@ description: A Helm Chart for gubernator
 
 type: application
 
-version: 2.8.1
+version: 2.9.0
 
-appVersion: 2.8.1
+appVersion: 2.9.0
