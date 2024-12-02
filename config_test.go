@@ -38,4 +38,9 @@ func TestDefaultInstanceId(t *testing.T) {
 	daemonConfig, err := SetupDaemonConfig(logrus.StandardLogger(), strings.NewReader(s))
 	require.NoError(t, err)
 	require.NotEmpty(t, daemonConfig.InstanceID)
+
+	instanceConfig := Config{}
+	err = instanceConfig.SetDefaults()
+	require.NoError(t, err)
+	require.NotEmpty(t, instanceConfig.InstanceID)
 }

@@ -145,7 +145,11 @@ func (c *Config) SetDefaults() error {
 
 	setter.SetDefault(&c.CacheSize, 50_000)
 	setter.SetDefault(&c.Workers, runtime.NumCPU())
-	setter.SetDefault(&c.Logger, logrus.New().WithField("category", "gubernator"))
+	setter.SetDefault(&c.InstanceID, GetInstanceID())
+	setter.SetDefault(&c.Logger, logrus.New().WithFields(logrus.Fields{
+		"instance": c.InstanceID,
+		"category": "gubernator",
+	}))
 
 	if c.CacheFactory == nil {
 		c.CacheFactory = func(maxSize int) Cache {
