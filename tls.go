@@ -256,10 +256,10 @@ func SetupTLS(conf *TLSConfig) error {
 		if err != nil {
 			return errors.Wrap(err, "while parsing server certificate and private key")
 		}
-		conf.ClientTLS.Certificates = []tls.Certificate{serverCert}
 
 		if conf.AutoTLS {
 			conf.ServerTLS.Certificates = []tls.Certificate{serverCert}
+			conf.ClientTLS.Certificates = []tls.Certificate{serverCert}
 		} else {
 			// Enable hot reload TLS cert and key file when AutoTLS is unused
 			kpr, err := NewKeypairReloader(conf.Logger, conf.CertFile, conf.KeyFile, conf.ClientTLS.Certificates)
@@ -267,6 +267,7 @@ func SetupTLS(conf *TLSConfig) error {
 				return fmt.Errorf("error creating tls reloader: %w", err)
 			}
 			conf.ServerTLS.GetCertificate = kpr.GetCertificateFunc()
+			conf.ClientTLS.GetCertificate = kpr.GetCertificateFunc()
 		}
 	}
 
