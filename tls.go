@@ -109,12 +109,6 @@ type TLSConfig struct {
 	// (Optional) The client auth CA Certificate in PEM format. Used if ClientAuthCaFile is unset.
 	ClientAuthCaPEM *bytes.Buffer
 
-	// (Optional) The client auth private key in PEM format. Used if ClientAuthKeyFile is unset.
-	ClientAuthKeyPEM *bytes.Buffer
-
-	// (Optional) The client auth Certificate in PEM format. Used if ClientAuthCertFile is unset.
-	ClientAuthCertPEM *bytes.Buffer
-
 	// (Optional) the server name to check when validating the provided certificate
 	ClientAuthServerName string
 
@@ -216,16 +210,6 @@ func SetupTLS(conf *TLSConfig) error {
 		return err
 	}
 
-	conf.ClientAuthKeyPEM, err = fromFile(conf.ClientAuthKeyFile)
-	if err != nil {
-		return err
-	}
-
-	conf.ClientAuthCertPEM, err = fromFile(conf.ClientAuthCertFile)
-	if err != nil {
-		return err
-	}
-
 	// If generated TLS certs requested
 	if conf.AutoTLS {
 		conf.Logger.Info("AutoTLS Enabled")
@@ -256,17 +240,20 @@ func SetupTLS(conf *TLSConfig) error {
 		if err != nil {
 			return errors.Wrap(err, "while parsing server certificate and private key")
 		}
-		conf.ClientTLS.Certificates = []tls.Certificate{serverCert}
 
 		if conf.AutoTLS {
 			conf.ServerTLS.Certificates = []tls.Certificate{serverCert}
+			conf.ClientTLS.Certificates = []tls.Certificate{serverCert}
 		} else {
 			// Enable hot reload TLS cert and key file when AutoTLS is unused
-			kpr, err := NewKeypairReloader(conf.Logger, conf.CertFile, conf.KeyFile, conf.ClientTLS.Certificates)
+			// Both server and client use the same certs. Client auth is overwritten
+			// if ClientAuthCertFile and ClientAuthKeyFile are provided (see below).
+			serverKpr, err := NewKeypairReloader(conf.Logger, conf.CertFile, conf.KeyFile)
 			if err != nil {
 				return fmt.Errorf("error creating tls reloader: %w", err)
 			}
-			conf.ServerTLS.GetCertificate = kpr.GetCertificateFunc()
+			conf.ServerTLS.GetCertificate = serverKpr.GetCertificateFunc()
+			conf.ClientTLS.GetClientCertificate = serverKpr.GetClientCertificateFunc()
 		}
 	}
 
@@ -289,13 +276,14 @@ func SetupTLS(conf *TLSConfig) error {
 
 		conf.ServerTLS.ClientCAs = clientPool
 
-		// If client auth key/cert was provided
-		if conf.ClientAuthKeyPEM != nil && conf.ClientAuthCertPEM != nil {
-			clientCert, err := tls.X509KeyPair(conf.ClientAuthCertPEM.Bytes(), conf.ClientAuthKeyPEM.Bytes())
+		// If client auth key/cert was provided, set the clientTLS's GetClientCertificate.
+		// Hot-reload is enabled with changes to ClientAuthCertFile or ClientAuthKeyFile
+		if conf.ClientAuthCertFile != "" && conf.ClientAuthKeyFile != "" {
+			clientKpr, err := NewKeypairReloader(conf.Logger, conf.ClientAuthCertFile, conf.ClientAuthKeyFile)
 			if err != nil {
-				return errors.Wrap(err, "while parsing client certificate and private key")
+				return fmt.Errorf("error creating tls reloader: %w", err)
 			}
-			conf.ClientTLS.Certificates = []tls.Certificate{clientCert}
+			conf.ClientTLS.GetClientCertificate = clientKpr.GetClientCertificateFunc()
 		}
 	}
 
@@ -310,19 +298,14 @@ type keypairReloader struct {
 	certPath string
 	keyPath  string
 	logger   FieldLogger
-	// clientCerts is used to connect to peer gubernator instances.
-	// Since GetCertificate is only applicable to TLS server, client
-	// certificates are statically re-assigned along with server cert/key.
-	clientCerts []tls.Certificate
 }
 
 // NewKeypairReloader create a reloader that hot-reloads cert and key file
-func NewKeypairReloader(logger FieldLogger, certPath, keyPath string, clientCerts []tls.Certificate) (*keypairReloader, error) {
+func NewKeypairReloader(logger FieldLogger, certPath, keyPath string) (*keypairReloader, error) {
 	result := &keypairReloader{
-		certPath:    certPath,
-		keyPath:     keyPath,
-		logger:      logger,
-		clientCerts: clientCerts,
+		certPath: certPath,
+		keyPath:  keyPath,
+		logger:   logger,
 	}
 	cert, err := tls.LoadX509KeyPair(certPath, keyPath)
 	if err != nil {
@@ -354,7 +337,6 @@ func (kpr *keypairReloader) maybeReload() error {
 	kpr.certMu.Lock()
 	defer kpr.certMu.Unlock()
 	kpr.cert = &newCert
-	kpr.clientCerts = []tls.Certificate{newCert}
 	return nil
 }
 
@@ -365,6 +347,14 @@ func (kpr *keypairReloader) UpdatePath(certPath, keyPath string) {
 
 func (kpr *keypairReloader) GetCertificateFunc() func(*tls.ClientHelloInfo) (*tls.Certificate, error) {
 	return func(clientHello *tls.ClientHelloInfo) (*tls.Certificate, error) {
+		kpr.certMu.RLock()
+		defer kpr.certMu.RUnlock()
+		return kpr.cert, nil
+	}
+}
+
+func (kpr *keypairReloader) GetClientCertificateFunc() func(*tls.CertificateRequestInfo) (*tls.Certificate, error) {
+	return func(clientHello *tls.CertificateRequestInfo) (*tls.Certificate, error) {
 		kpr.certMu.RLock()
 		defer kpr.certMu.RUnlock()
 		return kpr.cert, nil
