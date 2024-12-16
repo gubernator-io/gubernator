@@ -352,8 +352,7 @@ func TestHTTPSClientAuth(t *testing.T) {
 func TestReloadTLS(t *testing.T) {
 	reloader, err := gubernator.NewKeypairReloader(logrus.WithField("category", "gubernator"),
 		"contrib/certs/gubernator.pem",
-		"contrib/certs/gubernator.key",
-		[]tls.Certificate{})
+		"contrib/certs/gubernator.key")
 	require.NoError(t, err)
 
 	// Get the cert for the first time
