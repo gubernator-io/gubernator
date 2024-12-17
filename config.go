@@ -411,6 +411,7 @@ func SetupDaemonConfig(logger *logrus.Logger, configFile io.Reader) (DaemonConfi
 
 	setter.SetDefault(&conf.MemberListPoolConf.Advertise.GRPCAddress, os.Getenv("GUBER_MEMBERLIST_ADVERTISE_ADDRESS"), conf.AdvertiseAddress)
 	setter.SetDefault(&conf.MemberListPoolConf.MemberListAddress, os.Getenv("GUBER_MEMBERLIST_ADDRESS"), fmt.Sprintf("%s:7946", advAddr))
+	setter.SetDefault(&conf.MemberListPoolConf.MemberListBindAddress, os.Getenv("GUBER_MEMBERLIST_BIND_ADDRESS"))
 	setter.SetDefault(&conf.MemberListPoolConf.KnownNodes, getEnvSlice("GUBER_MEMBERLIST_KNOWN_NODES"), []string{})
 	setter.SetDefault(&conf.MemberListPoolConf.Advertise.DataCenter, conf.DataCenter)
 	setter.SetDefault(&conf.MemberListPoolConf.EncryptionConfig.SecretKeys, getEnvSlice("GUBER_MEMBERLIST_SECRET_KEYS"), []string{})
