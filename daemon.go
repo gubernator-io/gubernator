@@ -241,6 +241,10 @@ func (s *Daemon) Start(ctx context.Context) error {
 		if err != nil {
 			return errors.Wrap(err, "while creating member list pool")
 		}
+	case "none":
+		// In `none` discovery mode, daemon.SetPeers must be explicitly
+		// called to add peer to the gubernator cluster
+		s.log.Warn("Discovery type is none")
 	}
 
 	// We override the default Marshaller to enable the `UseProtoNames` option.
