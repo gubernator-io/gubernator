@@ -156,6 +156,7 @@ func StartWith(localPeers []gubernator.PeerInfo, opts ...option) error {
 			InstanceID:        peer.GRPCAddress,
 			GRPCListenAddress: peer.GRPCAddress,
 			HTTPListenAddress: peer.HTTPAddress,
+			AdvertiseAddress:  peer.GRPCAddress,
 			DataCenter:        peer.DataCenter,
 			Behaviors: gubernator.BehaviorConfig{
 				// Suitable for testing but not production
