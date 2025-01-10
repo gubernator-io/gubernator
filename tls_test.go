@@ -294,6 +294,7 @@ func TestTLSClusterWithClientAuthentication(t *testing.T) {
 func TestHTTPSClientAuth(t *testing.T) {
 	conf := gubernator.DaemonConfig{
 		GRPCListenAddress:       "127.0.0.1:9695",
+		AdvertiseAddress:        "127.0.0.1:9695",
 		HTTPListenAddress:       "127.0.0.1:9685",
 		HTTPStatusListenAddress: "127.0.0.1:9686",
 		TLS: &gubernator.TLSConfig{
@@ -332,7 +333,7 @@ func TestHTTPSClientAuth(t *testing.T) {
 	defer resp.Body.Close()
 	b, err := io.ReadAll(resp.Body)
 	require.NoError(t, err)
-	assert.Equal(t, `{"status":"healthy","message":"","peer_count":1}`, strings.ReplaceAll(string(b), " ", ""))
+	assert.Equal(t, `{"status":"healthy","message":"","peer_count":1,"advertise_address":"127.0.0.1:9695"}`, strings.ReplaceAll(string(b), " ", ""))
 
 	// Verify we get an error when we try to access existing HTTPListenAddress without cert
 	//nolint:bodyclose // Expect error, no body to close.
@@ -345,7 +346,7 @@ func TestHTTPSClientAuth(t *testing.T) {
 	defer resp2.Body.Close()
 	b, err = io.ReadAll(resp2.Body)
 	require.NoError(t, err)
-	assert.Equal(t, `{"status":"healthy","message":"","peer_count":1}`, strings.ReplaceAll(string(b), " ", ""))
+	assert.Equal(t, `{"status":"healthy","message":"","peer_count":1,"advertise_address":"127.0.0.1:9695"}`, strings.ReplaceAll(string(b), " ", ""))
 
 }
 

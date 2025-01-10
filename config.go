@@ -104,6 +104,10 @@ type Config struct {
 	// using multi data center support.
 	DataCenter string
 
+	// (Optional) This is the AdvertiseAddr of the instance. This value will be used to
+	// find the peer that is owned by this instance
+	AdvertiseAddr string
+
 	// (Optional) A Logger which implements the declared logger interface (typically *logrus.Entry)
 	Logger FieldLogger
 

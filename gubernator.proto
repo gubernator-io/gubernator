@@ -210,4 +210,16 @@ message HealthCheckResp {
   string message = 2;
   // The number of peers we know about
   int32 peer_count = 3;
+
+  // advertise_address is the address advertised to other peers and
+  // is verified as owned by this instance. If advertise_address is 
+  // empty, this indicates the instance is unable to find it's advertised
+  // address in the list of peers provided to SetPeers(). This is likely
+  // due to an incorrect GUBER_ADVERTISE_ADDRESS, or the discovery method
+  // used to call SetPeers() is missing our instance address in the peer
+  // list provided.
+  //
+  // If advertise_address is empty, this gubernator instance is considered
+  // unhealthy.
+  string advertise_address = 4;
 }
