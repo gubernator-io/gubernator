@@ -542,6 +542,7 @@ func (s *V1Instance) HealthCheck(ctx context.Context, r *HealthCheckReq) (health
 	span := trace.SpanFromContext(ctx)
 
 	var errs []string
+	ownPeerAddress := ""
 
 	s.peerMutex.RLock()
 	defer s.peerMutex.RUnlock()
@@ -554,6 +555,10 @@ func (s *V1Instance) HealthCheck(ctx context.Context, r *HealthCheckReq) (health
 			span.RecordError(err)
 			errs = append(errs, err.Error())
 		}
+
+		if ownPeerAddress == "" && peer.Info().GRPCAddress == s.conf.AdvertiseAddr {
+			ownPeerAddress = peer.Info().GRPCAddress
+		}
 	}
 
 	// Do the same for region peers
@@ -564,16 +569,27 @@ func (s *V1Instance) HealthCheck(ctx context.Context, r *HealthCheckReq) (health
 			span.RecordError(err)
 			errs = append(errs, err.Error())
 		}
+
+		if ownPeerAddress == "" && peer.Info().GRPCAddress == s.conf.AdvertiseAddr &&
+			peer.Info().DataCenter == s.conf.DataCenter {
+			ownPeerAddress = peer.Info().GRPCAddress
+		}
 	}
 
 	health = &HealthCheckResp{
-		PeerCount: int32(len(localPeers) + len(regionPeers)),
-		Status:    Healthy,
+		PeerCount:        int32(len(localPeers) + len(regionPeers)),
+		Status:           Healthy,
+		AdvertiseAddress: ownPeerAddress,
 	}
 
 	if len(errs) != 0 {
 		health.Status = UnHealthy
 		health.Message = strings.Join(errs, "|")
+	}
+
+	if health.AdvertiseAddress == "" {
+		health.Status = UnHealthy
+		health.Message = strings.Join(errs, "this instance is not found in the peer list")
 	}
 
 	span.SetAttributes(
