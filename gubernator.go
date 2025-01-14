@@ -589,7 +589,7 @@ func (s *V1Instance) HealthCheck(ctx context.Context, r *HealthCheckReq) (health
 
 	if health.AdvertiseAddress == "" {
 		health.Status = UnHealthy
-		health.Message = strings.Join(errs, "this instance is not found in the peer list")
+		health.Message = strings.Join(append(errs, "this instance is not found in the peer list"), "|")
 	}
 
 	span.SetAttributes(
