@@ -2,7 +2,7 @@
 VERSION=$(shell cat version)
 LDFLAGS="-X main.Version=$(VERSION)"
 GOLANGCI_LINT = $(GOPATH)/bin/golangci-lint
-GOLANGCI_LINT_VERSION = v1.61.0
+GOLANGCI_LINT_VERSION = v1.64.6
 
 .PHONY: help
 help:
@@ -13,7 +13,7 @@ $(GOLANGCI_LINT): ## Download Go linter
 
 .PHONY: lint
 lint: $(GOLANGCI_LINT) ## Run Go linter
-	$(GOLANGCI_LINT) run -v -c .golangci.yml ./...
+	$(GOLANGCI_LINT) run -v ./...
 
 .PHONY: test
 test: ## Run unit tests and measure code coverage
@@ -45,6 +45,14 @@ clean-proto: ## Clean the generated source files from the protobuf sources
 	@find . -name "*.pb.go" -type f -delete
 	@find . -name "*.pb.*.go" -type f -delete
 
+.PHONY: tidy
+tidy:
+	go mod tidy && git diff --exit-code
+
+.PHONY: ci
+ci: tidy lint test
+	@echo
+	@echo "\033[32mEVERYTHING PASSED!\033[0m"
 
 .PHONY: proto
 proto: ## Build protos

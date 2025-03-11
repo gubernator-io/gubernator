@@ -6,7 +6,7 @@ on:
   pull_request:
 
 env:
-  GOLANGCI_LINT_VERSION: v1.61.0
+  GOLANGCI_LINT_VERSION: v1.64.6
 
 jobs:
   lint:
@@ -33,4 +33,4 @@ jobs:
         with:
           version: ${{ env.GOLANGCI_LINT_VERSION }}
           skip-cache: true # cache/restore is done by actions/setup-go@v3 step
-          args: -v
+          args: -v --timeout=5m
