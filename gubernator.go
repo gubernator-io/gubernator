@@ -645,6 +645,19 @@ func (s *V1Instance) SetPeers(peerInfo []PeerInfo) {
 	regionPicker := s.conf.RegionPicker.New()
 
 	for _, info := range peerInfo {
+		// If the AdvertiseAddr does not match the info.IsOwner address, then we assume the
+		// GRPCAddress provided by the SetPeers() caller -- which is typically via peer discovery
+		// -- to be correct, and update the AdvertiseAddr accordingly. This allows gubernator
+		// to continue operating correctly if our advertise address changes during normal operation.
+		//
+		// AdvertiseAddr needs to be set properly for HealthCheck() to correctly report
+		// valid peer configuration.
+		if info.IsOwner && s.conf.AdvertiseAddr != info.GRPCAddress {
+			s.peerMutex.Lock()
+			s.conf.AdvertiseAddr = info.GRPCAddress
+			s.peerMutex.Unlock()
+		}
+
 		// Add peers that are not in our local DC to the RegionPicker
 		if info.DataCenter != s.conf.DataCenter {
 			peer := s.conf.RegionPicker.GetByPeerInfo(info)
@@ -685,9 +698,8 @@ func (s *V1Instance) SetPeers(peerInfo []PeerInfo) {
 		localPicker.Add(peer)
 	}
 
-	s.peerMutex.Lock()
-
 	// Replace our current pickers
+	s.peerMutex.Lock()
 	oldLocalPicker := s.conf.LocalPicker
 	oldRegionPicker := s.conf.RegionPicker
 	s.conf.LocalPicker = localPicker
