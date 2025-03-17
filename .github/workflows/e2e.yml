@@ -1,0 +1,61 @@
+name: E2E
+
+on:
+  pull_request:
+    branches: [ master ]
+  push:
+    branches:
+      - master
+
+jobs:
+  e2e:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Create k8s Kind Cluster
+        id: kind
+        uses: helm/kind-action@v1
+        with:
+          version: 'v0.27.0'
+          registry: true
+          registry_name: gubernator-io
+          registry_port: 5001
+
+      - name: Build and push
+        env:
+          LOCAL_REGISTRY: ${{ steps.kind.outputs.LOCAL_REGISTRY }}
+        run: |
+          docker build . -t $LOCAL_REGISTRY/gubernator
+          docker push $LOCAL_REGISTRY/gubernator
+
+      - name: Deploy
+        run: |
+          helm install gubernator \
+            --set gubernator.image.repository=${{ steps.kind.outputs.LOCAL_REGISTRY }}/gubernator \
+            --set gubernator.serviceAccount.create=true \
+            ./contrib/charts/gubernator
+          kubectl wait --for=condition=available deployment/gubernator
+
+      - name: k8s contents
+        if: always()
+        run: |
+          echo "===="
+          kubectl get deployments
+          echo "===="
+          kubectl describe deployments
+          echo "===="
+          kubectl get pods
+          echo "===="
+          kubectl describe pods
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: 1.22.x
+
+      - name: Test
+        run: |
+          kubectl port-forward deployment/gubernator 1050 1051 &
+          GUBER_HTTP_RETRY_COUNT=60 go run ./cmd/healthcheck
