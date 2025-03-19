@@ -173,6 +173,33 @@ func (c *Config) SetDefaults() error {
 	return nil
 }
 
+func (c *Config) AdvertiseAddrIsSpecified() bool {
+	if c.AdvertiseAddr == "" {
+		// If there's no address
+		return false
+	}
+
+	host, _, err := net.SplitHostPort(c.AdvertiseAddr)
+	if err != nil {
+		// If it's an invalid address
+		return false
+	}
+
+	if host == "" {
+		// For IPv4 wildcard ":1051"
+		return false
+	}
+
+	ip := net.ParseIP(host)
+	if ip == nil {
+		// If we specified a DNS name "my-dns-name:1051"
+		return true
+	}
+
+	// If it's a valid IP, and an IP address is specified i.e. not "0.0.0.0:1051" or IPv6 ":::1051"
+	return !ip.IsUnspecified()
+}
+
 type PeerInfo struct {
 	// (Optional) The name of the data center this peer is in. Leave blank if not using multi data center support.
 	DataCenter string `json:"data-center"`

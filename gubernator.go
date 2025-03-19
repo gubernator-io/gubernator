@@ -544,6 +544,8 @@ func (s *V1Instance) HealthCheck(ctx context.Context, r *HealthCheckReq) (health
 	var errs []string
 	ownPeerAddress := ""
 
+	advertiseAddrIsSpecified := s.conf.AdvertiseAddrIsSpecified()
+
 	s.peerMutex.RLock()
 	defer s.peerMutex.RUnlock()
 
@@ -556,8 +558,10 @@ func (s *V1Instance) HealthCheck(ctx context.Context, r *HealthCheckReq) (health
 			errs = append(errs, err.Error())
 		}
 
-		if ownPeerAddress == "" && peer.Info().GRPCAddress == s.conf.AdvertiseAddr {
-			ownPeerAddress = peer.Info().GRPCAddress
+		if advertiseAddrIsSpecified {
+			if ownPeerAddress == "" && peer.Info().GRPCAddress == s.conf.AdvertiseAddr {
+				ownPeerAddress = peer.Info().GRPCAddress
+			}
 		}
 	}
 
@@ -570,9 +574,11 @@ func (s *V1Instance) HealthCheck(ctx context.Context, r *HealthCheckReq) (health
 			errs = append(errs, err.Error())
 		}
 
-		if ownPeerAddress == "" && peer.Info().GRPCAddress == s.conf.AdvertiseAddr &&
-			peer.Info().DataCenter == s.conf.DataCenter {
-			ownPeerAddress = peer.Info().GRPCAddress
+		if advertiseAddrIsSpecified {
+			if ownPeerAddress == "" && peer.Info().GRPCAddress == s.conf.AdvertiseAddr &&
+				peer.Info().DataCenter == s.conf.DataCenter {
+				ownPeerAddress = peer.Info().GRPCAddress
+			}
 		}
 	}
 
@@ -587,7 +593,7 @@ func (s *V1Instance) HealthCheck(ctx context.Context, r *HealthCheckReq) (health
 		health.Message = strings.Join(errs, "|")
 	}
 
-	if health.AdvertiseAddress == "" {
+	if health.AdvertiseAddress == "" && advertiseAddrIsSpecified {
 		health.Status = UnHealthy
 		health.Message = strings.Join(append(errs, "this instance is not found in the peer list"), "|")
 	}
