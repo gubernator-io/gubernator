@@ -44,20 +44,13 @@ spec:
             - name: http
               containerPort: {{ include "gubernator.http.port" .  }}
           livenessProbe:
-            failureThreshold: 2
-            tcpSocket:
-              port: {{ include "gubernator.grpc.port" . }}
-            initialDelaySeconds: 30
-            periodSeconds: 10
-            successThreshold: 1
-            timeoutSeconds: 5
+            httpGet:
+              port: {{ include "gubernator.http.port" . }}
+              path: "/v1/LiveCheck"
           readinessProbe:
-            failureThreshold: 20
-            tcpSocket:
-              port: {{ include "gubernator.grpc.port" . }}
-            periodSeconds: 1
-            successThreshold: 1
-            timeoutSeconds: 1
+            httpGet:
+              port: {{ include "gubernator.http.port" . }}
+              path: "/v1/HealthCheck"
           {{- with .Values.gubernator.resources }}
           resources:
           {{- toYaml . | nindent 12 }}

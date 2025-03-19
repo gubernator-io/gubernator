@@ -41,6 +41,13 @@ service V1 {
       get: "/v1/HealthCheck"
     };
   }
+
+  // This method is used to determine if the server is running.
+  rpc LiveCheck (LiveCheckReq) returns (LiveCheckResp) {
+    option (google.api.http) = {
+      get: "/v1/LiveCheck"
+    };
+  }
 }
 
 // Must specify at least one Request
@@ -223,3 +230,6 @@ message HealthCheckResp {
   // unhealthy.
   string advertise_address = 4;
 }
+
+message LiveCheckReq {}
+message LiveCheckResp {}

@@ -196,18 +196,22 @@ main:
 		}
 
 		peer := PeerInfo{GRPCAddress: fmt.Sprintf("%s:%s", pod.Status.PodIP, e.conf.PodPort)}
-
-		// if containers are not ready or not running then skip this peer
-		for _, status := range pod.Status.ContainerStatuses {
-			if !status.Ready || status.State.Running == nil {
-				e.log.Debugf("Skipping peer because it's not ready or not running: %+v\n", peer)
-				continue main
-			}
-		}
-
 		if pod.Status.PodIP == e.conf.PodIP {
 			peer.IsOwner = true
 		}
+
+		// Only take the chance to skip the peer if it's not our own IP. We need to be able to discover ourselves
+		// for the health check.
+		if !peer.IsOwner {
+			// if containers are not ready or not running then skip this peer
+			for _, status := range pod.Status.ContainerStatuses {
+				if !status.Ready || status.State.Running == nil {
+					e.log.Debugf("Skipping peer because it's not ready or not running: %+v\n", peer)
+					continue main
+				}
+			}
+		}
+
 		e.log.Debugf("Peer: %+v\n", peer)
 		peers = append(peers, peer)
 	}
@@ -235,6 +239,16 @@ func (e *K8sPool) updatePeersFromEndpoints() {
 				}
 				peers = append(peers, peer)
 				e.log.Debugf("Peer: %+v\n", peer)
+			}
+			for _, addr := range s.NotReadyAddresses {
+				// Also check the unready addresses, but only for our own IP. We need to be able to discover ourselves
+				// for the health check.
+				peer := PeerInfo{GRPCAddress: fmt.Sprintf("%s:%s", addr.IP, e.conf.PodPort)}
+				if addr.IP == e.conf.PodIP {
+					peer.IsOwner = true
+					peers = append(peers, peer)
+					e.log.Debugf("Peer (self): %+v\n", peer)
+				}
 			}
 		}
 	}

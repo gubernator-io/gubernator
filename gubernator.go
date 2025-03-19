@@ -32,6 +32,7 @@ import (
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/propagation"
 	"go.opentelemetry.io/otel/trace"
+	spb "google.golang.org/genproto/googleapis/rpc/status"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/proto"
@@ -597,7 +598,25 @@ func (s *V1Instance) HealthCheck(ctx context.Context, r *HealthCheckReq) (health
 		attribute.String("health.status", health.Status),
 	)
 
+	s.log.WithFields(map[string]any{
+		"conf.advertiseAddress": s.conf.AdvertiseAddr,
+		"health.peerCount":      int64(health.PeerCount),
+		"health.status":         health.Status,
+	}).Debug("health check")
+
+	if health.Status != Healthy {
+		return nil, status.ErrorProto(&spb.Status{
+			Code:    int32(codes.Unavailable),
+			Message: health.Message,
+		})
+	}
+
 	return health, nil
+}
+
+// LiveCheck simply allows checking if the server is running.
+func (s *V1Instance) LiveCheck(_ context.Context, _ *LiveCheckReq) (health *LiveCheckResp, err error) {
+	return &LiveCheckResp{}, nil
 }
 
 func (s *V1Instance) getLocalRateLimit(ctx context.Context, r *RateLimitReq, reqState RateLimitReqState) (_ *RateLimitResp, err error) {

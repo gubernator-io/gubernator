@@ -24,6 +24,11 @@ class V1Stub(object):
                 request_serializer=gubernator__pb2.HealthCheckReq.SerializeToString,
                 response_deserializer=gubernator__pb2.HealthCheckResp.FromString,
                 )
+        self.LiveCheck = channel.unary_unary(
+                '/pb.gubernator.V1/LiveCheck',
+                request_serializer=gubernator__pb2.LiveCheckReq.SerializeToString,
+                response_deserializer=gubernator__pb2.LiveCheckResp.FromString,
+                )
 
 
 class V1Servicer(object):
@@ -44,6 +49,13 @@ class V1Servicer(object):
         context.set_details('Method not implemented!')
         raise NotImplementedError('Method not implemented!')
 
+    def LiveCheck(self, request, context):
+        """This method is used to determine if the server is running.
+        """
+        context.set_code(grpc.StatusCode.UNIMPLEMENTED)
+        context.set_details('Method not implemented!')
+        raise NotImplementedError('Method not implemented!')
+
 
 def add_V1Servicer_to_server(servicer, server):
     rpc_method_handlers = {
@@ -56,6 +68,11 @@ def add_V1Servicer_to_server(servicer, server):
                     servicer.HealthCheck,
                     request_deserializer=gubernator__pb2.HealthCheckReq.FromString,
                     response_serializer=gubernator__pb2.HealthCheckResp.SerializeToString,
+            ),
+            'LiveCheck': grpc.unary_unary_rpc_method_handler(
+                    servicer.LiveCheck,
+                    request_deserializer=gubernator__pb2.LiveCheckReq.FromString,
+                    response_serializer=gubernator__pb2.LiveCheckResp.SerializeToString,
             ),
     }
     generic_handler = grpc.method_handlers_generic_handler(
@@ -98,5 +115,22 @@ class V1(object):
         return grpc.experimental.unary_unary(request, target, '/pb.gubernator.V1/HealthCheck',
             gubernator__pb2.HealthCheckReq.SerializeToString,
             gubernator__pb2.HealthCheckResp.FromString,
+            options, channel_credentials,
+            insecure, call_credentials, compression, wait_for_ready, timeout, metadata)
+
+    @staticmethod
+    def LiveCheck(request,
+            target,
+            options=(),
+            channel_credentials=None,
+            call_credentials=None,
+            insecure=False,
+            compression=None,
+            wait_for_ready=None,
+            timeout=None,
+            metadata=None):
+        return grpc.experimental.unary_unary(request, target, '/pb.gubernator.V1/LiveCheck',
+            gubernator__pb2.LiveCheckReq.SerializeToString,
+            gubernator__pb2.LiveCheckResp.FromString,
             options, channel_credentials,
             insecure, call_credentials, compression, wait_for_ready, timeout, metadata)
