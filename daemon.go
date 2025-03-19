@@ -88,6 +88,10 @@ func (s *Daemon) Start(ctx context.Context) error {
 		"category": "gubernator",
 	}))
 
+	if s.conf.PeerDiscoveryType == "k8s" && s.conf.K8PoolConf.PodIP != "" && s.conf.K8PoolConf.PodPort != "" {
+		s.conf.AdvertiseAddress = net.JoinHostPort(s.conf.K8PoolConf.PodIP, s.conf.K8PoolConf.PodPort)
+	}
+
 	s.promRegister = prometheus.NewRegistry()
 
 	// The LRU cache for storing rate limits.

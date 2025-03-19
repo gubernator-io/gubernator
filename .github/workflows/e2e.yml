@@ -35,8 +35,19 @@ jobs:
           helm install gubernator \
             --set gubernator.image.repository=${{ steps.kind.outputs.LOCAL_REGISTRY }}/gubernator \
             --set gubernator.serviceAccount.create=true \
+            --set gubernator.debug=true \
             ./contrib/charts/gubernator
-          kubectl wait --for=condition=available deployment/gubernator
+          kubectl wait --timeout=60s --for=condition=available deployment/gubernator
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: 1.22.x
+
+      - name: Test
+        run: |
+          kubectl port-forward deployment/gubernator 1050 1051 &
+          GUBER_HTTP_RETRY_COUNT=30 go run ./cmd/healthcheck
 
       - name: k8s contents
         if: always()
@@ -50,12 +61,7 @@ jobs:
           echo "===="
           kubectl describe pods
 
-      - name: Set up Go
-        uses: actions/setup-go@v5
-        with:
-          go-version: 1.22.x
-
-      - name: Test
+      - name: k8s logs
+        if: always()
         run: |
-          kubectl port-forward deployment/gubernator 1050 1051 &
-          GUBER_HTTP_RETRY_COUNT=60 go run ./cmd/healthcheck
+          kubectl logs deployment/gubernator
