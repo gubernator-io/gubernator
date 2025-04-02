@@ -1,7 +1,7 @@
 apiVersion: apps/v1
 kind: Deployment
 metadata:
-  name: gubernator
+  name: {{ include "gubernator.fullname" . }}
   labels:
   {{- include "gubernator.labels" . | nindent 4 }}
   annotations:
