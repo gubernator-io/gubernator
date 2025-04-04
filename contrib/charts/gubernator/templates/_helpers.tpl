@@ -114,6 +114,6 @@ HTTP Port
 {{- end }}
 {{- if .Values.gubernator.server.grpc.maxConnAgeSeconds }}
 - name: GUBER_GRPC_MAX_CONN_AGE_SEC
-  value: {{ .Values.gubernator.server.grpc.maxConnAgeSeconds }}
+  value: "{{ .Values.gubernator.server.grpc.maxConnAgeSeconds }}"
 {{- end }}
 {{- end }}
