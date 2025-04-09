@@ -51,7 +51,7 @@ Common labels
 {{- with .Values.gubernator.labels }}
 {{- toYaml . }}
 {{- end }}
-app: gubernator
+app: {{ include "gubernator.fullname" . }}
 helm.sh/chart: {{ include "gubernator.chart" . }}
 {{ include "gubernator.selectorLabels" . }}
 {{- if .Chart.AppVersion }}
