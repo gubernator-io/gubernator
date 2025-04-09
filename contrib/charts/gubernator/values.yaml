@@ -68,13 +68,3 @@ gubernator:
     create: false
     interval: 5s
     scrapeTimeout: 5s
-
-  autoscaling:
-    enabled: true
-    methodScaling: "keda"
-    minReplicas: 1
-    maxReplicas: 2
-    downscaleForbiddenWindowSeconds: 300
-    upscaleForbiddenWindowSeconds: 15
-    targetCPUUtilizationPercentage: 80
-    targetMemoryUtilizationPercentage: 80
