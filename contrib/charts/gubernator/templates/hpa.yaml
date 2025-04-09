@@ -1,4 +1,4 @@
-{{- if .Values.gubernator.autoscaling.enabled -}}
+{{- if and (.Values.gubernator.autoscaling.enabled) (ne .Values.gubernator.autoscaling.methodScaling "keda") }}
 {{- if semverCompare ">=1.23-0" .Capabilities.KubeVersion.GitVersion -}}
 apiVersion: autoscaling/v2
 {{- else -}}
