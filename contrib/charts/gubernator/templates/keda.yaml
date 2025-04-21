@@ -1,0 +1,55 @@
+{{- if and (.Values.gubernator.autoscaling.enabled) (eq .Values.gubernator.autoscaling.methodScaling "keda") }}
+{{- $name := include "gubernator.fullname" . -}}
+{{- $ReleaseName := .Release.Name }}
+apiVersion: keda.sh/v1alpha1
+kind: ScaledObject
+metadata:
+  labels:
+    scaledobject.keda.sh/name: {{ $name }}
+    {{- include "gubernator.labels" . | nindent 4 }}
+  annotations:
+    {{- include "gubernator.annotations" . | nindent 4 }}
+  name: {{ $name }}
+spec:
+  scaleTargetRef:
+    apiVersion:    apps/v1
+    kind:          Deployment
+    name:          {{ $name }}
+  cooldownPeriod: {{ .Values.gubernator.autoscaling.cooldownPeriod | default 300 }}
+  maxReplicaCount: {{ .Values.gubernator.autoscaling.maxReplicas }}
+  minReplicaCount: {{ .Values.gubernator.autoscaling.minReplicas }}
+  pollingInterval: {{ .Values.gubernator.autoscaling.pollingInterval | default 15 }}
+  advanced:
+    horizontalPodAutoscalerConfig:
+      behavior:
+        scaleDown:
+          stabilizationWindowSeconds: {{ .Values.gubernator.autoscaling.downscaleForbiddenWindowSeconds }}
+          policies:
+          - type: Percent
+            value: {{ .Values.gubernator.autoscaling.behaviorScaleDownPercent | default 30 }}
+            periodSeconds: {{ .Values.gubernator.autoscaling.downscaleForbiddenWindowSeconds }}
+        scaleUp:
+          stabilizationWindowSeconds: {{ .Values.gubernator.autoscaling.upscaleForbiddenWindowSeconds }}
+          policies:
+          - type: Percent
+            value: {{ .Values.gubernator.autoscaling.behaviorScaleUpPercent | default 100 }}
+            periodSeconds: {{ .Values.gubernator.autoscaling.upscaleForbiddenWindowSeconds }}
+          - type: Pods
+            value: {{ .Values.gubernator.autoscaling.behaviorScaleUpPods | default 15 }}
+            periodSeconds: {{ .Values.gubernator.autoscaling.upscaleForbiddenWindowSeconds }}
+          selectPolicy: Max
+  triggers:
+  {{- if .Values.gubernator.autoscaling.targetCPUUtilizationPercentage }}
+  - metadata:
+      type: {{ .type |default "Utilization" }}
+      value: {{ .Values.gubernator.autoscaling.targetCPUUtilizationPercentage | quote }}
+    type: cpu
+  {{- end}}
+  {{- if .Values.gubernator.autoscaling.targetMemoryUtilizationPercentage }}
+  - metadata:
+      type: {{ .type | default "Utilization" }}
+      value: {{ .Values.gubernator.autoscaling.targetMemoryUtilizationPercentage | quote }}
+    type: memory
+  {{- end }}
+  
+  {{- end }}

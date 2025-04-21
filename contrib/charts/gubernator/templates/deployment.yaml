@@ -44,6 +44,9 @@ spec:
         - name: gubernator
           env:
           {{- include "gubernator.env" . | nindent 10 }}
+          {{- with .Values.gubernator.extraEnv }}
+          {{- toYaml . | nindent 10 }}
+          {{- end }}
           image: {{ .Values.gubernator.image.repository }}:{{ .Values.gubernator.image.tag | default .Chart.AppVersion }}
           imagePullPolicy: {{ .Values.gubernator.image.pullPolicy }}
           ports:
@@ -51,14 +54,6 @@ spec:
               containerPort: {{ include "gubernator.grpc.port" .  }}
             - name: http
               containerPort: {{ include "gubernator.http.port" .  }}
-          livenessProbe:
-            httpGet:
-              port: {{ include "gubernator.http.port" . }}
-              path: "/v1/LiveCheck"
-          readinessProbe:
-            httpGet:
-              port: {{ include "gubernator.http.port" . }}
-              path: "/v1/HealthCheck"
           {{- with .Values.gubernator.resources }}
           resources:
           {{- toYaml . | nindent 12 }}

@@ -6,9 +6,22 @@ gubernator:
 
   autoscaling:
     enabled: true
+    methodScaling: "hpa"
     minReplicas: 2
     maxReplicas: 10
     cpuAverageUtilization: 50
+
+  # keda example
+  # https://keda.sh/docs/2.16/reference/scaledobject-spec
+  # autoscaling:
+  #   enabled: true
+  #   methodScaling: "keda"
+  #   minReplicas: 1
+  #   maxReplicas: 2
+  #   downscaleForbiddenWindowSeconds: 300
+  #   upscaleForbiddenWindowSeconds: 15
+  #   targetCPUUtilizationPercentage: 80
+  #   targetMemoryUtilizationPercentage: 80
 
   replicaCount: 4
 
@@ -19,8 +32,8 @@ gubernator:
     # By default tag is overriding appVersion from .Chart.yaml
     tag: "latest"
 
-  labels:
-    a: "b"
+  # labels:
+  #   a: "b"
 
   # Enabling gubernator debugger, default false
   # debug: true
