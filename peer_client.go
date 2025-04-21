@@ -304,12 +304,14 @@ func (c *PeerClient) runBatch() {
 			queue = append(queue, r)
 			// Send the queue if we reached our batch limit
 			if len(queue) >= c.conf.Behavior.BatchLimit {
-				c.conf.Log.WithContext(ctx).
-					WithFields(logrus.Fields{
-						"queueLen":   len(queue),
-						"batchLimit": c.conf.Behavior.BatchLimit,
-					}).
-					Debug("runBatch() reached batch limit")
+				if c.conf.Log != nil {
+					c.conf.Log.WithContext(ctx).
+						WithFields(logrus.Fields{
+							"queueLen":   len(queue),
+							"batchLimit": c.conf.Behavior.BatchLimit,
+						}).
+						Debug("runBatch() reached batch limit")
+				}
 				ref := queue
 				queue = nil
 				go c.sendBatch(ctx, ref)
