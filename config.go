@@ -211,6 +211,10 @@ type DaemonConfig struct {
 	// Default is infinity
 	GRPCMaxConnectionAgeSeconds int
 
+	// (Optional) Defines the delay added in seconds before the graceful termination starts.
+	// Default is 0
+	GracefulTerminationDelaySeconds int
+
 	// (Optional) The `address:port` that is advertised to other Gubernator peers.
 	// Defaults to `GRPCListenAddress`
 	AdvertiseAddress string
@@ -335,6 +339,7 @@ func SetupDaemonConfig(logger *logrus.Logger, configFile io.Reader) (DaemonConfi
 	setter.SetDefault(&conf.InstanceID, GetInstanceID())
 	setter.SetDefault(&conf.HTTPStatusListenAddress, os.Getenv("GUBER_STATUS_HTTP_ADDRESS"), "")
 	setter.SetDefault(&conf.GRPCMaxConnectionAgeSeconds, getEnvInteger(log, "GUBER_GRPC_MAX_CONN_AGE_SEC"), 0)
+	setter.SetDefault(&conf.GracefulTerminationDelaySeconds, getEnvInteger(log, "GUBER_GRACEFUL_TERMINATION_DELAY_SEC"), 0)
 	setter.SetDefault(&conf.CacheSize, getEnvInteger(log, "GUBER_CACHE_SIZE"), 50_000)
 	setter.SetDefault(&conf.Workers, getEnvInteger(log, "GUBER_WORKER_COUNT"), 0)
 	setter.SetDefault(&conf.AdvertiseAddress, os.Getenv("GUBER_ADVERTISE_ADDRESS"), conf.GRPCListenAddress)

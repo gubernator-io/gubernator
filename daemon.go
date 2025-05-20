@@ -381,6 +381,10 @@ func (s *Daemon) Close() {
 		return
 	}
 
+	if s.conf.GracefulTerminationDelaySeconds > 0 {
+		time.Sleep(time.Duration(s.conf.GracefulTerminationDelaySeconds) * time.Second)
+	}
+
 	if s.pool != nil {
 		s.pool.Close()
 	}
