@@ -87,9 +87,6 @@ linters-settings:
             reason: "Deprecated"
 
   stylecheck:
-    # Select the Go version to target.
-    # Default: 1.13
-#    go: "1.19"
     # https://staticcheck.io/docs/options#checks
     checks: ["all"]
 
@@ -107,6 +104,3 @@ run:
   # Timeout for analysis, e.g. 30s, 5m.
   # Default: 1m
   timeout: 5m
-
-#  skip-dirs:
-#    - googleapis
