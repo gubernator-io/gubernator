@@ -112,7 +112,7 @@ var (
 	}, []string{"peerAddr"})
 	metricUpdatePeerGlobalsCounter = prometheus.NewCounter(prometheus.CounterOpts{
 		Name: "gubernator_updatepeerglobals_counter",
-		Help: "The count of items sent in UpdatePeerGlobals requests",
+		Help: "The count of items received in UpdatePeerGlobals",
 	})
 )
 
