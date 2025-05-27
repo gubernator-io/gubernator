@@ -463,7 +463,7 @@ func (s *Daemon) Client() (V1Client, error) {
 		return s.client, nil
 	}
 
-	if s.clientConn != nil {
+	if s.clientConn == nil {
 		conn, err := grpc.NewClient(
 			fmt.Sprintf("static:///%s", s.PeerInfo.GRPCAddress),
 			grpc.WithResolvers(NewStaticBuilder()),
