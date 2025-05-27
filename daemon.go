@@ -64,7 +64,9 @@ type Daemon struct {
 	promRegister  *prometheus.Registry
 	gwCancel      context.CancelFunc
 	instanceConf  Config
-	client        V1Client
+
+	client     V1Client
+	clientConn *grpc.ClientConn
 }
 
 // SpawnDaemon starts a new gubernator daemon according to the provided DaemonConfig.
@@ -403,6 +405,22 @@ func (s *Daemon) Close() {
 	s.httpSrv = nil
 	s.httpSrvNoMTLS = nil
 	s.grpcSrvs = nil
+
+	// for _, l := range s.GRPCListeners {
+	// 	_ = l.Close()
+	// }
+	// s.GRPCListeners = nil
+	// if s.HTTPListener != nil {
+	// 	_ = s.HTTPListener.Close()
+	// }
+	// s.HTTPListener = nil
+
+	// Close the client connection
+	if s.clientConn != nil {
+		_ = s.clientConn.Close()
+	}
+	s.client = nil
+	s.clientConn = nil
 }
 
 // SetPeers sets the peers for this daemon
@@ -441,18 +459,22 @@ func (s *Daemon) MustClient() V1Client {
 }
 
 func (s *Daemon) Client() (V1Client, error) {
-	if s.client != nil {
+	if s.client != nil && s.clientConn != nil {
 		return s.client, nil
 	}
 
-	conn, err := grpc.NewClient(
-		fmt.Sprintf("static:///%s", s.PeerInfo.GRPCAddress),
-		grpc.WithResolvers(NewStaticBuilder()),
-		grpc.WithTransportCredentials(insecure.NewCredentials()))
-	if err != nil {
-		return nil, err
+	if s.clientConn != nil {
+		conn, err := grpc.NewClient(
+			fmt.Sprintf("static:///%s", s.PeerInfo.GRPCAddress),
+			grpc.WithResolvers(NewStaticBuilder()),
+			grpc.WithTransportCredentials(insecure.NewCredentials()))
+		if err != nil {
+			return nil, err
+		}
+		s.clientConn = conn
 	}
-	s.client = NewV1Client(conn)
+
+	s.client = NewV1Client(s.clientConn)
 	return s.client, nil
 }
 
