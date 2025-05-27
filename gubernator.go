@@ -184,10 +184,10 @@ func (s *V1Instance) Close() (err error) {
 // rate limit `Name` and `UniqueKey` is not owned by this instance, then we forward the request to the
 // peer that does.
 func (s *V1Instance) GetRateLimits(ctx context.Context, r *GetRateLimitsReq) (_ *GetRateLimitsResp, err error) {
-	ctx = tracing.StartScope(ctx, trace.WithAttributes(
+	span := trace.SpanFromContext(ctx)
+	span.SetAttributes(
 		attribute.Int("item.count", len(r.Requests)),
-	))
-	defer func() { tracing.EndScope(ctx, err) }()
+	)
 	funcTimer := prometheus.NewTimer(metricFuncTimeDuration.WithLabelValues("V1Instance.GetRateLimits"))
 	defer funcTimer.ObserveDuration()
 	metricConcurrentChecks.Inc()
@@ -428,9 +428,15 @@ func (s *V1Instance) getGlobalRateLimit(ctx context.Context, req *RateLimitReq) 
 	return resp, nil
 }
 
-// UpdatePeerGlobals updates the local cache with a list of global rate limits. This method should only
-// be called by a peer who is the owner of a global rate limit.
-func (s *V1Instance) UpdatePeerGlobals(ctx context.Context, r *UpdatePeerGlobalsReq) (*UpdatePeerGlobalsResp, error) {
+// UpdatePeerGlobals received global broadcasts.  This updates the local cache with a list of
+// global rate limits. This method should only be called by a peer who is the owner of a global
+// rate limit.
+func (s *V1Instance) UpdatePeerGlobals(ctx context.Context, r *UpdatePeerGlobalsReq) (_ *UpdatePeerGlobalsResp, err error) {
+	span := trace.SpanFromContext(ctx)
+	span.SetAttributes(
+		attribute.Int("item.count", len(r.Globals)),
+	)
+	defer func() { tracing.EndScope(ctx, err) }()
 	defer prometheus.NewTimer(metricFuncTimeDuration.WithLabelValues("V1Instance.UpdatePeerGlobals")).ObserveDuration()
 	metricUpdatePeerGlobalsCounter.Add(float64(len(r.Globals)))
 	now := MillisecondNow()
@@ -458,7 +464,7 @@ func (s *V1Instance) UpdatePeerGlobals(ctx context.Context, r *UpdatePeerGlobals
 				CreatedAt: now,
 			}
 		}
-		err := s.workerPool.AddCacheItem(ctx, g.Key, item)
+		err = s.workerPool.AddCacheItem(ctx, g.Key, item)
 		if err != nil {
 			return nil, errors.Wrap(err, "Error in workerPool.AddCacheItem")
 		}
@@ -469,7 +475,10 @@ func (s *V1Instance) UpdatePeerGlobals(ctx context.Context, r *UpdatePeerGlobals
 
 // GetPeerRateLimits is called by other peers to get the rate limits owned by this peer.
 func (s *V1Instance) GetPeerRateLimits(ctx context.Context, r *GetPeerRateLimitsReq) (resp *GetPeerRateLimitsResp, err error) {
-	ctx = tracing.StartScope(ctx)
+	span := trace.SpanFromContext(ctx)
+	span.SetAttributes(
+		attribute.Int("item.count", len(r.Requests)),
+	)
 	defer func() { tracing.EndScope(ctx, err) }()
 	defer prometheus.NewTimer(metricFuncTimeDuration.WithLabelValues("V1Instance.GetPeerRateLimits")).ObserveDuration()
 	if len(r.Requests) > maxBatchSize {
