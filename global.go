@@ -20,6 +20,7 @@ import (
 	"context"
 
 	"github.com/mailgun/holster/v4/syncutil"
+	"github.com/mailgun/holster/v4/tracing"
 	"github.com/pkg/errors"
 	"github.com/prometheus/client_golang/prometheus"
 	"google.golang.org/protobuf/proto"
@@ -36,7 +37,9 @@ type globalManager struct {
 	instance                    *V1Instance // TODO circular import? V1Instance also holds a reference to globalManager
 	metricGlobalSendDuration    prometheus.Summary
 	metricGlobalSendQueueLength prometheus.Gauge
+	metricGlobalSendErrors      prometheus.Counter
 	metricBroadcastDuration     prometheus.Summary
+	metricBroadcastErrors       prometheus.Counter
 	metricGlobalQueueLength     prometheus.Gauge
 }
 
@@ -56,10 +59,18 @@ func newGlobalManager(conf BehaviorConfig, instance *V1Instance) *globalManager 
 			Name: "gubernator_global_send_queue_length",
 			Help: "The count of requests queued up for global broadcast.  This is only used for GetRateLimit requests using global behavior.",
 		}),
+		metricGlobalSendErrors: prometheus.NewCounter(prometheus.CounterOpts{
+			Name: "gubernator_global_send_errors",
+			Help: "The count of errors during global send to owning peer",
+		}),
 		metricBroadcastDuration: prometheus.NewSummary(prometheus.SummaryOpts{
 			Name:       "gubernator_broadcast_duration",
 			Help:       "The duration of GLOBAL broadcasts to peers in seconds.",
 			Objectives: map[float64]float64{0.5: 0.05, 0.99: 0.001},
+		}),
+		metricBroadcastErrors: prometheus.NewCounter(prometheus.CounterOpts{
+			Name: "gubernator_broadcast_errors",
+			Help: "The count of errors during during UpdatePeerGlobals",
 		}),
 		metricGlobalQueueLength: prometheus.NewGauge(prometheus.GaugeOpts{
 			Name: "gubernator_global_queue_length",
@@ -170,15 +181,16 @@ func (gm *globalManager) sendHits(hits map[string]*RateLimitReq) {
 	fan := syncutil.NewFanOut(gm.conf.GlobalPeerRequestsConcurrency)
 	// Send the rate limit requests to their respective owning peers.
 	for _, p := range peerRequests {
-		fan.Run(func(in interface{}) error {
+		fan.Run(func(in any) error {
 			p := in.(*pair)
 			ctx, cancel := context.WithTimeout(context.Background(), gm.conf.GlobalTimeout)
 			_, err := p.client.GetPeerRateLimits(ctx, &p.req)
 			cancel()
 
 			if err != nil {
-				gm.log.WithError(err).
+				gm.log.WithField("peer", p.client.Info().GRPCAddress).WithError(err).
 					Errorf("while sending global hits to '%s'", p.client.Info().GRPCAddress)
+				gm.metricGlobalSendErrors.Inc()
 			}
 			return nil
 		}, p)
@@ -232,6 +244,8 @@ func (gm *globalManager) runBroadcasts() {
 
 // broadcastPeers broadcasts global rate limit statuses to all other peers
 func (gm *globalManager) broadcastPeers(ctx context.Context, updates map[string]*RateLimitReq) {
+	ctx = tracing.StartScope(ctx)
+	defer tracing.EndScope(ctx, nil)
 	defer prometheus.NewTimer(gm.metricBroadcastDuration).ObserveDuration()
 	var req UpdatePeerGlobalsReq
 	reqState := RateLimitReqState{IsOwner: false}
@@ -244,7 +258,7 @@ func (gm *globalManager) broadcastPeers(ctx context.Context, updates map[string]
 		grlReq.Hits = 0
 		status, err := gm.instance.workerPool.GetRateLimit(ctx, grlReq, reqState)
 		if err != nil {
-			gm.log.WithError(err).Error("while retrieving rate limit status")
+			gm.log.WithError(err).Error("While retrieving rate limit status for broadcast")
 			continue
 		}
 		updateReq := &UpdatePeerGlobal{
@@ -264,16 +278,18 @@ func (gm *globalManager) broadcastPeers(ctx context.Context, updates map[string]
 			continue
 		}
 
-		fan.Run(func(in interface{}) error {
+		fan.Run(func(in any) error {
 			peer := in.(*PeerClient)
 			ctx, cancel := context.WithTimeout(ctx, gm.conf.GlobalTimeout)
 			_, err := peer.UpdatePeerGlobals(ctx, &req)
 			cancel()
 
 			if err != nil {
+				gm.metricBroadcastErrors.Inc()
 				// Only log if it's an unknown error
 				if !errors.Is(err, context.Canceled) && errors.Is(err, context.DeadlineExceeded) {
-					gm.log.WithError(err).Errorf("while broadcasting global updates to '%s'", peer.Info().GRPCAddress)
+					gm.log.WithField("peer", peer.Info().GRPCAddress).WithError(err).
+						Errorf("while broadcasting global updates to '%s'", peer.Info().GRPCAddress)
 				}
 			}
 			return nil
