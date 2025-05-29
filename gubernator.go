@@ -645,6 +645,7 @@ func (s *V1Instance) getLocalRateLimit(ctx context.Context, r *RateLimitReq, req
 		attribute.String("ratelimit.name", r.Name),
 		attribute.Int64("ratelimit.limit", r.Limit),
 		attribute.Int64("ratelimit.hits", r.Hits),
+		attribute.Int64("ratelimit.duration", r.Duration),
 	))
 	defer func() { tracing.EndScope(ctx, err) }()
 	defer prometheus.NewTimer(metricFuncTimeDuration.WithLabelValues("V1Instance.getLocalRateLimit")).ObserveDuration()

@@ -258,7 +258,7 @@ func (gm *globalManager) broadcastPeers(ctx context.Context, updates map[string]
 		grlReq.Hits = 0
 		status, err := gm.instance.workerPool.GetRateLimit(ctx, grlReq, reqState)
 		if err != nil {
-			gm.log.WithError(err).Error("while retrieving rate limit status")
+			gm.log.WithError(err).Error("While retrieving rate limit status for broadcast")
 			continue
 		}
 		updateReq := &UpdatePeerGlobal{
