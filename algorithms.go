@@ -54,7 +54,9 @@ func tokenBucket(ctx context.Context, s Store, c Cache, r *RateLimitReq, reqStat
 	if ok {
 		if item.Value == nil {
 			msgPart := "tokenBucket: Invalid cache item; Value is nil"
-			trace.SpanFromContext(ctx).AddEvent(msgPart, trace.WithAttributes(
+			trace.SpanFromContext(ctx).AddEvent("log", trace.WithAttributes(
+				attribute.String("log.message", msgPart),
+				attribute.String("log.severity", "WARNING"),
 				attribute.String("hashKey", hashKey),
 				attribute.String("key", r.UniqueKey),
 				attribute.String("name", r.Name),
@@ -63,7 +65,9 @@ func tokenBucket(ctx context.Context, s Store, c Cache, r *RateLimitReq, reqStat
 			ok = false
 		} else if item.Key != hashKey {
 			msgPart := "tokenBucket: Invalid cache item; key mismatch"
-			trace.SpanFromContext(ctx).AddEvent(msgPart, trace.WithAttributes(
+			trace.SpanFromContext(ctx).AddEvent("log", trace.WithAttributes(
+				attribute.String("log.message", msgPart),
+				attribute.String("log.severity", "WARNING"),
 				attribute.String("itemKey", item.Key),
 				attribute.String("hashKey", hashKey),
 				attribute.String("name", r.Name),
@@ -91,8 +95,6 @@ func tokenBucket(ctx context.Context, s Store, c Cache, r *RateLimitReq, reqStat
 		t, ok := item.Value.(*TokenBucketItem)
 		if !ok {
 			// Client switched algorithms; perhaps due to a migration?
-			trace.SpanFromContext(ctx).AddEvent("Client switched algorithms; perhaps due to a migration?")
-
 			c.Remove(hashKey)
 
 			if s != nil {
@@ -121,8 +123,6 @@ func tokenBucket(ctx context.Context, s Store, c Cache, r *RateLimitReq, reqStat
 
 		// If the duration config changed, update the new ExpireAt.
 		if t.Duration != r.Duration {
-			span := trace.SpanFromContext(ctx)
-			span.AddEvent("Duration changed")
 			expire := t.CreatedAt + r.Duration
 			if HasBehavior(r.Behavior, Behavior_DURATION_IS_GREGORIAN) {
 				expire, err = GregorianExpiration(clock.Now(), r.Duration)
@@ -135,7 +135,6 @@ func tokenBucket(ctx context.Context, s Store, c Cache, r *RateLimitReq, reqStat
 			createdAt := *r.CreatedAt
 			if expire <= createdAt {
 				// Renew item.
-				span.AddEvent("Limit has expired")
 				expire = createdAt + r.Duration
 				t.CreatedAt = createdAt
 				t.Remaining = t.Limit
@@ -160,7 +159,6 @@ func tokenBucket(ctx context.Context, s Store, c Cache, r *RateLimitReq, reqStat
 
 		// If we are already at the limit.
 		if rl.Remaining == 0 && r.Hits > 0 {
-			trace.SpanFromContext(ctx).AddEvent("Already over the limit")
 			if reqState.IsOwner {
 				metricOverLimitCounter.Add(1)
 			}
@@ -171,7 +169,6 @@ func tokenBucket(ctx context.Context, s Store, c Cache, r *RateLimitReq, reqStat
 
 		// If requested hits takes the remainder.
 		if t.Remaining == r.Hits {
-			trace.SpanFromContext(ctx).AddEvent("At the limit")
 			t.Remaining = 0
 			rl.Remaining = 0
 			return rl, nil
@@ -180,7 +177,6 @@ func tokenBucket(ctx context.Context, s Store, c Cache, r *RateLimitReq, reqStat
 		// If requested is more than available, then return over the limit
 		// without updating the cache.
 		if r.Hits > t.Remaining {
-			trace.SpanFromContext(ctx).AddEvent("Over the limit")
 			if reqState.IsOwner {
 				metricOverLimitCounter.Add(1)
 			}
@@ -238,7 +234,6 @@ func tokenBucketNewItem(ctx context.Context, s Store, c Cache, r *RateLimitReq, 
 
 	// Client could be requesting that we always return OVER_LIMIT.
 	if r.Hits > r.Limit {
-		trace.SpanFromContext(ctx).AddEvent("Over the limit")
 		if reqState.IsOwner {
 			metricOverLimitCounter.Add(1)
 		}
@@ -283,7 +278,9 @@ func leakyBucket(ctx context.Context, s Store, c Cache, r *RateLimitReq, reqStat
 	if ok {
 		if item.Value == nil {
 			msgPart := "leakyBucket: Invalid cache item; Value is nil"
-			trace.SpanFromContext(ctx).AddEvent(msgPart, trace.WithAttributes(
+			trace.SpanFromContext(ctx).AddEvent("log", trace.WithAttributes(
+				attribute.String("log.message", msgPart),
+				attribute.String("log.severity", "WARNING"),
 				attribute.String("hashKey", hashKey),
 				attribute.String("key", r.UniqueKey),
 				attribute.String("name", r.Name),
@@ -292,7 +289,9 @@ func leakyBucket(ctx context.Context, s Store, c Cache, r *RateLimitReq, reqStat
 			ok = false
 		} else if item.Key != hashKey {
 			msgPart := "leakyBucket: Invalid cache item; key mismatch"
-			trace.SpanFromContext(ctx).AddEvent(msgPart, trace.WithAttributes(
+			trace.SpanFromContext(ctx).AddEvent("log", trace.WithAttributes(
+				attribute.String("log.message", msgPart),
+				attribute.String("log.severity", "WARNING"),
 				attribute.String("itemKey", item.Key),
 				attribute.String("hashKey", hashKey),
 				attribute.String("name", r.Name),

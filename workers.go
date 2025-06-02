@@ -46,6 +46,7 @@ import (
 	"github.com/OneOfOne/xxhash"
 	"github.com/mailgun/holster/v4/errors"
 	"github.com/mailgun/holster/v4/setter"
+	"github.com/mailgun/holster/v4/tracing"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/sirupsen/logrus"
 	"go.opentelemetry.io/otel/trace"
@@ -294,10 +295,11 @@ func (p *WorkerPool) GetRateLimit(ctx context.Context, rlRequest *RateLimitReq, 
 }
 
 // Handle request received by worker.
-func (worker *Worker) handleGetRateLimit(ctx context.Context, req *RateLimitReq, reqState RateLimitReqState, cache Cache) (*RateLimitResp, error) {
+func (worker *Worker) handleGetRateLimit(ctx context.Context, req *RateLimitReq, reqState RateLimitReqState, cache Cache) (_ *RateLimitResp, err error) {
+	ctx = tracing.StartScope(ctx)
+	defer func() { tracing.EndScope(ctx, err) }()
 	defer prometheus.NewTimer(metricFuncTimeDuration.WithLabelValues("Worker.handleGetRateLimit")).ObserveDuration()
 	var rlResponse *RateLimitResp
-	var err error
 
 	switch req.Algorithm {
 	case Algorithm_TOKEN_BUCKET:
