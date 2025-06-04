@@ -19,7 +19,7 @@ package cluster_test
 import (
 	"testing"
 
-	gubernator "github.com/gubernator-io/gubernator/v2"
+	"github.com/gubernator-io/gubernator/v2"
 	"github.com/gubernator-io/gubernator/v2/cluster"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -36,6 +36,21 @@ func TestStartMultipleInstances(t *testing.T) {
 
 	assert.Equal(t, 2, len(cluster.GetPeers()))
 	assert.Equal(t, 2, len(cluster.GetDaemons()))
+}
+
+func TestStartStopClient(t *testing.T) {
+	t.Cleanup(func() {
+		goleak.VerifyNone(t)
+	})
+	err := cluster.Start(1)
+	require.NoError(t, err)
+	require.Equal(t, 1, len(cluster.GetDaemons()))
+
+	daemon := cluster.GetDaemons()[0]
+	client := daemon.MustClient()
+	require.NotNil(t, client)
+
+	cluster.Stop()
 }
 
 func TestStartOneInstance(t *testing.T) {
