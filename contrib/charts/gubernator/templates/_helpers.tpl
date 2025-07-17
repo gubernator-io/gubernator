@@ -101,7 +101,7 @@ HTTP Port
 - name: GUBER_K8S_POD_PORT
   value: "{{ include "gubernator.grpc.port" . }}"
 - name: GUBER_K8S_ENDPOINTS_SELECTOR
-  value: "app=gubernator"
+  value: "app={{ include "gubernator.fullname" . }}"
 {{- if .Values.gubernator.debug }}
 - name: GUBER_DEBUG
   value: "true"
