@@ -3,6 +3,11 @@
     Distributed RateLimiting Service
 </h2>
 
+[![Build Status](https://github.com/gubernator-io/gubernator/actions/workflows/on-release.yml/badge.svg)](https://github.com/gubernator-io/gubernator/actions)
+[![Go Report Card](https://goreportcard.com/badge/github.com/gubernator-io/gubernator)](https://goreportcard.com/report/github.com/gubernator-io/gubernator)
+[![License](https://img.shields.io/badge/License-Apache%202.0-blue.svg)](https://opensource.org/licenses/Apache-2.0)
+[![Go Reference](https://pkg.go.dev/badge/github.com/gubernator-io/gubernator.svg)](https://pkg.go.dev/github.com//gubernator-io/gubernator)
+
 # Gubernator
 Gubernator is a distributed, high performance, cloud native and stateless rate-limiting service.
 
@@ -372,3 +377,8 @@ Gubernator publishes Prometheus metrics for realtime monitoring.  See
 
 ## OpenTelemetry Tracing (OTEL)
 Gubernator supports OpenTelemetry. See [tracing.md](docs/tracing.md) for details.
+
+### Contributing
+- Please read the [Contributing Docs](CONTRIBUTING.md)
+- Open a Pull Request!
+- Join our [Discord](https://discord.gg/fKg9KvkTbm)

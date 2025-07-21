@@ -636,6 +636,9 @@ func (s *V1Instance) HealthCheck(ctx context.Context, r *HealthCheckReq) (health
 
 // LiveCheck simply allows checking if the server is running.
 func (s *V1Instance) LiveCheck(_ context.Context, _ *LiveCheckReq) (health *LiveCheckResp, err error) {
+	if s.isClosed.Load() {
+		return nil, status.Error(codes.Unavailable, "server is shutting down")
+	}
 	return &LiveCheckResp{}, nil
 }
 
