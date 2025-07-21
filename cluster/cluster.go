@@ -171,6 +171,13 @@ func StartWith(localPeers []gubernator.PeerInfo, opts ...option) error {
 		d, err := gubernator.SpawnDaemon(ctx, cfg)
 		cancel()
 		if err != nil {
+			// Clean up any daemons we've already started
+			for _, daemon := range daemons {
+				daemon.Close()
+			}
+			// Reset the global state
+			daemons = nil
+			peers = nil
 			return errors.Wrapf(err, "while starting server for addr '%s'", peer.GRPCAddress)
 		}
 

@@ -79,7 +79,12 @@ func SpawnDaemon(ctx context.Context, conf DaemonConfig) (*Daemon, error) {
 		log:        conf.Logger,
 		conf:       conf,
 	}
-	return s, s.Start(ctx)
+	if err := s.Start(ctx); err != nil {
+		// Clean up any resources that were allocated before the error
+		s.Close()
+		return nil, err
+	}
+	return s, nil
 }
 
 func (s *Daemon) Start(ctx context.Context) error {
@@ -379,10 +384,6 @@ func (s *Daemon) Start(ctx context.Context) error {
 
 // Close gracefully closes all server connections and listening sockets
 func (s *Daemon) Close() {
-	if s.httpSrv == nil && s.httpSrvNoMTLS == nil {
-		return
-	}
-
 	if s.conf.GracefulTerminationDelaySeconds > 0 {
 		time.Sleep(time.Duration(s.conf.GracefulTerminationDelaySeconds) * time.Second)
 	}
@@ -391,33 +392,36 @@ func (s *Daemon) Close() {
 		s.pool.Close()
 	}
 
-	s.log.Infof("HTTP Gateway close for %s ...", s.conf.HTTPListenAddress)
-	_ = s.httpSrv.Shutdown(context.Background())
+	if s.httpSrv != nil {
+		s.log.Infof("HTTP Gateway close for %s ...", s.conf.HTTPListenAddress)
+		_ = s.httpSrv.Shutdown(context.Background())
+	}
 	if s.httpSrvNoMTLS != nil {
 		s.log.Infof("HTTP Status Gateway close for %s ...", s.conf.HTTPStatusListenAddress)
 		_ = s.httpSrvNoMTLS.Shutdown(context.Background())
 	}
 	for i, srv := range s.grpcSrvs {
-		s.log.Infof("GRPC close for %s ...", s.GRPCListeners[i].Addr())
+		if i < len(s.GRPCListeners) && s.GRPCListeners[i] != nil {
+			s.log.Infof("GRPC close for %s ...", s.GRPCListeners[i].Addr())
+		}
 		srv.GracefulStop()
 	}
-	s.logWriter.Close()
-	_ = s.V1Server.Close()
+	if s.logWriter != nil {
+		s.logWriter.Close()
+	}
+	if s.V1Server != nil {
+		_ = s.V1Server.Close()
+	}
 	s.wg.Stop()
-	s.statsHandler.Close()
-	s.gwCancel()
+	if s.statsHandler != nil {
+		s.statsHandler.Close()
+	}
+	if s.gwCancel != nil {
+		s.gwCancel()
+	}
 	s.httpSrv = nil
 	s.httpSrvNoMTLS = nil
 	s.grpcSrvs = nil
-
-	// for _, l := range s.GRPCListeners {
-	// 	_ = l.Close()
-	// }
-	// s.GRPCListeners = nil
-	// if s.HTTPListener != nil {
-	// 	_ = s.HTTPListener.Close()
-	// }
-	// s.HTTPListener = nil
 
 	// Close the client connection
 	if s.clientConn != nil {
