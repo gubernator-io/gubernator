@@ -54,6 +54,9 @@ func TestStartStopClient(t *testing.T) {
 }
 
 func TestStartOneInstance(t *testing.T) {
+	t.Cleanup(func() {
+		goleak.VerifyNone(t)
+	})
 	err := cluster.Start(1)
 	require.NoError(t, err)
 	defer cluster.Stop()
@@ -63,6 +66,9 @@ func TestStartOneInstance(t *testing.T) {
 }
 
 func TestStartMultipleDaemons(t *testing.T) {
+	t.Cleanup(func() {
+		goleak.VerifyNone(t)
+	})
 	peers := []gubernator.PeerInfo{
 		{GRPCAddress: "localhost:1111", HTTPAddress: "localhost:1112"},
 		{GRPCAddress: "localhost:2222", HTTPAddress: "localhost:2221"}}
@@ -85,6 +91,9 @@ func TestStartMultipleDaemons(t *testing.T) {
 }
 
 func TestStartWithInvalidPeer(t *testing.T) {
+	t.Cleanup(func() {
+		goleak.VerifyNone(t)
+	})
 	err := cluster.StartWith([]gubernator.PeerInfo{{GRPCAddress: "1111"}})
 	assert.NotNil(t, err)
 	assert.Nil(t, cluster.GetPeers())
