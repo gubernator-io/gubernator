@@ -2,7 +2,7 @@
 VERSION=$(shell cat version)
 LDFLAGS="-X main.Version=$(VERSION)"
 GOLANGCI_LINT = $(GOPATH)/bin/golangci-lint
-GOLANGCI_LINT_VERSION = v1.61.0
+GOLANGCI_LINT_VERSION = v2.2.2
 
 .PHONY: help
 help:

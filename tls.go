@@ -270,7 +270,7 @@ func SetupTLS(conf *TLSConfig) error {
 		}
 
 		// error if neither was provided
-		if len(clientPool.Subjects()) == 0 { //nolint:all
+		if len(clientPool.Subjects()) == 0 {
 			return errors.New("client auth enabled, but no CA's provided")
 		}
 

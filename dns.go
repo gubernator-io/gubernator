@@ -29,7 +29,6 @@ import (
 	"github.com/sirupsen/logrus"
 )
 
-// Adapted from TimothyYe/godns
 // DNSResolver represents a dns resolver
 type DNSResolver struct {
 	Servers []string

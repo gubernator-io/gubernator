@@ -36,7 +36,7 @@ type contextKey struct{}
 
 var statsContextKey = contextKey{}
 
-// Implements the Prometheus collector interface. Such that when the /metrics handler is
+// GRPCStatsHandler Implements the Prometheus collector interface. Such that when the /metrics handler is
 // called this collector pulls all the stats from
 type GRPCStatsHandler struct {
 	reqCh chan *GRPCStats
@@ -130,12 +130,12 @@ func (c *GRPCStatsHandler) TagRPC(ctx context.Context, tagInfo *stats.RPCTagInfo
 	return ContextWithStats(ctx, &GRPCStats{Method: tagInfo.FullMethodName})
 }
 
-// Returns a new `context.Context` that holds a reference to `GRPCStats`.
+// ContextWithStats Returns a new `context.Context` that holds a reference to `GRPCStats`.
 func ContextWithStats(ctx context.Context, stats *GRPCStats) context.Context {
 	return context.WithValue(ctx, statsContextKey, stats)
 }
 
-// Returns the `GRPCStats` previously associated with `ctx`.
+// StatsFromContext Returns the `GRPCStats` previously associated with `ctx`.
 func StatsFromContext(ctx context.Context) *GRPCStats {
 	val := ctx.Value(statsContextKey)
 	if rs, ok := val.(*GRPCStats); ok {

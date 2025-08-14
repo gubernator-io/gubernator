@@ -57,7 +57,7 @@ func TestWorkersInternal(t *testing.T) {
 		for _, testCase := range testCases {
 			t.Run(testCase.Name, func(t *testing.T) {
 				pool := NewWorkerPool(conf)
-				defer pool.Close()
+				defer pool.Close() //nolint:errcheck
 				mockHasher := &MockHasher{}
 				pool.hasher = mockHasher
 

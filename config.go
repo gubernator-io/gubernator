@@ -725,7 +725,7 @@ func getDockerCID() string {
 	if err != nil {
 		return ""
 	}
-	defer f.Close()
+	defer f.Close() //nolint:errcheck
 
 	scanner := bufio.NewScanner(f)
 	for scanner.Scan() {

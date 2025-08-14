@@ -116,7 +116,7 @@ func (e *EtcdPool) watchPeers() error {
 
 	// Cancel any previous watches
 	if e.watcher != nil {
-		e.watcher.Close()
+		e.watcher.Close() //nolint:errcheck
 	}
 
 	e.watcher = etcd.NewWatcher(e.conf.Client)
@@ -332,7 +332,7 @@ func (e *EtcdPool) callOnUpdate() {
 	e.conf.OnUpdate(peers)
 }
 
-// Get peers list from etcd.
+// GetPeers Get peers list from etcd.
 func (e *EtcdPool) GetPeers(ctx context.Context) ([]PeerInfo, error) {
 	keyPrefix := e.conf.KeyPrefix
 
