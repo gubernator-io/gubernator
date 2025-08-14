@@ -47,8 +47,9 @@ clean-proto: ## Clean the generated source files from the protobuf sources
 
 
 .PHONY: proto
-proto: ## Build protos
-	./buf.gen.yaml
+proto: ## Build protos with config buf.gen.yaml
+    # Install buf: https://buf.build/docs/installation
+	buf generate
 
 .PHONY: certs
 certs: ## Generate SSL certificates
