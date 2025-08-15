@@ -116,7 +116,7 @@ func (e *EtcdPool) watchPeers() error {
 
 	// Cancel any previous watches
 	if e.watcher != nil {
-		e.watcher.Close() //nolint:errcheck
+		e.watcher.Close()
 	}
 
 	e.watcher = etcd.NewWatcher(e.conf.Client)

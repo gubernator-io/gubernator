@@ -344,10 +344,10 @@ func newLogWriter(log FieldLogger) *io.PipeWriter {
 		if err := scanner.Err(); err != nil {
 			log.Errorf("Error while reading from Writer: %s", err)
 		}
-		reader.Close() //nolint:errcheck
+		reader.Close()
 	}()
 	runtime.SetFinalizer(writer, func(w *io.PipeWriter) {
-		writer.Close() //nolint:errcheck
+		writer.Close()
 	})
 
 	return writer

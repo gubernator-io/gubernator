@@ -147,7 +147,7 @@ func (e *K8sPool) startGenericWatch(objType runtime.Object, listWatch *cache.Lis
 		},
 	})
 	if err != nil {
-		e.log.Errorf("while adding event handler: %v", err)
+		e.log.WithError(err).Error("while adding event handler")
 	}
 
 	go e.informer.Run(e.done)

@@ -16,6 +16,11 @@ linters:
       exclude-functions:
         - (io.Closer).Close
         - (io.ReadCloser).Close
+        - (*os.File).Close
+        - (*io.PipeWriter).Close
+        - (*io.PipeReader).Close
+        - (go.etcd.io/etcd/client/v3.Watcher).Close
+        - (*github.com/gubernator-io/gubernator/v2.WorkerPool).Close
 
     govet:
       disable:

@@ -407,7 +407,7 @@ func (s *Daemon) Close() {
 		srv.GracefulStop()
 	}
 	if s.logWriter != nil {
-		s.logWriter.Close() //nolint:errcheck
+		s.logWriter.Close()
 	}
 	if s.V1Server != nil {
 		_ = s.V1Server.Close()
