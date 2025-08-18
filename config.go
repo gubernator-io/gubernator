@@ -418,6 +418,7 @@ func SetupDaemonConfig(logger *logrus.Logger, configFile io.Reader) (DaemonConfi
 	setter.SetDefault(&conf.EtcdPoolConf.Advertise.GRPCAddress, os.Getenv("GUBER_ETCD_ADVERTISE_ADDRESS"), conf.AdvertiseAddress)
 	setter.SetDefault(&conf.EtcdPoolConf.Advertise.DataCenter, os.Getenv("GUBER_ETCD_DATA_CENTER"), conf.DataCenter)
 
+	setter.SetDefault(&conf.MemberListPoolConf.NodeName, os.Getenv("GUBER_MEMBERLIST_NODE_NAME"), "") // Empty string means use the hostname
 	setter.SetDefault(&conf.MemberListPoolConf.Advertise.GRPCAddress, os.Getenv("GUBER_MEMBERLIST_ADVERTISE_ADDRESS"), conf.AdvertiseAddress)
 	setter.SetDefault(&conf.MemberListPoolConf.MemberListAddress, os.Getenv("GUBER_MEMBERLIST_ADDRESS"), fmt.Sprintf("%s:7946", advAddr))
 	setter.SetDefault(&conf.MemberListPoolConf.MemberListBindAddress, os.Getenv("GUBER_MEMBERLIST_BIND_ADDRESS"))
