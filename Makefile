@@ -2,7 +2,7 @@
 VERSION=$(shell cat version)
 LDFLAGS="-X main.Version=$(VERSION)"
 GOLANGCI_LINT = $(GOPATH)/bin/golangci-lint
-GOLANGCI_LINT_VERSION = v1.61.0
+GOLANGCI_LINT_VERSION = v2.2.2
 
 .PHONY: help
 help:
@@ -47,8 +47,9 @@ clean-proto: ## Clean the generated source files from the protobuf sources
 
 
 .PHONY: proto
-proto: ## Build protos
-	./buf.gen.yaml
+proto: ## Build protos with config buf.gen.yaml
+    # Install buf: https://buf.build/docs/installation
+	buf generate
 
 .PHONY: certs
 certs: ## Generate SSL certificates

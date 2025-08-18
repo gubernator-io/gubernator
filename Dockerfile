@@ -1,5 +1,5 @@
 # Build image
-FROM --platform=$BUILDPLATFORM golang:1.21.0 AS build
+FROM --platform=$BUILDPLATFORM golang:1.24.6 AS build
 ARG BUILDPLATFORM
 ARG TARGETPLATFORM
 # https://github.com/docker/buildx/issues/510#issuecomment-768432329

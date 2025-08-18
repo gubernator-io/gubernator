@@ -418,7 +418,12 @@ func (c *PeerClient) Shutdown(ctx context.Context) error {
 	}
 
 	// ensure we don't leak goroutines, even if the Shutdown times out
-	defer c.conn.Close()
+	defer func(conn *grpc.ClientConn) {
+		err := conn.Close()
+		if err != nil {
+			c.conf.Log.Errorf("error closing peer client: %v", err)
+		}
+	}(c.conn)
 
 	waitChan := make(chan struct{})
 	go func() {

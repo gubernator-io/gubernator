@@ -332,7 +332,7 @@ func (e *EtcdPool) callOnUpdate() {
 	e.conf.OnUpdate(peers)
 }
 
-// Get peers list from etcd.
+// GetPeers Get peers list from etcd.
 func (e *EtcdPool) GetPeers(ctx context.Context) ([]PeerInfo, error) {
 	keyPrefix := e.conf.KeyPrefix
 

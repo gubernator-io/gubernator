@@ -117,7 +117,7 @@ func (e *K8sPool) startGenericWatch(objType runtime.Object, listWatch *cache.Lis
 		cache.Indexers{},
 	)
 
-	e.informer.AddEventHandler(cache.ResourceEventHandlerFuncs{
+	_, err := e.informer.AddEventHandler(cache.ResourceEventHandlerFuncs{
 		AddFunc: func(obj interface{}) {
 			key, err := cache.MetaNamespaceKeyFunc(obj)
 			e.log.Debugf("Queue (Add) '%s' - %v", key, err)
@@ -146,6 +146,9 @@ func (e *K8sPool) startGenericWatch(objType runtime.Object, listWatch *cache.Lis
 			updateFunc()
 		},
 	})
+	if err != nil {
+		e.log.WithError(err).Error("while adding event handler")
+	}
 
 	go e.informer.Run(e.done)
 

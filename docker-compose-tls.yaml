@@ -1,4 +1,3 @@
-version: '3'
 services:
   gubernator-1:
     image: ghcr.io/gubernator-io/gubernator:latest
