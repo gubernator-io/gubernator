@@ -169,6 +169,8 @@ func (s *Daemon) Start(ctx context.Context) error {
 		InstanceID:    s.conf.InstanceID,
 		EventChannel:  s.conf.EventChannel,
 		AdvertiseAddr: s.conf.AdvertiseAddress,
+		Store:         s.conf.Store,
+		Loader:        s.conf.Loader,
 	}
 
 	s.V1Server, err = NewV1Instance(s.instanceConf)

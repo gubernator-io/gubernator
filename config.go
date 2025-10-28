@@ -271,6 +271,15 @@ type DaemonConfig struct {
 
 	// (Optional) EventChannel receives hit events
 	EventChannel chan<- HitEvent
+
+	// (Optional) A persistent store implementation. Allows the implementor the ability to store the rate limits this
+	// instance of gubernator owns. It's up to the implementor to decide what rate limits to persist.
+	// For instance an implementor might only persist rate limits that have an expiration of longer than 1 hour.
+	Store Store
+
+	// (Optional) A loader from a persistent store. Allows the implementor the ability to load and save
+	// the contents of the cache when the gubernator instance is started and stopped
+	Loader Loader
 }
 
 func (d *DaemonConfig) ClientTLS() *tls.Config {
