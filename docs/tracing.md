@@ -95,7 +95,7 @@ typically done using OpenTelemetry instrumentation, such as [`otelhttp`](https:/
 See [OpenTelemetry registry](https://opentelemetry.io/registry/?language=go)
 for instrumentation using many other HTTP frameworks.
 
-## Gubernator Standlone
+## Gubernator Standalone
 When deployed as a standalone daemon, Gubernator's gRPC service will receive
 embedded trace ids in requests from the client's `context` object.
 
