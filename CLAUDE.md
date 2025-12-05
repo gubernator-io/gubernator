@@ -62,7 +62,7 @@ Gubernator is a distributed, stateless rate limiting service that uses consisten
 Configured via `GUBER_PEER_DISCOVERY_TYPE`:
 - `member-list` (default): Hashicorp memberlist gossip protocol
 - `etcd`: etcd key-value store
-- `k8s`: Kubernetes endpoints API
+- `k8s`: Kubernetes EndpointSlice API
 - `dns`: Round-robin DNS
 
 ### Key Interfaces

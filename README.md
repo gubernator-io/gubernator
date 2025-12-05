@@ -319,7 +319,7 @@ Example response:
 ```
 
 ### Deployment
-NOTE: Gubernator uses `etcd`, Kubernetes or round-robin DNS to discover peers and
+NOTE: Gubernator uses `etcd`, Kubernetes EndpointSlice API, or round-robin DNS to discover peers and
 establish a cluster. If you don't have either, the docker-compose method is the
 simplest way to try gubernator out.
 
