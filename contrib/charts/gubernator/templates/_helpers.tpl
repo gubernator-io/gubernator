@@ -100,8 +100,10 @@ HTTP Port
   value: "k8s"
 - name: GUBER_K8S_POD_PORT
   value: "{{ include "gubernator.grpc.port" . }}"
-- name: GUBER_K8S_ENDPOINTS_SELECTOR
-  value: "app={{ include "gubernator.fullname" . }}"
+- name: GUBER_K8S_SERVICE_NAME
+  value: "{{ include "gubernator.fullname" . }}"
+- name: GUBER_K8S_SELECTOR
+  value: "app.kubernetes.io/name={{ include "gubernator.name" . }},app.kubernetes.io/instance={{ .Release.Name }}"
 {{- if .Values.gubernator.debug }}
 - name: GUBER_DEBUG
   value: "true"
@@ -110,7 +112,7 @@ HTTP Port
 {{- if .Values.gubernator.watchPods }}
   value: "pods"
 {{- else }}
-  value: "endpoints"
+  value: "endpointslices"
 {{- end }}
 {{- if .Values.gubernator.server.grpc.maxConnAgeSeconds }}
 - name: GUBER_GRPC_MAX_CONN_AGE_SEC
