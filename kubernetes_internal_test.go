@@ -1,18 +1,13 @@
 package gubernator
 
 import (
-	"reflect"
 	"testing"
-	"time"
-	"unsafe"
 
 	"github.com/sirupsen/logrus"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	discoveryv1 "k8s.io/api/discovery/v1"
 	meta_v1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	"k8s.io/client-go/kubernetes/fake"
-	"k8s.io/client-go/tools/cache"
 )
 
 func TestWatchMechanismFromString(t *testing.T) {
@@ -54,7 +49,7 @@ func TestWatchMechanismFromString(t *testing.T) {
 	}
 }
 
-func TestK8sPoolUpdatePeersFromEndpointSlices(t *testing.T) {
+func TestExtractPeersFromEndpointSlices(t *testing.T) {
 	const (
 		testNamespace = "default"
 		serviceName   = "gubernator"
@@ -365,49 +360,15 @@ func TestK8sPoolUpdatePeersFromEndpointSlices(t *testing.T) {
 		},
 	} {
 		t.Run(test.name, func(t *testing.T) {
-			client := fake.NewSimpleClientset()
+			log := logrus.NewEntry(logrus.StandardLogger())
 
-			for _, slice := range test.slices {
-				_, err := client.DiscoveryV1().EndpointSlices(testNamespace).Create(nil, slice, meta_v1.CreateOptions{})
-				require.NoError(t, err)
-			}
+			peers := ExtractPeersFromEndpointSlices(test.slices, test.selfIP, podPort, log)
 
-			var capturedPeers []PeerInfo
-			onUpdate := func(peers []PeerInfo) {
-				capturedPeers = peers
-			}
-
-			conf := K8sPoolConfig{
-				Logger:      logrus.NewEntry(logrus.StandardLogger()),
-				Mechanism:   WatchEndpointSlices,
-				OnUpdate:    onUpdate,
-				Namespace:   testNamespace,
-				ServiceName: serviceName,
-				PodIP:       test.selfIP,
-				PodPort:     podPort,
-			}
-
-			store := cache.NewIndexer(cache.MetaNamespaceKeyFunc, cache.Indexers{})
-			for _, slice := range test.slices {
-				require.NoError(t, store.Add(slice))
-			}
-
-			informer := &mockInformer{store: store}
-
-			pool := &K8sPool{}
-
-			setPrivateField(pool, "conf", conf)
-			setPrivateField(pool, "client", client)
-			setPrivateField(pool, "log", conf.Logger)
-			setPrivateField(pool, "informer", informer)
-
-			pool.updatePeersFromEndpointSlices()
-
-			require.Len(t, capturedPeers, test.wantPeers)
+			require.Len(t, peers, test.wantPeers)
 
 			actualAddrs := make(map[string]bool)
 			foundOwner := false
-			for _, peer := range capturedPeers {
+			for _, peer := range peers {
 				actualAddrs[peer.GRPCAddress] = true
 				if peer.IsOwner {
 					foundOwner = true
@@ -421,74 +382,4 @@ func TestK8sPoolUpdatePeersFromEndpointSlices(t *testing.T) {
 			assert.Equal(t, test.wantOwner, foundOwner)
 		})
 	}
-}
-
-func setPrivateField(obj interface{}, fieldName string, value interface{}) {
-	v := reflect.ValueOf(obj).Elem()
-	f := v.FieldByName(fieldName)
-	rf := reflect.NewAt(f.Type(), unsafe.Pointer(f.UnsafeAddr())).Elem()
-
-	rv := reflect.ValueOf(value)
-	if rv.Type().AssignableTo(f.Type()) {
-		rf.Set(rv)
-	} else if rv.Type().ConvertibleTo(f.Type()) {
-		rf.Set(rv.Convert(f.Type()))
-	} else {
-		*(*interface{})(unsafe.Pointer(f.UnsafeAddr())) = value
-	}
-}
-
-type mockInformer struct {
-	store cache.Store
-}
-
-func (m *mockInformer) AddEventHandler(handler cache.ResourceEventHandler) (cache.ResourceEventHandlerRegistration, error) {
-	return nil, nil
-}
-
-func (m *mockInformer) AddEventHandlerWithResyncPeriod(handler cache.ResourceEventHandler, resyncPeriod time.Duration) (cache.ResourceEventHandlerRegistration, error) {
-	return nil, nil
-}
-
-func (m *mockInformer) RemoveEventHandler(handle cache.ResourceEventHandlerRegistration) error {
-	return nil
-}
-
-func (m *mockInformer) GetStore() cache.Store {
-	return m.store
-}
-
-func (m *mockInformer) GetController() cache.Controller {
-	return nil
-}
-
-func (m *mockInformer) Run(stopCh <-chan struct{}) {
-}
-
-func (m *mockInformer) HasSynced() bool {
-	return true
-}
-
-func (m *mockInformer) LastSyncResourceVersion() string {
-	return ""
-}
-
-func (m *mockInformer) SetWatchErrorHandler(handler cache.WatchErrorHandler) error {
-	return nil
-}
-
-func (m *mockInformer) SetTransform(f cache.TransformFunc) error {
-	return nil
-}
-
-func (m *mockInformer) IsStopped() bool {
-	return false
-}
-
-func (m *mockInformer) AddIndexers(indexers cache.Indexers) error {
-	return nil
-}
-
-func (m *mockInformer) GetIndexer() cache.Indexer {
-	return nil
 }

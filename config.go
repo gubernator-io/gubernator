@@ -494,13 +494,13 @@ func SetupDaemonConfig(logger *logrus.Logger, configFile io.Reader) (DaemonConfi
 	if anyHasPrefix("GUBER_K8S_", os.Environ()) {
 		log.Debug("K8s peer pool config found")
 
-		mechanism := conf.K8PoolConf.Mechanism
-		if mechanism == WatchEndpointSlices || mechanism == "" {
+		switch conf.K8PoolConf.Mechanism {
+		case WatchEndpointSlices, "":
 			if conf.K8PoolConf.ServiceName == "" {
 				return conf, errors.New("when using k8s for peer discovery with endpointslices, " +
 					"you MUST provide `GUBER_K8S_SERVICE_NAME` to identify the Service")
 			}
-		} else if mechanism == WatchPods {
+		case WatchPods:
 			if conf.K8PoolConf.Selector == "" {
 				return conf, errors.New("when using k8s for peer discovery with pods, " +
 					"you MUST provide `GUBER_K8S_SELECTOR` to select the gubernator pods")

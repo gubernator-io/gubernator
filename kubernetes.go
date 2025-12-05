@@ -194,49 +194,79 @@ func (e *K8sPool) startEndpointSliceWatch() error {
 
 func (e *K8sPool) updatePeersFromPods() {
 	e.log.Debug("Fetching peer list from pods API")
-	var peers []PeerInfo
-main:
+
+	var pods []*api_v1.Pod
 	for _, obj := range e.informer.GetStore().List() {
 		pod, ok := obj.(*api_v1.Pod)
 		if !ok {
-			e.log.Errorf("expected type v1.Endpoints got '%s' instead", reflect.TypeOf(obj).String())
+			e.log.Errorf("expected type v1.Pod got '%s' instead", reflect.TypeOf(obj).String())
+			continue
 		}
+		pods = append(pods, pod)
+	}
 
-		peer := PeerInfo{GRPCAddress: fmt.Sprintf("%s:%s", pod.Status.PodIP, e.conf.PodPort)}
-		if pod.Status.PodIP == e.conf.PodIP {
+	peers := ExtractPeersFromPods(pods, e.conf.PodIP, e.conf.PodPort, e.log)
+	e.conf.OnUpdate(peers)
+}
+
+// ExtractPeersFromPods converts Pod objects to a PeerInfo slice.
+// This is a pure function that extracts peer information from Kubernetes Pods.
+func ExtractPeersFromPods(pods []*api_v1.Pod, podIP, podPort string, log FieldLogger) []PeerInfo {
+	var peers []PeerInfo
+
+	for _, pod := range pods {
+		peer := PeerInfo{GRPCAddress: fmt.Sprintf("%s:%s", pod.Status.PodIP, podPort)}
+		if pod.Status.PodIP == podIP {
 			peer.IsOwner = true
 		}
 
 		// Only take the chance to skip the peer if it's not our own IP. We need to be able to discover ourselves
 		// for the health check.
 		if !peer.IsOwner {
+			skip := false
 			// if containers are not ready or not running then skip this peer
 			for _, status := range pod.Status.ContainerStatuses {
 				if !status.Ready || status.State.Running == nil {
-					e.log.Debugf("Skipping peer because it's not ready or not running: %+v\n", peer)
-					continue main
+					log.Debugf("Skipping peer because it's not ready or not running: %+v\n", peer)
+					skip = true
+					break
 				}
+			}
+			if skip {
+				continue
 			}
 		}
 
-		e.log.Debugf("Peer: %+v\n", peer)
+		log.Debugf("Peer: %+v\n", peer)
 		peers = append(peers, peer)
 	}
-	e.conf.OnUpdate(peers)
+
+	return peers
 }
 
 func (e *K8sPool) updatePeersFromEndpointSlices() {
 	e.log.Debug("Fetching peer list from endpointslices API")
 
-	peerMap := make(map[string]PeerInfo)
-
+	var slices []*discoveryv1.EndpointSlice
 	for _, obj := range e.informer.GetStore().List() {
 		slice, ok := obj.(*discoveryv1.EndpointSlice)
 		if !ok {
 			e.log.Errorf("expected type discoveryv1.EndpointSlice got '%s' instead", reflect.TypeOf(obj).String())
 			continue
 		}
+		slices = append(slices, slice)
+	}
 
+	peers := ExtractPeersFromEndpointSlices(slices, e.conf.PodIP, e.conf.PodPort, e.log)
+	e.conf.OnUpdate(peers)
+}
+
+// ExtractPeersFromEndpointSlices converts EndpointSlice objects to a PeerInfo slice.
+// This is a pure function that extracts peer information from Kubernetes EndpointSlices.
+func ExtractPeersFromEndpointSlices(slices []*discoveryv1.EndpointSlice, podIP, podPort string, log FieldLogger) []PeerInfo {
+	peerMap := make(map[string]PeerInfo)
+
+	for _, slice := range slices {
 		if slice.AddressType != discoveryv1.AddressTypeIPv4 {
 			continue
 		}
@@ -250,15 +280,15 @@ func (e *K8sPool) updatePeersFromEndpointSlices() {
 
 			isReady := endpoint.Conditions.Ready == nil || *endpoint.Conditions.Ready
 
-			isOwner := ip == e.conf.PodIP
+			isOwner := ip == podIP
 
 			if !isReady && !isOwner {
-				e.log.Debugf("Skipping peer because it's not ready: %s", ip)
+				log.Debugf("Skipping peer because it's not ready: %s", ip)
 				continue
 			}
 
 			peer := PeerInfo{
-				GRPCAddress: fmt.Sprintf("%s:%s", ip, e.conf.PodPort),
+				GRPCAddress: fmt.Sprintf("%s:%s", ip, podPort),
 				IsOwner:     isOwner,
 			}
 
@@ -270,7 +300,7 @@ func (e *K8sPool) updatePeersFromEndpointSlices() {
 			}
 
 			peerMap[ip] = peer
-			e.log.Debugf("Peer: %+v", peer)
+			log.Debugf("Peer: %+v", peer)
 		}
 	}
 
@@ -279,7 +309,7 @@ func (e *K8sPool) updatePeersFromEndpointSlices() {
 		peers = append(peers, peer)
 	}
 
-	e.conf.OnUpdate(peers)
+	return peers
 }
 
 func (e *K8sPool) Close() {

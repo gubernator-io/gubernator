@@ -26,6 +26,19 @@ test: ## Run unit tests and measure code coverage
 bench: ## Run Go benchmarks
 	go test ./... -bench . -benchtime 5s -timeout 0 -run='^$$' -benchmem
 
+.PHONY: tidy
+tidy: ## Run go mod tidy and verify no changes
+	go mod tidy && git diff --exit-code
+
+.PHONY: fmt
+fmt: ## Run go fmt and verify no changes
+	go fmt ./... && git diff --exit-code
+
+.PHONY: ci
+ci: tidy fmt lint test ## Run all CI checks (tidy, fmt, lint, test)
+	@echo
+	@echo "\033[32mEVERYTHING PASSED!\033[0m"
+
 .PHONY: docker
 docker: ## Build Docker image
 	docker build --build-arg VERSION=$(VERSION) -t ghcr.io/gubernator-io/gubernator:$(VERSION) .
