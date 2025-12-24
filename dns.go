@@ -21,6 +21,7 @@ import (
 	"math/rand"
 	"net"
 	"os"
+	"strings"
 	"time"
 
 	"github.com/mailgun/holster/v4/setter"
@@ -60,62 +61,46 @@ func (r *DNSResolver) lookupHost(host string, dnsType uint16, delay uint32) ([]n
 	m1 := new(dns.Msg)
 	m1.Id = dns.Id()
 	m1.RecursionDesired = true
-	m1.Question = make([]dns.Question, 1)
-
-	switch dnsType {
-	case dns.TypeA:
-		m1.Question[0] = dns.Question{Name: dns.Fqdn(host), Qtype: dns.TypeA, Qclass: dns.ClassINET}
-	case dns.TypeAAAA:
-		m1.Question[0] = dns.Question{Name: dns.Fqdn(host), Qtype: dns.TypeAAAA, Qclass: dns.ClassINET}
-	}
+	m1.Question = []dns.Question{{Name: dns.Fqdn(host), Qtype: dnsType, Qclass: dns.ClassINET}}
 
 	in, err := dns.Exchange(m1, r.Servers[r.random.Intn(len(r.Servers))])
-
-	var result []net.IP
-
 	if err != nil {
-		return result, 0, err
+		return nil, 0, err
 	}
 
 	if in.Rcode != dns.RcodeSuccess {
-		return result, 0, errors.New(dns.RcodeToString[in.Rcode])
+		return nil, 0, errors.New(dns.RcodeToString[in.Rcode])
 	}
 
-	if dnsType == dns.TypeA {
-		if len(in.Answer) > 0 {
-			for _, record := range in.Answer {
-				if t, ok := record.(*dns.A); ok {
-					result = append(result, t.A)
-					delay = min(delay, record.Header().Ttl)
-				}
-			}
-		} else {
-			return result, 0, errors.New("not useful")
+	result := make([]net.IP, 0, len(in.Answer))
+	for _, record := range in.Answer {
+		switch r := record.(type) {
+		case *dns.A:
+			result = append(result, r.A)
+		case *dns.AAAA:
+			result = append(result, r.AAAA)
 		}
-	}
-
-	if dnsType == dns.TypeAAAA {
-		if len(in.Answer) > 0 {
-			for _, record := range in.Answer {
-				if t, ok := record.(*dns.AAAA); ok {
-					result = append(result, t.AAAA)
-					delay = min(delay, record.Header().Ttl)
-				}
-			}
-		} else {
-			return result, 0, errors.New("not useful")
-		}
+		delay = min(delay, record.Header().Ttl)
 	}
 
 	return result, delay, nil
+}
+
+func NewDNSResolver(servers []string) (*DNSResolver, error) {
+	return &DNSResolver{Servers: servers, random: rand.New(rand.NewSource(time.Now().UnixNano()))}, nil
 }
 
 type DNSPoolConfig struct {
 	// (Required) The FQDN that should resolve to gubernator instance ip addresses
 	FQDN string
 
-	// (Required) Filesystem path to "/etc/resolv.conf", override for testing
+	// (Required) Filesystem path to "/etc/resolv.conf"
+	// Only used if ResolvServers is not provided.
 	ResolvConf string
+
+	// (Optional) List of resolvers to use, will override ResolvConf if provided
+	// Defaults to the servers in ResolvConf
+	ResolvServers []string
 
 	// (Required) Own GRPC address
 	OwnAddress string
@@ -127,10 +112,21 @@ type DNSPoolConfig struct {
 }
 
 type DNSPool struct {
-	log    FieldLogger
-	conf   DNSPoolConfig
-	ctx    context.Context
-	cancel context.CancelFunc
+	log      FieldLogger
+	ctx      context.Context
+	cancel   context.CancelFunc
+	resolver *DNSResolver
+	fqdns    []string // list of FQDNs to resolve
+	ownIP    string
+	ownPort  string
+	onUpdate UpdateFunc
+}
+
+func newResolver(conf DNSPoolConfig) (*DNSResolver, error) {
+	if len(conf.ResolvServers) > 0 {
+		return NewDNSResolver(conf.ResolvServers)
+	}
+	return NewFromResolvConf(conf.ResolvConf)
 }
 
 func NewDNSPool(conf DNSPoolConfig) (*DNSPool, error) {
@@ -139,70 +135,83 @@ func NewDNSPool(conf DNSPoolConfig) (*DNSPool, error) {
 	if conf.OwnAddress == "" {
 		return nil, errors.New("Advertise.GRPCAddress is required")
 	}
+	ip, port, err := net.SplitHostPort(conf.OwnAddress)
+	if err != nil {
+		return nil, errors.Wrap(err, "OwnAddress is invalid")
+	}
+	if port == "" {
+		port = "1051"
+	}
+
+	resolver, err := newResolver(conf)
+	if err != nil {
+		return nil, err
+	}
+
+	fqdns := make([]string, 0)
+	for _, fqdn := range strings.Split(conf.FQDN, ",") {
+		fqdn := strings.TrimSpace(fqdn)
+		if fqdn == "" {
+			continue
+		}
+		fqdns = append(fqdns, fqdn)
+	}
 
 	ctx, cancel := context.WithCancel(context.Background())
 	pool := &DNSPool{
-		log:    conf.Logger,
-		conf:   conf,
-		ctx:    ctx,
-		cancel: cancel,
+		log:      conf.Logger,
+		ctx:      ctx,
+		cancel:   cancel,
+		fqdns:    fqdns,
+		resolver: resolver,
+		ownIP:    ip,
+		ownPort:  port,
+		onUpdate: conf.OnUpdate,
 	}
 	go pool.task()
 	return pool, nil
 }
 
-func peer(ip string, self string, ipv6 bool) PeerInfo {
-
+func (p *DNSPool) peer(fqdn, ip string, ipv6 bool) PeerInfo {
 	if ipv6 {
 		ip = "[" + ip + "]"
 	}
-	grpc := ip + ":1051"
 	return PeerInfo{
-		DataCenter:  "",
-		HTTPAddress: ip + ":1050",
-		GRPCAddress: grpc,
-		IsOwner:     grpc == self,
-	}
-
-}
-
-func min(a uint32, b uint32) uint32 {
-	if a < b {
-		return a
-	} else {
-		return b
+		DataCenter:  fqdn,
+		GRPCAddress: ip + ":" + p.ownPort,
+		IsOwner:     p.ownIP == ip,
 	}
 }
 
 func (p *DNSPool) task() {
 	for {
 		var delay uint32 = 300
-		resolver, err := NewFromResolvConf(p.conf.ResolvConf)
-		if err != nil {
-			p.log.Warn("No resolver: ", err)
+		var update []PeerInfo
+		for _, fqdn := range p.fqdns {
+			for _, t := range []uint16{dns.TypeA, dns.TypeAAAA} {
+				ips, d, err := p.resolver.lookupHost(fqdn, t, delay)
+				if err != nil {
+					p.log.Debugf("Error looking up %s (%s): %v", fqdn, dns.TypeToString[t], err)
+					continue
+				}
+				if len(ips) == 0 {
+					p.log.Debugf("No IPs found for %s (%s)", fqdn, dns.TypeToString[t])
+					continue
+				}
 
-		} else {
-			ipv4, delay4, err4 := resolver.lookupHost(p.conf.FQDN, dns.TypeA, delay)
-			ipv6, delay6, err6 := resolver.lookupHost(p.conf.FQDN, dns.TypeAAAA, delay)
-			var update []PeerInfo
-			if err4 == nil {
-				delay = min(delay, delay4)
-				for _, ip := range ipv4 {
-					update = append(update, peer(ip.String(), p.conf.OwnAddress, false))
+				delay = min(delay, d)
+				for _, ip := range ips {
+					update = append(update, p.peer(fqdn, ip.String(), t == dns.TypeAAAA))
 				}
-			}
-			if err6 == nil {
-				delay = min(delay, delay6)
-				for _, ip := range ipv6 {
-					update = append(update, peer(ip.String(), p.conf.OwnAddress, false))
-				}
-			}
-			if len(update) > 0 {
-				p.conf.OnUpdate(update)
-			} else {
-				p.log.Error("Looking up peers: ", err4, err6)
 			}
 		}
+
+		if len(update) > 0 {
+			p.onUpdate(update)
+		} else {
+			p.log.Warn("No peers found for DNS pool")
+		}
+
 		p.log.Debug("DNS poll delay: ", delay)
 		select {
 		case <-p.ctx.Done():
