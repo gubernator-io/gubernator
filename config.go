@@ -441,12 +441,24 @@ func SetupDaemonConfig(logger *logrus.Logger, configFile io.Reader) (DaemonConfi
 	setter.SetDefault(&conf.K8PoolConf.Namespace, os.Getenv("GUBER_K8S_NAMESPACE"), "default")
 	conf.K8PoolConf.PodIP = os.Getenv("GUBER_K8S_POD_IP")
 	conf.K8PoolConf.PodPort = os.Getenv("GUBER_K8S_POD_PORT")
-	conf.K8PoolConf.Selector = os.Getenv("GUBER_K8S_ENDPOINTS_SELECTOR")
+
+	// Load selector with backward compatibility
+	selector := os.Getenv("GUBER_K8S_SELECTOR")
+	if selector == "" {
+		selector = os.Getenv("GUBER_K8S_ENDPOINTS_SELECTOR")
+		if selector != "" {
+			log.Warn("GUBER_K8S_ENDPOINTS_SELECTOR is deprecated, use GUBER_K8S_SELECTOR instead")
+		}
+	}
+	conf.K8PoolConf.Selector = selector
+
+	// Load service name (required for endpointslices)
+	conf.K8PoolConf.ServiceName = os.Getenv("GUBER_K8S_SERVICE_NAME")
 	var assignErr error
 	conf.K8PoolConf.Mechanism, assignErr = WatchMechanismFromString(os.Getenv("GUBER_K8S_WATCH_MECHANISM"))
 	if assignErr != nil {
 		return conf, errors.New("invalid value for watch mechanism " +
-			"`GUBER_K8S_WATCH_MECHANISM` needs to be either 'endpoints' or 'pods' (defaults to 'endpoints')")
+			"`GUBER_K8S_WATCH_MECHANISM` needs to be either 'endpointslices' or 'pods' (defaults to 'endpointslices')")
 	}
 
 	// DNS Config
@@ -481,9 +493,18 @@ func SetupDaemonConfig(logger *logrus.Logger, configFile io.Reader) (DaemonConfi
 
 	if anyHasPrefix("GUBER_K8S_", os.Environ()) {
 		log.Debug("K8s peer pool config found")
-		if conf.K8PoolConf.Selector == "" {
-			return conf, errors.New("when using k8s for peer discovery, you MUST provide a " +
-				"`GUBER_K8S_ENDPOINTS_SELECTOR` to select the gubernator peers from the endpoints listing")
+
+		switch conf.K8PoolConf.Mechanism {
+		case WatchEndpointSlices, "":
+			if conf.K8PoolConf.ServiceName == "" {
+				return conf, errors.New("when using k8s for peer discovery with endpointslices, " +
+					"you MUST provide `GUBER_K8S_SERVICE_NAME` to identify the Service")
+			}
+		case WatchPods:
+			if conf.K8PoolConf.Selector == "" {
+				return conf, errors.New("when using k8s for peer discovery with pods, " +
+					"you MUST provide `GUBER_K8S_SELECTOR` to select the gubernator pods")
+			}
 		}
 	}
 
