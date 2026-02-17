@@ -2,7 +2,7 @@ module github.com/gubernator-io/gubernator/v2
 
 go 1.24.0
 
-toolchain go1.24.6
+toolchain go1.24.7
 
 require (
 	github.com/OneOfOne/xxhash v1.2.8
