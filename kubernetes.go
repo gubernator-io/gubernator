@@ -25,6 +25,7 @@ import (
 	"github.com/pkg/errors"
 	"github.com/sirupsen/logrus"
 	api_v1 "k8s.io/api/core/v1"
+	discoveryv1 "k8s.io/api/discovery/v1"
 	meta_v1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/watch"
@@ -45,16 +46,18 @@ type K8sPool struct {
 type WatchMechanism string
 
 const (
-	WatchEndpoints WatchMechanism = "endpoints"
-	WatchPods      WatchMechanism = "pods"
+	WatchEndpointSlices WatchMechanism = "endpointslices"
+	WatchPods           WatchMechanism = "pods"
 )
 
 func WatchMechanismFromString(mechanism string) (WatchMechanism, error) {
 	switch WatchMechanism(mechanism) {
-	case "": // keep default behavior
-		return WatchEndpoints, nil
-	case WatchEndpoints:
-		return WatchEndpoints, nil
+	case "":
+		return WatchEndpointSlices, nil
+	case WatchEndpointSlices:
+		return WatchEndpointSlices, nil
+	case "endpoints": // backward compat - now uses EndpointSlices
+		return WatchEndpointSlices, nil
 	case WatchPods:
 		return WatchPods, nil
 	default:
@@ -63,13 +66,14 @@ func WatchMechanismFromString(mechanism string) (WatchMechanism, error) {
 }
 
 type K8sPoolConfig struct {
-	Logger    FieldLogger
-	Mechanism WatchMechanism
-	OnUpdate  UpdateFunc
-	Namespace string
-	Selector  string
-	PodIP     string
-	PodPort   string
+	Logger      FieldLogger
+	Mechanism   WatchMechanism
+	OnUpdate    UpdateFunc
+	Namespace   string
+	Selector    string // Label selector for pods mechanism (e.g., "app=gubernator")
+	ServiceName string // Service name for endpointslices mechanism
+	PodIP       string
+	PodPort     string
 }
 
 func NewK8sPool(conf K8sPoolConfig) (*K8sPool, error) {
@@ -100,8 +104,8 @@ func NewK8sPool(conf K8sPoolConfig) (*K8sPool, error) {
 
 func (e *K8sPool) start() error {
 	switch e.conf.Mechanism {
-	case WatchEndpoints:
-		return e.startEndpointWatch()
+	case WatchEndpointSlices:
+		return e.startEndpointSliceWatch()
 	case WatchPods:
 		return e.startPodWatch()
 	default:
@@ -174,88 +178,138 @@ func (e *K8sPool) startPodWatch() error {
 	return e.startGenericWatch(&api_v1.Pod{}, listWatch, e.updatePeersFromPods)
 }
 
-func (e *K8sPool) startEndpointWatch() error {
+func (e *K8sPool) startEndpointSliceWatch() error {
 	listWatch := &cache.ListWatch{
 		ListFunc: func(options meta_v1.ListOptions) (runtime.Object, error) {
-			options.LabelSelector = e.conf.Selector
-			return e.client.CoreV1().Endpoints(e.conf.Namespace).List(context.Background(), options)
+			options.LabelSelector = discoveryv1.LabelServiceName + "=" + e.conf.ServiceName
+			return e.client.DiscoveryV1().EndpointSlices(e.conf.Namespace).List(context.Background(), options)
 		},
 		WatchFunc: func(options meta_v1.ListOptions) (watch.Interface, error) {
-			options.LabelSelector = e.conf.Selector
-			return e.client.CoreV1().Endpoints(e.conf.Namespace).Watch(e.watchCtx, options)
+			options.LabelSelector = discoveryv1.LabelServiceName + "=" + e.conf.ServiceName
+			return e.client.DiscoveryV1().EndpointSlices(e.conf.Namespace).Watch(e.watchCtx, options)
 		},
 	}
-	return e.startGenericWatch(&api_v1.Endpoints{}, listWatch, e.updatePeersFromEndpoints)
+	return e.startGenericWatch(&discoveryv1.EndpointSlice{}, listWatch, e.updatePeersFromEndpointSlices)
 }
 
 func (e *K8sPool) updatePeersFromPods() {
 	e.log.Debug("Fetching peer list from pods API")
-	var peers []PeerInfo
-main:
+
+	var pods []*api_v1.Pod
 	for _, obj := range e.informer.GetStore().List() {
 		pod, ok := obj.(*api_v1.Pod)
 		if !ok {
-			e.log.Errorf("expected type v1.Endpoints got '%s' instead", reflect.TypeOf(obj).String())
+			e.log.Errorf("expected type v1.Pod got '%s' instead", reflect.TypeOf(obj).String())
+			continue
 		}
+		pods = append(pods, pod)
+	}
 
-		peer := PeerInfo{GRPCAddress: fmt.Sprintf("%s:%s", pod.Status.PodIP, e.conf.PodPort)}
-		if pod.Status.PodIP == e.conf.PodIP {
+	peers := ExtractPeersFromPods(pods, e.conf.PodIP, e.conf.PodPort, e.log)
+	e.conf.OnUpdate(peers)
+}
+
+// ExtractPeersFromPods converts Pod objects to a PeerInfo slice.
+// This is a pure function that extracts peer information from Kubernetes Pods.
+func ExtractPeersFromPods(pods []*api_v1.Pod, podIP, podPort string, log FieldLogger) []PeerInfo {
+	var peers []PeerInfo
+
+	for _, pod := range pods {
+		peer := PeerInfo{GRPCAddress: fmt.Sprintf("%s:%s", pod.Status.PodIP, podPort)}
+		if pod.Status.PodIP == podIP {
 			peer.IsOwner = true
 		}
 
 		// Only take the chance to skip the peer if it's not our own IP. We need to be able to discover ourselves
 		// for the health check.
 		if !peer.IsOwner {
+			skip := false
 			// if containers are not ready or not running then skip this peer
 			for _, status := range pod.Status.ContainerStatuses {
 				if !status.Ready || status.State.Running == nil {
-					e.log.Debugf("Skipping peer because it's not ready or not running: %+v\n", peer)
-					continue main
+					log.Debugf("Skipping peer because it's not ready or not running: %+v\n", peer)
+					skip = true
+					break
 				}
+			}
+			if skip {
+				continue
 			}
 		}
 
-		e.log.Debugf("Peer: %+v\n", peer)
+		log.Debugf("Peer: %+v\n", peer)
 		peers = append(peers, peer)
 	}
+
+	return peers
+}
+
+func (e *K8sPool) updatePeersFromEndpointSlices() {
+	e.log.Debug("Fetching peer list from endpointslices API")
+
+	var slices []*discoveryv1.EndpointSlice
+	for _, obj := range e.informer.GetStore().List() {
+		slice, ok := obj.(*discoveryv1.EndpointSlice)
+		if !ok {
+			e.log.Errorf("expected type discoveryv1.EndpointSlice got '%s' instead", reflect.TypeOf(obj).String())
+			continue
+		}
+		slices = append(slices, slice)
+	}
+
+	peers := ExtractPeersFromEndpointSlices(slices, e.conf.PodIP, e.conf.PodPort, e.log)
 	e.conf.OnUpdate(peers)
 }
 
-func (e *K8sPool) updatePeersFromEndpoints() {
-	e.log.Debug("Fetching peer list from endpoints API")
-	var peers []PeerInfo
-	for _, obj := range e.informer.GetStore().List() {
-		endpoint, ok := obj.(*api_v1.Endpoints)
-		if !ok {
-			e.log.Errorf("expected type v1.Endpoints got '%s' instead", reflect.TypeOf(obj).String())
+// ExtractPeersFromEndpointSlices converts EndpointSlice objects to a PeerInfo slice.
+// This is a pure function that extracts peer information from Kubernetes EndpointSlices.
+func ExtractPeersFromEndpointSlices(slices []*discoveryv1.EndpointSlice, podIP, podPort string, log FieldLogger) []PeerInfo {
+	peerMap := make(map[string]PeerInfo)
+
+	for _, slice := range slices {
+		if slice.AddressType != discoveryv1.AddressTypeIPv4 {
+			continue
 		}
 
-		for _, s := range endpoint.Subsets {
-			for _, addr := range s.Addresses {
-				// TODO(thrawn01): Might consider using the `namespace` as the `DataCenter`. We should
-				//  do what ever k8s convention is for identifying a k8s cluster within a federated multi-data
-				//  center setup.
-				peer := PeerInfo{GRPCAddress: fmt.Sprintf("%s:%s", addr.IP, e.conf.PodPort)}
+		for _, endpoint := range slice.Endpoints {
+			if len(endpoint.Addresses) == 0 {
+				continue
+			}
 
-				if addr.IP == e.conf.PodIP {
-					peer.IsOwner = true
-				}
-				peers = append(peers, peer)
-				e.log.Debugf("Peer: %+v\n", peer)
+			ip := endpoint.Addresses[0]
+
+			isReady := endpoint.Conditions.Ready == nil || *endpoint.Conditions.Ready
+
+			isOwner := ip == podIP
+
+			if !isReady && !isOwner {
+				log.Debugf("Skipping peer because it's not ready: %s", ip)
+				continue
 			}
-			for _, addr := range s.NotReadyAddresses {
-				// Also check the unready addresses, but only for our own IP. We need to be able to discover ourselves
-				// for the health check.
-				peer := PeerInfo{GRPCAddress: fmt.Sprintf("%s:%s", addr.IP, e.conf.PodPort)}
-				if addr.IP == e.conf.PodIP {
-					peer.IsOwner = true
-					peers = append(peers, peer)
-					e.log.Debugf("Peer (self): %+v\n", peer)
-				}
+
+			peer := PeerInfo{
+				GRPCAddress: fmt.Sprintf("%s:%s", ip, podPort),
+				IsOwner:     isOwner,
 			}
+
+			if existing, exists := peerMap[ip]; exists {
+				if !existing.IsOwner && isOwner {
+					peerMap[ip] = peer
+				}
+				continue
+			}
+
+			peerMap[ip] = peer
+			log.Debugf("Peer: %+v", peer)
 		}
 	}
-	e.conf.OnUpdate(peers)
+
+	peers := make([]PeerInfo, 0, len(peerMap))
+	for _, peer := range peerMap {
+		peers = append(peers, peer)
+	}
+
+	return peers
 }
 
 func (e *K8sPool) Close() {
