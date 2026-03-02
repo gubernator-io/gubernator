@@ -16,7 +16,7 @@ jobs:
 
       - name: Create k8s Kind Cluster
         id: kind
-        uses: helm/kind-action@v1
+        uses: helm/kind-action@v1.14.0
         with:
           version: 'v0.27.0'
           registry: true
@@ -27,6 +27,14 @@ jobs:
         env:
           LOCAL_REGISTRY: ${{ steps.kind.outputs.LOCAL_REGISTRY }}
         run: |
+          # Extract host:port from LOCAL_REGISTRY (remove http:// or https:// if present)
+          REGISTRY_HOST_PORT=$(echo $LOCAL_REGISTRY | sed 's|^http://||' | sed 's|^https://||')
+          # Configure Docker daemon to allow insecure registries
+          echo "{\"insecure-registries\": [\"$REGISTRY_HOST_PORT\"]}" | sudo tee /etc/docker/daemon.json
+          sudo systemctl restart docker || true
+          # Wait for docker to be ready
+          timeout 30 bash -c 'until docker info; do sleep 1; done'
+          # Build and push the image to the local registry
           docker build . -t $LOCAL_REGISTRY/gubernator
           docker push $LOCAL_REGISTRY/gubernator
 
@@ -42,7 +50,7 @@ jobs:
       - name: Set up Go
         uses: actions/setup-go@v5
         with:
-          go-version: 1.22.x
+          go-version: 1.25.x
 
       - name: Test
         run: |
