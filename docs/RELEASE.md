@@ -1,63 +1,17 @@
 # Release Process
-Repository maintainers may be responsible for publishing new releases after
-functionality is merged.
 
-This document explains the release process for when a new version must be
-published.
+## How to Release
 
-At a high level:
-* Merge PR's included in this release to `master`.
-* Create a release PR called `release-MAJOR-MINOR-PATCH`
-* Update version files in with `./update-version.sh vMAJOR.MINOR.PATCH`
-* Collaborate with other maintainers or self merge at your discretion
-* Finally, publish GitHub Release
+1. Merge all PRs intended for this release to `master`.
+2. Create a new [GitHub Release](https://github.com/gubernator-io/gubernator/releases/new) with a tag in the format `vMAJOR.MINOR.PATCH` (e.g., `v2.17.0`).
+3. Click **Publish Release**.
 
-## Update Version Files
-Some files contain the current version in [semver](https://semver.org/) format,
-such as "2.0.0-rc.34".  These files must be updated to the target version.
+The `on-release` workflow handles everything else:
+- Updates the Helm chart version from the release tag.
+- Builds and pushes the Docker image for `linux/amd64` and `linux/arm64`.
 
-These files are:
-* `charts/helm/Chart.yaml`
-   * `version`
-   * `appVersion`
-* `version`
+## Version Derivation
 
-Use script `update-version.sh` to easily update the required files.
-
-```
-$ ./update-version.sh 2.0.0-rc.35
-```
-
-## Publish New GitHub Release
-Publish a GitHub release from github.com.
-
-Create a new tag with "v" prefix version, such as "v2.0.0-rc.34".
-
-Provide a meaningful description of what's changed.  For example:
-
-* Tag: v2.0.0-rc.35
-* Title: v2.0.0-rc.35
-```markdown
-## What's Changed
-* Updated foobar by @Baliedge in #999.
-```
-
-or use the `Generate Release Notes` button
-
-Click "Publish Release".
-
-Publishing will launch an `on-release` GitHub Action to do the following:
-* Check version consistency.
-* Build Docker image.
-* Publish Docker image.
-* Publish Helm chart.
-
-More details on publishing GitHub releases:
-https://docs.github.com/en/repositories/releasing-projects-on-github/managing-releases-in-a-repository.
-
-## Version Consistency Check
-The version consistency check is performed `on-release`.  This will ensure the latest 
-tag version matches the version found in the files described in [Update Version Files](#update-version-files).
-
-If the check fails, the workflow will abort with an error.  The developer can
-make the necessary changes indicated in the error message.
+There is no `version` file to maintain. Versions are derived from git tags:
+- **Release builds** (CI): use `github.event.release.tag_name` directly.
+- **Local builds** (`make build`): use `git describe --tags --always --dirty`, producing versions like `v2.17.0` on a tagged commit or `v2.17.0-5-gabcdef-dirty` during development.

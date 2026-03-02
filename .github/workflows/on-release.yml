@@ -11,11 +11,12 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Fetch git tags
-        run: git fetch --tags
-
-      - name: Version consistency check
-        run: ./contrib/check-version.sh
+      - name: Update Helm chart version
+        run: |
+          TAG=${{ github.event.release.tag_name }}
+          VERSION=${TAG#v}
+          sed -i "s/^version:.*$/version: $VERSION/" contrib/charts/gubernator/Chart.yaml
+          sed -i "s/^appVersion:.*$/appVersion: $VERSION/" contrib/charts/gubernator/Chart.yaml
 
       # Buildx Needs QEMU
       - name: Set up QEMU
