@@ -125,6 +125,65 @@ func TestNewDNSPool(t *testing.T) {
 			ip, _, _ := net.SplitHostPort(peer.GRPCAddress)
 			assert.Contains(t, expectedIPs, ip)
 			assert.Equal(t, peer.GRPCAddress == ownGRPCAddress, peer.IsOwner)
+			assert.Equal(t, peer.DataCenter, "")
+		}
+
+	case <-time.After(10 * time.Second):
+		t.Fatal("timed out waiting for peers")
+	}
+}
+
+func TestNewDNSPoolWithDataCenter(t *testing.T) {
+	ownIP := "10.45.0.1"
+	peerIPs := map[string][]string{
+		"local-cluster-0.gubernator.io.": {
+			ownIP,
+			"10.45.0.2",
+			"10.45.0.3",
+		},
+		"local-cluster-1.gubernator.io.": {
+			"10.45.1.1",
+			"10.45.1.2",
+			"10.45.1.3",
+		},
+		"local-cluster-2.gubernator.io.": {
+			"10.45.2.1",
+			"10.45.2.2",
+			"10.45.2.3",
+		},
+	}
+
+	addr, err := fakeDNSServer(t, peerIPs)
+	require.NoError(t, err)
+
+	peersInfo := make(chan []gubernator.PeerInfo)
+	ownGRPCAddress := net.JoinHostPort(ownIP, "1051")
+	pool, err := gubernator.NewDNSPool(gubernator.DNSPoolConfig{
+		FQDN:          strings.Join(slices.Collect(maps.Keys(peerIPs)), ","),
+		ResolvServers: []string{addr},
+		OwnAddress:    ownGRPCAddress,
+		OnUpdate: func(peers []gubernator.PeerInfo) {
+			peersInfo <- peers
+		},
+		UseFQDNAsDataCenterName: true,
+	})
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		pool.Close()
+	})
+	t.Cleanup(func() {
+		close(peersInfo)
+	})
+
+	select {
+	case peers := <-peersInfo:
+		expectedIPs := slices.Concat(slices.Collect(maps.Values(peerIPs))...)
+		assert.Len(t, expectedIPs, len(peers))
+		for _, peer := range peers {
+			ip, _, _ := net.SplitHostPort(peer.GRPCAddress)
+			assert.Contains(t, expectedIPs, ip)
+			assert.Equal(t, peer.GRPCAddress == ownGRPCAddress, peer.IsOwner)
+			assert.Contains(t, peerIPs[peer.DataCenter], ip)
 		}
 
 	case <-time.After(10 * time.Second):

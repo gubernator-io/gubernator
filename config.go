@@ -462,6 +462,7 @@ func SetupDaemonConfig(logger *logrus.Logger, configFile io.Reader) (DaemonConfi
 	}
 
 	// DNS Config
+	conf.DNSPoolConf.UseFQDNAsDataCenterName = conf.DataCenter != ""
 	setter.SetDefault(&conf.DNSPoolConf.FQDN, os.Getenv("GUBER_DNS_FQDN"))
 	setter.SetDefault(&conf.DNSPoolConf.ResolvConf, os.Getenv("GUBER_RESOLV_CONF"), "/etc/resolv.conf")
 	setter.SetDefault(&conf.DNSPoolConf.OwnAddress, conf.AdvertiseAddress)
