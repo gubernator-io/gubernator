@@ -59,6 +59,24 @@ gubernator:
 
   nodeSelector: {}
 
+  # Pod-level security context applied to the gubernator pod.
+  # Ref: https://kubernetes.io/docs/tasks/configure-pod-container/security-context/
+  podSecurityContext:
+    runAsNonRoot: true
+    runAsUser: 1001
+    runAsGroup: 1001
+    seccompProfile:
+      type: RuntimeDefault
+
+  # Container-level security context applied to the gubernator container.
+  securityContext:
+    allowPrivilegeEscalation: false
+    capabilities:
+      drop:
+        - ALL
+    seccompProfile:
+      type: RuntimeDefault
+
   resources:
     requests:
       cpu: 100m
