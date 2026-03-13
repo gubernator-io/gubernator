@@ -61,8 +61,8 @@ gubernator:
 
   # Pod-level security context applied to the gubernator pod.
   # Ref: https://kubernetes.io/docs/tasks/configure-pod-container/security-context/
-  # podSecurityContext Example:
   podSecurityContext: {}
+  # Example:
   # podSecurityContext:
   #   runAsNonRoot: true
   #   runAsUser: 1001
@@ -71,8 +71,8 @@ gubernator:
   #     type: RuntimeDefault
 
   # Container-level security context applied to the gubernator container.
-  # securityContext Example:
   securityContext: {}
+  # Example:
   # securityContext:
   #   allowPrivilegeEscalation: false
   #   capabilities:
