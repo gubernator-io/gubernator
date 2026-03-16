@@ -108,6 +108,9 @@ type DNSPoolConfig struct {
 	// (Required) Called when the list of gubernators in the pool updates
 	OnUpdate UpdateFunc
 
+	// (Optinal) Use FQDNs as the data center name
+	UseFQDNAsDataCenterName bool
+
 	Logger FieldLogger
 }
 
@@ -120,6 +123,7 @@ type DNSPool struct {
 	ownIP    string
 	ownPort  string
 	onUpdate UpdateFunc
+	useDC    bool
 }
 
 func newResolver(conf DNSPoolConfig) (*DNSResolver, error) {
@@ -167,6 +171,7 @@ func NewDNSPool(conf DNSPoolConfig) (*DNSPool, error) {
 		ownIP:    ip,
 		ownPort:  port,
 		onUpdate: conf.OnUpdate,
+		useDC:    conf.UseFQDNAsDataCenterName,
 	}
 	go pool.task()
 	return pool, nil
@@ -176,8 +181,14 @@ func (p *DNSPool) peer(fqdn, ip string, ipv6 bool) PeerInfo {
 	if ipv6 {
 		ip = "[" + ip + "]"
 	}
+
+	datacenter := ""
+	if p.useDC {
+		datacenter = fqdn
+	}
+
 	return PeerInfo{
-		DataCenter:  fqdn,
+		DataCenter:  datacenter,
 		GRPCAddress: ip + ":" + p.ownPort,
 		IsOwner:     p.ownIP == ip,
 	}
@@ -209,7 +220,8 @@ func (p *DNSPool) task() {
 		if len(update) > 0 {
 			p.onUpdate(update)
 		} else {
-			p.log.Warn("No peers found for DNS pool")
+			delay = 5
+			p.log.Warn("No peers found for DNS pool, trying again in 5 seconds")
 		}
 
 		p.log.Debug("DNS poll delay: ", delay)
