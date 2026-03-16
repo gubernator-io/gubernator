@@ -40,12 +40,20 @@ spec:
       tolerations:
       {{- toYaml . | nindent 8 }}
       {{- end }}
+      {{- with .Values.gubernator.podSecurityContext }}
+      securityContext:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
       containers:
         - name: gubernator
           env:
           {{- include "gubernator.env" . | nindent 10 }}
           {{- with .Values.gubernator.extraEnv }}
           {{- toYaml . | nindent 10 }}
+          {{- end }}
+          {{- with .Values.gubernator.securityContext }}
+          securityContext:
+            {{- toYaml . | nindent 12 }}
           {{- end }}
           image: {{ .Values.gubernator.image.repository }}:{{ .Values.gubernator.image.tag | default .Chart.AppVersion }}
           imagePullPolicy: {{ .Values.gubernator.image.pullPolicy }}
