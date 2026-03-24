@@ -210,6 +210,16 @@ message RateLimitResp {
 }
 
 message HealthCheckReq {}
+
+// PeerHealthResp describes a single peer as seen by the health check.
+message PeerHealthResp {
+  // The gRPC address of the peer.
+  string grpc_address = 1;
+  // The datacenter this peer belongs to. Empty when not using multi-datacenter
+  // peer discovery.
+  string data_center = 2;
+}
+
 message HealthCheckResp {
   // Valid entries are 'healthy' or 'unhealthy'
   string status = 1;
@@ -219,7 +229,7 @@ message HealthCheckResp {
   int32 peer_count = 3;
 
   // advertise_address is the address advertised to other peers and
-  // is verified as owned by this instance. If advertise_address is 
+  // is verified as owned by this instance. If advertise_address is
   // empty, this indicates the instance is unable to find it's advertised
   // address in the list of peers provided to SetPeers(). This is likely
   // due to an incorrect GUBER_ADVERTISE_ADDRESS, or the discovery method
@@ -229,6 +239,15 @@ message HealthCheckResp {
   // If advertise_address is empty, this gubernator instance is considered
   // unhealthy.
   string advertise_address = 4;
+
+  // local_peers lists all peers in the local datacenter (LocalPicker).
+  // These are the peers this instance directly coordinates rate limits with.
+  repeated PeerHealthResp local_peers = 5;
+
+  // region_peers lists all peers in remote datacenters (RegionPicker).
+  // These peers receive forwarded rate limit requests for GLOBAL behavior.
+  // Empty when not using multi-datacenter peer discovery.
+  repeated PeerHealthResp region_peers = 6;
 }
 
 message LiveCheckReq {}

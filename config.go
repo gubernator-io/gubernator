@@ -36,6 +36,7 @@ import (
 	"github.com/mailgun/holster/v4/setter"
 	"github.com/mailgun/holster/v4/slice"
 	"github.com/mailgun/holster/v4/tracing"
+	"github.com/miekg/dns"
 	"github.com/pkg/errors"
 	"github.com/segmentio/fasthash/fnv1"
 	"github.com/segmentio/fasthash/fnv1a"
@@ -462,9 +463,18 @@ func SetupDaemonConfig(logger *logrus.Logger, configFile io.Reader) (DaemonConfi
 	}
 
 	// DNS Config
+	setter.SetDefault(&conf.DNSPoolConf.DataCenter, conf.DataCenter)
 	setter.SetDefault(&conf.DNSPoolConf.FQDN, os.Getenv("GUBER_DNS_FQDN"))
 	setter.SetDefault(&conf.DNSPoolConf.ResolvConf, os.Getenv("GUBER_RESOLV_CONF"), "/etc/resolv.conf")
 	setter.SetDefault(&conf.DNSPoolConf.OwnAddress, conf.AdvertiseAddress)
+
+	// For DNS discovery, DataCenter must be in canonical FQDN format (trailing dot)
+	// so that SetPeers routing matches the normalized FQDNs produced by the DNS pool.
+	// Normalize here rather than requiring operators to remember the trailing dot.
+	if conf.PeerDiscoveryType == "dns" && conf.DataCenter != "" {
+		conf.DataCenter = dns.Fqdn(conf.DataCenter)
+		conf.DNSPoolConf.DataCenter = conf.DataCenter
+	}
 
 	// PeerPicker Config
 	if pp := os.Getenv("GUBER_PEER_PICKER"); pp != "" {

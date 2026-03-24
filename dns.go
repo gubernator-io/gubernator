@@ -57,7 +57,7 @@ func NewFromResolvConf(path string) (*DNSResolver, error) {
 	return &DNSResolver{servers, rand.New(rand.NewSource(time.Now().UnixNano()))}, nil
 }
 
-func (r *DNSResolver) lookupHost(host string, dnsType uint16, delay uint32) ([]net.IP, uint32, error) {
+func (r *DNSResolver) lookupHost(host string, dnsType uint16) ([]net.IP, uint32, error) {
 	m1 := new(dns.Msg)
 	m1.Id = dns.Id()
 	m1.RecursionDesired = true
@@ -72,6 +72,7 @@ func (r *DNSResolver) lookupHost(host string, dnsType uint16, delay uint32) ([]n
 		return nil, 0, errors.New(dns.RcodeToString[in.Rcode])
 	}
 
+	ttl := defaultPollDelay
 	result := make([]net.IP, 0, len(in.Answer))
 	for _, record := range in.Answer {
 		switch r := record.(type) {
@@ -80,10 +81,10 @@ func (r *DNSResolver) lookupHost(host string, dnsType uint16, delay uint32) ([]n
 		case *dns.AAAA:
 			result = append(result, r.AAAA)
 		}
-		delay = min(delay, record.Header().Ttl)
+		ttl = min(ttl, record.Header().Ttl)
 	}
 
-	return result, delay, nil
+	return result, ttl, nil
 }
 
 func NewDNSResolver(servers []string) (*DNSResolver, error) {
@@ -108,18 +109,45 @@ type DNSPoolConfig struct {
 	// (Required) Called when the list of gubernators in the pool updates
 	OnUpdate UpdateFunc
 
+	// (Optional) Identifies the local cluster when using multi-datacenter DNS
+	// discovery. Its behavior differs fundamentally from etcd and member-list.
+	//
+	// With etcd and member-list, DataCenter is arbitrary metadata that each
+	// peer explicitly advertises to the others (e.g., "us-east-1"). Any
+	// consistent string works because peers exchange the value directly.
+	//
+	// With DNS, there is no metadata exchange. Instead, the FQDN that a peer's
+	// IP was resolved from becomes that peer's datacenter name. DataCenter must
+	// therefore be set to the exact FQDN of the local cluster so that SetPeers
+	// can distinguish local peers (same FQDN → LocalPicker) from remote peers
+	// (different FQDN → RegionPicker).
+	//
+	// Leave empty (default) for single-datacenter deployments. All discovered
+	// peers will be treated as local regardless of which FQDN they came from.
+	//
+	// Example multi-datacenter setup with three clouds:
+	//
+	//   GUBER_DATA_CENTER=gubernator.svc.eks-cluster.
+	//   GUBER_DNS_FQDN=gubernator.svc.eks-cluster.,gubernator.svc.gke-cluster.,gubernator.svc.aks-cluster.
+	//
+	// Peers resolved from gubernator.svc.eks-cluster. get DataCenter set to
+	// that FQDN and land in the LocalPicker. Peers from the other FQDNs get
+	// their respective FQDNs as DataCenter and land in the RegionPicker.
+	DataCenter string
+
 	Logger FieldLogger
 }
 
 type DNSPool struct {
-	log      FieldLogger
-	ctx      context.Context
-	cancel   context.CancelFunc
-	resolver *DNSResolver
-	fqdns    []string // list of FQDNs to resolve
-	ownIP    string
-	ownPort  string
-	onUpdate UpdateFunc
+	log        FieldLogger
+	ctx        context.Context
+	cancel     context.CancelFunc
+	resolver   *DNSResolver
+	fqdns      []string // list of FQDNs to resolve
+	ownIP      string
+	ownPort    string
+	onUpdate   UpdateFunc
+	dataCenter string // when non-empty, use FQDNs as DC names
 }
 
 func newResolver(conf DNSPoolConfig) (*DNSResolver, error) {
@@ -154,19 +182,20 @@ func NewDNSPool(conf DNSPoolConfig) (*DNSPool, error) {
 		if fqdn == "" {
 			continue
 		}
-		fqdns = append(fqdns, fqdn)
+		fqdns = append(fqdns, dns.Fqdn(fqdn))
 	}
 
 	ctx, cancel := context.WithCancel(context.Background())
 	pool := &DNSPool{
-		log:      conf.Logger,
-		ctx:      ctx,
-		cancel:   cancel,
-		fqdns:    fqdns,
-		resolver: resolver,
-		ownIP:    ip,
-		ownPort:  port,
-		onUpdate: conf.OnUpdate,
+		log:        conf.Logger,
+		ctx:        ctx,
+		cancel:     cancel,
+		fqdns:      fqdns,
+		resolver:   resolver,
+		ownIP:      ip,
+		ownPort:    port,
+		onUpdate:   conf.OnUpdate,
+		dataCenter: conf.DataCenter,
 	}
 	go pool.task()
 	return pool, nil
@@ -176,20 +205,35 @@ func (p *DNSPool) peer(fqdn, ip string, ipv6 bool) PeerInfo {
 	if ipv6 {
 		ip = "[" + ip + "]"
 	}
+	dataCenter := ""
+	if p.dataCenter != "" {
+		dataCenter = fqdn
+	}
 	return PeerInfo{
-		DataCenter:  fqdn,
+		DataCenter:  dataCenter,
 		GRPCAddress: ip + ":" + p.ownPort,
 		IsOwner:     p.ownIP == ip,
 	}
 }
 
+const (
+	// defaultPollDelay is the DNS TTL-based poll interval in seconds used when
+	// peers are found. The actual value is reduced to the minimum TTL returned
+	// across all records so that cache expiry is respected.
+	defaultPollDelay uint32 = 300
+	// noPeersRetryDelay is the retry interval in seconds when no peers are
+	// found (e.g. all pods restarting simultaneously). Matches CoreDNS's
+	// default negative-cache TTL for Kubernetes services.
+	noPeersRetryDelay uint32 = 5
+)
+
 func (p *DNSPool) task() {
 	for {
-		var delay uint32 = 300
+		delay := defaultPollDelay
 		var update []PeerInfo
 		for _, fqdn := range p.fqdns {
 			for _, t := range []uint16{dns.TypeA, dns.TypeAAAA} {
-				ips, d, err := p.resolver.lookupHost(fqdn, t, delay)
+				ips, d, err := p.resolver.lookupHost(fqdn, t)
 				if err != nil {
 					p.log.Debugf("Error looking up %s (%s): %v", fqdn, dns.TypeToString[t], err)
 					continue
@@ -209,7 +253,14 @@ func (p *DNSPool) task() {
 		if len(update) > 0 {
 			p.onUpdate(update)
 		} else {
-			p.log.Warn("No peers found for DNS pool")
+			// Intentionally do not call onUpdate with an empty list. Clearing
+			// the peer pickers during a transient DNS outage or rolling restart
+			// would make this instance immediately unhealthy and unable to serve
+			// requests. Keeping the stale peer list and retrying quickly is
+			// safer: requests may fail transiently but the instance stays in
+			// rotation and recovers as pods come back.
+			delay = noPeersRetryDelay
+			p.log.Warn("No peers found for DNS pool, trying again in 5 seconds")
 		}
 
 		p.log.Debug("DNS poll delay: ", delay)

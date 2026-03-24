@@ -346,9 +346,40 @@ $ kubectl create -f k8s-deployment.yaml
 ```
 
 ##### Round-robin DNS
-If your DNS service supports auto-registration, for example AWS Route53 service discovery,
-you can use same fully-qualified domain name to both let your business logic containers or
-instances to find `gubernator` and for `gubernator` containers/instances to find each other.
+If your DNS service supports auto-registration (for example AWS Route53 service discovery or
+Kubernetes headless services), you can use a fully-qualified domain name for both client
+discovery and peer discovery.
+
+```bash
+GUBER_PEER_DISCOVERY_TYPE=dns
+GUBER_DNS_FQDN=gubernator.default.svc.cluster.local.
+```
+
+**Single datacenter** — leave `GUBER_DATA_CENTER` unset. All peers resolved from any FQDN are
+treated as local.
+
+**Multi-datacenter** — DNS peer discovery uses FQDNs as datacenter names, which is different
+from etcd and member-list. With etcd/member-list, `GUBER_DATA_CENTER` is arbitrary metadata
+each peer advertises (e.g., `"us-east-1"`). With DNS there is no metadata exchange, so the
+FQDN a peer's IP was resolved from becomes its datacenter name. `GUBER_DATA_CENTER` must be
+set to the exact FQDN of the local cluster:
+
+```bash
+# On instances in the EKS cluster:
+GUBER_DATA_CENTER=gubernator.svc.eks-cluster.
+GUBER_DNS_FQDN=gubernator.svc.eks-cluster.,gubernator.svc.gke-cluster.,gubernator.svc.aks-cluster.
+
+# On instances in the GKE cluster:
+GUBER_DATA_CENTER=gubernator.svc.gke-cluster.
+GUBER_DNS_FQDN=gubernator.svc.eks-cluster.,gubernator.svc.gke-cluster.,gubernator.svc.aks-cluster.
+```
+
+Peers resolved from the local FQDN are routed to the LocalPicker; peers from other FQDNs are
+routed to the RegionPicker for cross-datacenter forwarding.
+
+Note: `GUBER_DATA_CENTER` must be the exact FQDN of the local cluster, not a short logical
+name like `"eks"`. Because DNS carries no metadata beyond IP addresses, the FQDN is the only
+identifier both the DNS pool and peer routing share.
 
 ##### TLS
 Gubernator supports TLS for both HTTP and GRPC connections. You can see an example with
