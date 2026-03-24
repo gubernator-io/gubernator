@@ -19,6 +19,7 @@ package gubernator_test
 import (
 	"bytes"
 	"context"
+	stdjson "encoding/json"
 	"fmt"
 	"io"
 	"math/rand"
@@ -1508,11 +1509,44 @@ func TestResetRemaining(t *testing.T) {
 }
 
 func TestHealthCheck(t *testing.T) {
-	// Check that the cluster is healthy to start with.
-	for _, peer := range cluster.GetDaemons() {
-		healthResp, err := peer.MustClient().HealthCheck(context.Background(), &guber.HealthCheckReq{})
+	// startGubernator() creates 6 DataCenterNone peers and 4 DataCenterOne peers.
+	// Each daemon sees its own DC peers in LocalPicker and the other DC in RegionPicker.
+	const localNoneCount = 6
+	const localOneCount = 4
+
+	for _, d := range cluster.GetDaemons() {
+		resp, err := d.MustClient().HealthCheck(context.Background(), &guber.HealthCheckReq{})
 		require.NoError(t, err)
-		assert.Equal(t, "healthy", healthResp.Status)
+		assert.Equal(t, "healthy", resp.Status)
+
+		if d.PeerInfo.DataCenter == cluster.DataCenterNone {
+			assert.Len(t, resp.LocalPeers, localNoneCount)
+			assert.Len(t, resp.RegionPeers, localOneCount)
+		} else {
+			assert.Len(t, resp.LocalPeers, localOneCount)
+			assert.Len(t, resp.RegionPeers, localNoneCount)
+		}
+
+		// Every local peer must share this daemon's DataCenter.
+		for _, p := range resp.LocalPeers {
+			assert.Equal(t, d.PeerInfo.DataCenter, p.DataCenter)
+		}
+
+		// This daemon's own address must appear in local peers.
+		ownAddr := d.PeerInfo.GRPCAddress
+		assert.True(t, func() bool {
+			for _, p := range resp.LocalPeers {
+				if p.GrpcAddress == ownAddr {
+					return true
+				}
+			}
+			return false
+		}(), "own address %q not found in local_peers", ownAddr)
+
+		// Every region peer must have a different DataCenter from this daemon.
+		for _, p := range resp.RegionPeers {
+			assert.NotEqual(t, d.PeerInfo.DataCenter, p.DataCenter)
+		}
 	}
 
 	// Stop the cluster to ensure errors occur on our instance.
@@ -1597,10 +1631,46 @@ func TestGRPCGateway(t *testing.T) {
 
 	// This test ensures future upgrades don't accidentally change `under_score` to `camelCase` again.
 	assert.Contains(t, string(b), "peer_count")
+	assert.Contains(t, string(b), "local_peers")
+	assert.Contains(t, string(b), "region_peers")
 
 	var hc guber.HealthCheckResp
 	require.NoError(t, json.Unmarshal(b, &hc))
+
+	var pretty bytes.Buffer
+	require.NoError(t, stdjson.Indent(&pretty, b, "", "  "))
+	t.Logf("HealthCheck response:\n%s", pretty.String())
+
 	assert.Equal(t, int32(10), hc.PeerCount)
+
+	// Build expected peer lists from the known cluster topology. The queried
+	// peer is in DataCenterNone, so local peers are DataCenterNone and region
+	// peers are DataCenterOne. Peer order from the picker is non-deterministic
+	// (map iteration), so use ElementsMatch for set comparison.
+	// Compare plain structs rather than proto messages to avoid internal proto
+	// state fields interfering with reflect.DeepEqual.
+	type peerEntry struct{ addr, dc string }
+
+	var expectedLocal, expectedRegion []peerEntry
+	for _, p := range cluster.GetPeers() {
+		entry := peerEntry{p.GRPCAddress, p.DataCenter}
+		if p.DataCenter == cluster.DataCenterNone {
+			expectedLocal = append(expectedLocal, entry)
+		} else {
+			expectedRegion = append(expectedRegion, entry)
+		}
+	}
+
+	var actualLocal, actualRegion []peerEntry
+	for _, p := range hc.LocalPeers {
+		actualLocal = append(actualLocal, peerEntry{p.GrpcAddress, p.DataCenter})
+	}
+	for _, p := range hc.RegionPeers {
+		actualRegion = append(actualRegion, peerEntry{p.GrpcAddress, p.DataCenter})
+	}
+
+	assert.ElementsMatch(t, expectedLocal, actualLocal)
+	assert.ElementsMatch(t, expectedRegion, actualRegion)
 
 	require.NoError(t, err)
 

@@ -333,7 +333,7 @@ func TestHTTPSClientAuth(t *testing.T) {
 	defer resp.Body.Close()
 	b, err := io.ReadAll(resp.Body)
 	require.NoError(t, err)
-	assert.Equal(t, `{"status":"healthy","message":"","peer_count":1,"advertise_address":"127.0.0.1:9695"}`, strings.ReplaceAll(string(b), " ", ""))
+	assert.Equal(t, `{"status":"healthy","message":"","peer_count":1,"advertise_address":"127.0.0.1:9695","local_peers":[{"grpc_address":"127.0.0.1:9695","data_center":""}],"region_peers":[]}`, strings.ReplaceAll(string(b), " ", ""))
 
 	// Verify we get an error when we try to access existing HTTPListenAddress without cert
 	//nolint:bodyclose // Expect error, no body to close.
@@ -346,7 +346,7 @@ func TestHTTPSClientAuth(t *testing.T) {
 	defer resp2.Body.Close()
 	b, err = io.ReadAll(resp2.Body)
 	require.NoError(t, err)
-	assert.Equal(t, `{"status":"healthy","message":"","peer_count":1,"advertise_address":"127.0.0.1:9695"}`, strings.ReplaceAll(string(b), " ", ""))
+	assert.Equal(t, `{"status":"healthy","message":"","peer_count":1,"advertise_address":"127.0.0.1:9695","local_peers":[{"grpc_address":"127.0.0.1:9695","data_center":""}],"region_peers":[]}`, strings.ReplaceAll(string(b), " ", ""))
 
 }
 

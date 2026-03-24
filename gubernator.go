@@ -570,6 +570,7 @@ func (s *V1Instance) HealthCheck(ctx context.Context, r *HealthCheckReq) (health
 
 	// Iterate through local peers and get their last errors
 	localPeers := s.conf.LocalPicker.Peers()
+	localPeerResps := make([]*PeerHealthResp, 0, len(localPeers))
 	for _, peer := range localPeers {
 		for _, errMsg := range peer.GetLastErr() {
 			err := fmt.Errorf("error returned from local peer.GetLastErr: %s", errMsg)
@@ -580,10 +581,15 @@ func (s *V1Instance) HealthCheck(ctx context.Context, r *HealthCheckReq) (health
 		if ownPeerAddress == "" && peer.Info().GRPCAddress == s.conf.AdvertiseAddr {
 			ownPeerAddress = peer.Info().GRPCAddress
 		}
+		localPeerResps = append(localPeerResps, &PeerHealthResp{
+			GrpcAddress: peer.Info().GRPCAddress,
+			DataCenter:  peer.Info().DataCenter,
+		})
 	}
 
 	// Do the same for region peers
 	regionPeers := s.conf.RegionPicker.Peers()
+	regionPeerResps := make([]*PeerHealthResp, 0, len(regionPeers))
 	for _, peer := range regionPeers {
 		for _, errMsg := range peer.GetLastErr() {
 			err := fmt.Errorf("error returned from region peer.GetLastErr: %s", errMsg)
@@ -591,16 +597,18 @@ func (s *V1Instance) HealthCheck(ctx context.Context, r *HealthCheckReq) (health
 			errs = append(errs, err.Error())
 		}
 
-		if ownPeerAddress == "" && peer.Info().GRPCAddress == s.conf.AdvertiseAddr &&
-			peer.Info().DataCenter == s.conf.DataCenter {
-			ownPeerAddress = peer.Info().GRPCAddress
-		}
+		regionPeerResps = append(regionPeerResps, &PeerHealthResp{
+			GrpcAddress: peer.Info().GRPCAddress,
+			DataCenter:  peer.Info().DataCenter,
+		})
 	}
 
 	health = &HealthCheckResp{
 		PeerCount:        int32(len(localPeers) + len(regionPeers)),
 		Status:           Healthy,
 		AdvertiseAddress: ownPeerAddress,
+		LocalPeers:       localPeerResps,
+		RegionPeers:      regionPeerResps,
 	}
 
 	if len(errs) != 0 {
