@@ -5,7 +5,25 @@ on:
     types: [ published ]
 
 jobs:
+  vuln-check:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: './go.mod'
+          check-latest: true
+
+      - name: Run govulncheck
+        run: |
+          go install golang.org/x/vuln/cmd/govulncheck@latest
+          govulncheck ./...
+
   build:
+    needs: vuln-check
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
