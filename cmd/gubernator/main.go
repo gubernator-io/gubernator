@@ -31,7 +31,7 @@ import (
 	"github.com/mailgun/holster/v4/tracing"
 	"github.com/sirupsen/logrus"
 	"go.opentelemetry.io/otel/sdk/resource"
-	semconv "go.opentelemetry.io/otel/semconv/v1.24.0"
+	semconv "go.opentelemetry.io/otel/semconv/v1.40.0"
 	"k8s.io/klog/v2"
 )
 
@@ -68,12 +68,17 @@ func Main(ctx context.Context) error {
 	klog.InitFlags(nil)
 	_ = flag.Set("logtostderr", "true")
 
-	res, err := tracing.NewResource("gubernator", Version, resource.NewWithAttributes(
-		semconv.SchemaURL,
-		semconv.ServiceInstanceID(gubernator.GetInstanceID()),
-	))
+	res, err := resource.Merge(
+		resource.Default(),
+		resource.NewWithAttributes(
+			semconv.SchemaURL,
+			semconv.ServiceNameKey.String("gubernator"),
+			semconv.ServiceVersionKey.String(Version),
+			semconv.ServiceInstanceID(gubernator.GetInstanceID()),
+		),
+	)
 	if err != nil {
-		log.WithError(err).Fatal("during tracing.NewResource()")
+		log.WithError(err).Fatal("during resource.Merge()")
 	}
 	defer func() {
 		if tracerCloser != nil {

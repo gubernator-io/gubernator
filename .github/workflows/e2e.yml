@@ -23,6 +23,13 @@ jobs:
           registry_name: gubernator-io
           registry_port: 5001
 
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: './go.mod'
+          cache-dependency-path: './go.sum'
+          check-latest: true
+
       - name: Build and push
         env:
           LOCAL_REGISTRY: ${{ steps.kind.outputs.LOCAL_REGISTRY }}
@@ -46,11 +53,6 @@ jobs:
             --set gubernator.debug=true \
             ./contrib/charts/gubernator
           kubectl wait --timeout=60s --for=condition=available deployment/gubernator
-
-      - name: Set up Go
-        uses: actions/setup-go@v5
-        with:
-          go-version: 1.25.x
 
       - name: Test
         run: |
