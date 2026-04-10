@@ -9,6 +9,7 @@
 The `on-release` workflow handles everything else:
 - Updates the Helm chart version from the release tag.
 - Builds and pushes the Docker image for `linux/amd64` and `linux/arm64`.
+- Packages and pushes the Helm chart to GHCR as an OCI artifact (`oci://ghcr.io/gubernator-io/charts/gubernator`).
 
 ## Version Derivation
 
