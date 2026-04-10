@@ -156,7 +156,7 @@ func (e *K8sPool) startGenericWatch(objType runtime.Object, listWatch *cache.Lis
 
 	go e.informer.Run(e.done)
 
-	if !cache.WaitForCacheSync(e.done, e.informer.HasSynced) {
+	if !cache.WaitForNamedCacheSync("gubernator-peer-discovery", e.done, e.informer.HasSynced) {
 		close(e.done)
 		return fmt.Errorf("timed out waiting for caches to sync")
 	}
