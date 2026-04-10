@@ -20,6 +20,8 @@ jobs:
   build:
     needs: vuln-check
     runs-on: ubuntu-latest
+    permissions:
+      packages: write
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -58,8 +60,15 @@ jobs:
           pull: true
           push: true
 
-      # Publish the Helm chart
-#      - name: Publish Helm chart
-#        uses: stefanprodan/helm-gh-pages@v1.5.0
-#        with:
-#          token: ${{ secrets.GITHUB_TOKEN }}
+      - name: Set up Helm
+        uses: azure/setup-helm@v4
+        with:
+          version: v4.1.4
+
+      - name: Push Helm chart to GHCR (OCI)
+        run: |
+          set -euo pipefail
+          TAG="${{ github.event.release.tag_name }}"
+          VERSION="${TAG#v}"
+          helm package contrib/charts/gubernator --destination ./ --version "${VERSION}"
+          helm push "gubernator-${VERSION}.tgz" "oci://ghcr.io/${GITHUB_REPOSITORY_OWNER}/charts"
