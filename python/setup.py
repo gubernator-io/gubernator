@@ -21,16 +21,11 @@ try:  # for pip >= 10
 except ImportError:  # for pip <= 9.0.3
     from pip.req import parse_requirements
 from setuptools import setup, find_packages
-import platform
 
 with open('version', 'r') as version_file:
     version = version_file.readline().strip()
 
-if platform.python_version_tuple()[0] == '2':
-    reqs = parse_requirements('requirements-py2.txt', session='')
-else:
-    reqs = parse_requirements('requirements-py3.txt', session='')
-
+reqs = parse_requirements('requirements-py3.txt', session='')
 requirements = [str(r.req) for r in reqs]
 
 setup(
@@ -44,14 +39,16 @@ setup(
     packages=find_packages('.', exclude=['tests']),
     install_requires=requirements,
     license="Apache Software License 2.0",
-    python_requires='>=2.7',
+    python_requires='>=3.8',
     classifiers=[
         'Development Status :: 4 - Beta',
         'Intended Audience :: Developers',
         'License :: OSI Approved :: Apache Software License',
         'Natural Language :: English',
-        'Programming Language :: Python :: 2.7',
-        'Programming Language :: Python :: 3.5',
-        'Programming Language :: Python :: 3.6',
+        'Programming Language :: Python :: 3.8',
+        'Programming Language :: Python :: 3.9',
+        'Programming Language :: Python :: 3.10',
+        'Programming Language :: Python :: 3.11',
+        'Programming Language :: Python :: 3.12',
     ],
 )
