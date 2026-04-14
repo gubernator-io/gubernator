@@ -333,7 +333,21 @@ $ docker run -p 1051:1051 -p 1050:1050 -e GUBER_ETCD_ENDPOINTS=etcd1:2379,etcd2:
 $ curl http://localhost:1050/v1/HealthCheck
 ```
 
-##### Kubernetes
+##### Kubernetes (Helm)
+
+A Helm chart is published as an OCI artifact on every release. Requires Helm 3.8+.
+
+```bash
+helm install gubernator oci://ghcr.io/gubernator-io/charts/gubernator \
+  --version <version> \
+  --namespace gubernator --create-namespace
+```
+
+See [`contrib/charts/gubernator/README.md`](contrib/charts/gubernator/README.md)
+for the full values reference, autoscaling options (HPA and KEDA), RBAC setup,
+and monitoring configuration.
+
+##### Kubernetes (manual)
 ```bash
 # Download the kubernetes deployment spec
 $ curl -O https://raw.githubusercontent.com/gubernator-io/gubernator/master/k8s-deployment.yaml
