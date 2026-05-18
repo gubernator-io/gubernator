@@ -2240,6 +2240,48 @@ func TestEventChannel(t *testing.T) {
 	})
 }
 
+func TestAsyncRequestDeadlineRetry(t *testing.T) {
+	name := t.Name()
+	key := guber.RandomString(10)
+
+	nonOwners, err := cluster.ListNonOwningDaemons(name, key)
+	require.NoError(t, err)
+	require.NotEmpty(t, nonOwners)
+
+	client, err := guber.DialV1Server(nonOwners[0].PeerInfo.GRPCAddress, nil)
+	require.NoError(t, err)
+
+	// Use a very short deadline to trigger the context.DeadlineExceeded
+	// retry path in asyncRequest.
+	ctx, cancel := context.WithTimeout(context.Background(), time.Millisecond*5)
+	defer cancel()
+
+	createdAt := epochMillis(clock.Now())
+	resp, err := client.GetRateLimits(ctx, &guber.GetRateLimitsReq{
+		Requests: []*guber.RateLimitReq{
+			{
+				Name:      name,
+				UniqueKey: key,
+				Algorithm: guber.Algorithm_TOKEN_BUCKET,
+				Duration:  guber.Second * 9,
+				Limit:     10,
+				Hits:      1,
+				Behavior:  guber.Behavior_NO_BATCHING,
+				CreatedAt: &createdAt,
+			},
+		},
+	})
+	if err != nil {
+		return
+	}
+
+	require.Len(t, resp.Responses, 1)
+	rl := resp.Responses[0]
+	if rl.Error != "" {
+		assert.NotContains(t, rl.Error, "<nil>")
+	}
+}
+
 // Request metrics and parse into map.
 // Optionally pass names to filter metrics by name.
 func getMetrics(HTTPAddr string, names ...string) (map[string]*model.Sample, error) {
