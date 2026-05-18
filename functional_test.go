@@ -2251,9 +2251,10 @@ func TestAsyncRequestDeadlineRetry(t *testing.T) {
 	client, err := guber.DialV1Server(nonOwners[0].PeerInfo.GRPCAddress, nil)
 	require.NoError(t, err)
 
-	// Use a very short deadline to trigger the context.DeadlineExceeded
-	// retry path in asyncRequest.
-	ctx, cancel := context.WithTimeout(context.Background(), time.Millisecond*5)
+	// Use a short deadline to trigger the context.DeadlineExceeded retry path
+	// in asyncRequest. 50ms gives enough time to reach gubernator's request
+	// handling while still being short enough to fire during the peer RPC.
+	ctx, cancel := context.WithTimeout(context.Background(), time.Millisecond*50)
 	defer cancel()
 
 	createdAt := epochMillis(clock.Now())
@@ -2272,11 +2273,16 @@ func TestAsyncRequestDeadlineRetry(t *testing.T) {
 		},
 	})
 	if err != nil {
+		// Deadline fired at the gRPC transport layer before gubernator handled
+		// the request — the retry path was not reached, but that's acceptable
+		// since the timing is inherently racy.
 		return
 	}
 
 	require.Len(t, resp.Responses, 1)
 	rl := resp.Responses[0]
+	// If the deadline fired inside asyncRequest's retry loop, the error must
+	// contain a real error message, not "<nil>" from a stomped nil error.
 	if rl.Error != "" {
 		assert.NotContains(t, rl.Error, "<nil>")
 	}
