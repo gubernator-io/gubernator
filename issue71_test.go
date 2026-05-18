@@ -2,6 +2,7 @@ package gubernator_test
 
 import (
 	"context"
+	"fmt"
 	"net"
 	"strings"
 	"testing"
@@ -40,7 +41,11 @@ func TestErrorStompedOnGetPeerRetry(t *testing.T) {
 	require.NoError(t, err)
 	fakePeerSrv := grpc.NewServer()
 	guber.RegisterPeersV1Server(fakePeerSrv, &slowPeersV1Server{})
-	go fakePeerSrv.Serve(fakePeerListener)
+	go func() {
+		if err := fakePeerSrv.Serve(fakePeerListener); err != nil {
+			fmt.Printf("while serving fake peer: %s\n", err)
+		}
+	}()
 	defer fakePeerSrv.GracefulStop()
 
 	// Create a PeerClient with batching enabled and a long batch timeout.
@@ -75,11 +80,15 @@ func TestErrorStompedOnGetPeerRetry(t *testing.T) {
 		},
 	})
 	require.NoError(t, err)
-	defer srv.Close()
+	defer func() { _ = srv.Close() }()
 
 	mainListener, err := net.Listen("tcp", "127.0.0.1:0")
 	require.NoError(t, err)
-	go mainSrv.Serve(mainListener)
+	go func() {
+		if err := mainSrv.Serve(mainListener); err != nil {
+			fmt.Printf("while serving main: %s\n", err)
+		}
+	}()
 	defer mainSrv.GracefulStop()
 
 	// Call GetRateLimits directly on the V1Instance (exported method).
