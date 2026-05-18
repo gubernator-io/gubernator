@@ -40,6 +40,7 @@ import (
 	"github.com/mailgun/holster/v4/testutil"
 	"github.com/prometheus/common/expfmt"
 	"github.com/prometheus/common/model"
+	"github.com/sirupsen/logrus"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"golang.org/x/exp/maps"
@@ -2490,4 +2491,124 @@ func startGubernator() error {
 		}
 	}
 	return nil
+}
+
+type captureHook struct {
+	mu      sync.Mutex
+	entries []*logrus.Entry
+	filter  string
+}
+
+func (h *captureHook) Levels() []logrus.Level {
+	return logrus.AllLevels
+}
+
+func (h *captureHook) Fire(entry *logrus.Entry) error {
+	if h.filter == "" || strings.Contains(entry.Message, h.filter) {
+		h.mu.Lock()
+		h.entries = append(h.entries, entry.WithFields(entry.Data))
+		h.mu.Unlock()
+	}
+	return nil
+}
+
+func (h *captureHook) captured() []*logrus.Entry {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	out := make([]*logrus.Entry, len(h.entries))
+	copy(out, h.entries)
+	return out
+}
+
+func TestAsyncRequestPreservesContextError(t *testing.T) {
+	const rateLimitName = "TestAsyncRequestPreservesContextError"
+
+	hook := &captureHook{filter: "GetPeer() returned peer that is not connected"}
+
+	// Spawn a two-node cluster with BatchWait (5s) much longer than the test
+	// context deadline (200ms). The batch never fires, so asyncRequest() sees
+	// context.Canceled from getPeerRateLimitsBatch on every attempt.
+	const (
+		grpc0 = "127.0.0.1:7890"
+		http0 = "127.0.0.1:7880"
+		grpc1 = "127.0.0.1:7891"
+		http1 = "127.0.0.1:7881"
+	)
+
+	start := func(grpcAddr, httpAddr string) *guber.Daemon {
+		logger := logrus.New()
+		logger.SetLevel(logrus.ErrorLevel)
+		logger.AddHook(hook)
+
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+		d, err := guber.SpawnDaemon(ctx, guber.DaemonConfig{
+			Logger:            logrus.NewEntry(logger),
+			InstanceID:        grpcAddr,
+			GRPCListenAddress: grpcAddr,
+			HTTPListenAddress: httpAddr,
+			AdvertiseAddress:  grpcAddr,
+			Behaviors: guber.BehaviorConfig{
+				BatchWait:    5 * time.Second,
+				BatchTimeout: 10 * time.Second,
+			},
+		})
+		require.NoError(t, err)
+		t.Cleanup(func() { d.Close() })
+
+		d.PeerInfo = guber.PeerInfo{
+			GRPCAddress: d.GRPCListeners[0].Addr().String(),
+			HTTPAddress: d.HTTPListener.Addr().String(),
+		}
+		return d
+	}
+
+	peer0 := start(grpc0, http0)
+	peer1 := start(grpc1, http1)
+
+	peers := []guber.PeerInfo{peer0.PeerInfo, peer1.PeerInfo}
+	peer0.SetPeers(peers)
+	peer1.SetPeers(peers)
+
+	// Find a key owned by peer1 so peer0 forwards via asyncRequest.
+	var key string
+	for i := 0; i < 1000; i++ {
+		k := guber.RandomString(10)
+		owner, err := peer0.V1Server.GetPeer(context.Background(), rateLimitName+"_"+k)
+		require.NoError(t, err)
+		if owner.Info().GRPCAddress == peer1.PeerInfo.GRPCAddress {
+			key = k
+			break
+		}
+	}
+	require.NotEmpty(t, key)
+
+	client, err := guber.DialV1Server(peer0.PeerInfo.GRPCAddress, nil)
+	require.NoError(t, err)
+
+	// Send a request with a 200ms deadline (shorter than BatchWait). The batch
+	// never dispatches, so asyncRequest retries until attempts > 5 and logs.
+	ctx, cancel := context.WithTimeout(context.Background(), 200*time.Millisecond)
+	defer cancel()
+	_, _ = client.GetRateLimits(ctx, &guber.GetRateLimitsReq{
+		Requests: []*guber.RateLimitReq{
+			{
+				Name:      rateLimitName,
+				UniqueKey: key,
+				Algorithm: guber.Algorithm_TOKEN_BUCKET,
+				Duration:  guber.Second * 60,
+				Limit:     100,
+				Hits:      1,
+			},
+		},
+	})
+
+	time.Sleep(500 * time.Millisecond)
+
+	entries := hook.captured()
+	require.NotEmpty(t, entries)
+
+	for _, entry := range entries {
+		assert.NotNil(t, entry.Data["error"])
+	}
 }

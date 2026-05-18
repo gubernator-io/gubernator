@@ -320,7 +320,7 @@ func (s *V1Instance) asyncRequest(ctx context.Context, req *AsyncReq) {
 	var err error
 
 	ctx = tracing.StartNamedScope(ctx, "V1Instance.asyncRequest")
-	defer tracing.EndScope(ctx, nil)
+	defer func() { tracing.EndScope(ctx, err) }()
 
 	funcTimer := prometheus.NewTimer(metricFuncTimeDuration.WithLabelValues("V1Instance.asyncRequest"))
 	defer funcTimer.ObserveDuration()
@@ -365,15 +365,17 @@ func (s *V1Instance) asyncRequest(ctx context.Context, req *AsyncReq) {
 			if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
 				attempts++
 				metricBatchSendRetries.WithLabelValues(req.Req.Name).Inc()
-				req.Peer, err = s.GetPeer(ctx, req.Key)
-				if err != nil {
+				newPeer, peerErr := s.GetPeer(ctx, req.Key)
+				if peerErr != nil {
 					errPart := fmt.Sprintf("while finding peer that owns rate limit '%s'", req.Key)
-					s.log.WithContext(ctx).WithError(err).WithField("key", req.Key).Error(errPart)
-					countError(err, "during GetPeer()")
-					err = fmt.Errorf("%s: %w", errPart, err)
+					s.log.WithContext(ctx).WithError(peerErr).WithField("key", req.Key).Error(errPart)
+					countError(peerErr, "during GetPeer()")
+					err = fmt.Errorf("%s: %w", errPart, peerErr)
 					resp.Resp = &RateLimitResp{Error: err.Error()}
 					break
 				}
+				req.Peer = newPeer
+				reqState = RateLimitReqState{IsOwner: req.Peer.Info().IsOwner}
 				continue
 			}
 
