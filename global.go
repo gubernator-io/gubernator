@@ -287,7 +287,7 @@ func (gm *globalManager) broadcastPeers(ctx context.Context, updates map[string]
 			if err != nil {
 				gm.metricBroadcastErrors.Inc()
 				// Only log if it's an unknown error
-				if !errors.Is(err, context.Canceled) && errors.Is(err, context.DeadlineExceeded) {
+				if !errors.Is(err, context.Canceled) && !errors.Is(err, context.DeadlineExceeded) {
 					gm.log.WithField("peer", peer.Info().GRPCAddress).WithError(err).
 						Errorf("while broadcasting global updates to '%s'", peer.Info().GRPCAddress)
 				}
