@@ -224,10 +224,11 @@ func (s *Daemon) Start(ctx context.Context) error {
 	case "k8s":
 		// Source our list of peers from kubernetes endpoint API
 		s.conf.K8PoolConf.OnUpdate = s.V1Server.SetPeers
-		s.pool, err = NewK8sPool(s.conf.K8PoolConf)
-		if err != nil {
-			return errors.Wrap(err, "while querying kubernetes API")
+		k8sPool, k8sErr := NewK8sPool(s.conf.K8PoolConf)
+		if k8sErr != nil {
+			return errors.Wrap(k8sErr, "while querying kubernetes API")
 		}
+		s.pool = k8sPool
 	case "etcd":
 		s.conf.EtcdPoolConf.OnUpdate = s.V1Server.SetPeers
 		// Register ourselves with other peers via ETCD
@@ -236,25 +237,28 @@ func (s *Daemon) Start(ctx context.Context) error {
 			return errors.Wrap(err, "while connecting to etcd")
 		}
 
-		s.pool, err = NewEtcdPool(s.conf.EtcdPoolConf)
-		if err != nil {
-			return errors.Wrap(err, "while creating etcd pool")
+		etcdPool, etcdErr := NewEtcdPool(s.conf.EtcdPoolConf)
+		if etcdErr != nil {
+			return errors.Wrap(etcdErr, "while creating etcd pool")
 		}
+		s.pool = etcdPool
 	case "dns":
 		s.conf.DNSPoolConf.OnUpdate = s.V1Server.SetPeers
-		s.pool, err = NewDNSPool(s.conf.DNSPoolConf)
-		if err != nil {
-			return errors.Wrap(err, "while creating the DNS pool")
+		dnsPool, dnsErr := NewDNSPool(s.conf.DNSPoolConf)
+		if dnsErr != nil {
+			return errors.Wrap(dnsErr, "while creating the DNS pool")
 		}
+		s.pool = dnsPool
 	case "member-list":
 		s.conf.MemberListPoolConf.OnUpdate = s.V1Server.SetPeers
 		s.conf.MemberListPoolConf.Logger = s.log
 
 		// Register peer on the member list
-		s.pool, err = NewMemberListPool(ctx, s.conf.MemberListPoolConf)
-		if err != nil {
-			return errors.Wrap(err, "while creating member list pool")
+		mlPool, mlErr := NewMemberListPool(ctx, s.conf.MemberListPoolConf)
+		if mlErr != nil {
+			return errors.Wrap(mlErr, "while creating member list pool")
 		}
+		s.pool = mlPool
 	case "none":
 		// In `none` discovery mode, daemon.SetPeers must be explicitly
 		// called to add peer to the gubernator cluster

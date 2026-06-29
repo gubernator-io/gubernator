@@ -2612,3 +2612,26 @@ func TestAsyncRequestPreservesContextError(t *testing.T) {
 		assert.NotNil(t, entry.Data["error"])
 	}
 }
+
+// TestSpawnDaemon_K8sStartupFailure_NoPanic is a regression test for issue #101.
+// When the Kubernetes API is unreachable, SpawnDaemon must return an error rather than
+// panicking with a nil pointer dereference in (*K8sPool).Close().
+func TestSpawnDaemon_K8sStartupFailure_NoPanic(t *testing.T) {
+	// Ensure we're not inside a real cluster so RestConfig() fails.
+	t.Setenv("KUBERNETES_SERVICE_HOST", "")
+	t.Setenv("KUBERNETES_SERVICE_PORT", "")
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	_, err := guber.SpawnDaemon(ctx, guber.DaemonConfig{
+		GRPCListenAddress:  "localhost:0",
+		HTTPListenAddress:  "localhost:0",
+		PeerDiscoveryType:  "k8s",
+		K8PoolConf: guber.K8sPoolConfig{
+			Namespace: "default",
+			Mechanism: guber.WatchEndpointSlices,
+		},
+	})
+	require.Error(t, err, "SpawnDaemon must return an error when k8s API is unreachable")
+}

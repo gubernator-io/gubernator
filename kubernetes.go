@@ -99,7 +99,11 @@ func NewK8sPool(conf K8sPoolConfig) (*K8sPool, error) {
 	}
 	setter.SetDefault(&pool.log, logrus.WithField("category", "gubernator"))
 
-	return pool, pool.start()
+	if err := pool.start(); err != nil {
+		pool.watchCancel()
+		return nil, err
+	}
+	return pool, nil
 }
 
 func (e *K8sPool) start() error {
@@ -313,6 +317,9 @@ func ExtractPeersFromEndpointSlices(slices []*discoveryv1.EndpointSlice, podIP, 
 }
 
 func (e *K8sPool) Close() {
+	if e == nil {
+		return
+	}
 	e.watchCancel()
 	close(e.done)
 }
