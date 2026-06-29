@@ -2625,9 +2625,9 @@ func TestSpawnDaemon_K8sStartupFailure_NoPanic(t *testing.T) {
 	defer cancel()
 
 	_, err := guber.SpawnDaemon(ctx, guber.DaemonConfig{
-		GRPCListenAddress:  "localhost:0",
-		HTTPListenAddress:  "localhost:0",
-		PeerDiscoveryType:  "k8s",
+		GRPCListenAddress: "localhost:0",
+		HTTPListenAddress: "localhost:0",
+		PeerDiscoveryType: "k8s",
 		K8PoolConf: guber.K8sPoolConfig{
 			Namespace: "default",
 			Mechanism: guber.WatchEndpointSlices,

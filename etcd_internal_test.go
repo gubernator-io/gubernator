@@ -20,7 +20,7 @@ func TestNewEtcdPoolRunFailureReturnsNil(t *testing.T) {
 	if !assert.NoError(t, err, "etcd.New should not fail before any dial attempt") {
 		t.Skip("could not create etcd client; skipping")
 	}
-	client.Close()
+	require.NoError(t, client.Close())
 
 	pool, err := NewEtcdPool(EtcdPoolConfig{
 		Advertise: PeerInfo{GRPCAddress: "localhost:1051"},
