@@ -89,6 +89,38 @@ func TestGregorianExpirationDay(t *testing.T) {
 	assert.Equal(t, int64(1573516799999), expire)
 }
 
+func TestGregorianExpirationWeek(t *testing.T) {
+	// November 13, 2019 is a Wednesday; verify assumption
+	now := clock.Date(2019, clock.November, 13, 00, 00, 00, 00, clock.UTC)
+	require.Equal(t, clock.Wednesday, now.Weekday())
+
+	// Wednesday should expire at end of Sunday November 17, 2019
+	expire, err := gubernator.GregorianExpiration(now, gubernator.GregorianWeeks)
+	require.NoError(t, err)
+	assert.Equal(t, clock.Date(2019, clock.November, 17, 23, 59, 59, 999000000, clock.UTC),
+		clock.Unix(0, expire*1000000).UTC())
+
+	// Expect the same expire time regardless of time-of-day within the same week
+	now = clock.Date(2019, clock.November, 13, 12, 10, 9, 2345, clock.UTC)
+	expire, err = gubernator.GregorianExpiration(now, gubernator.GregorianWeeks)
+	require.NoError(t, err)
+	assert.Equal(t, int64(1574035199999), expire)
+
+	// Sunday itself should expire at end of that same Sunday (not next Sunday)
+	now = clock.Date(2019, clock.November, 17, 10, 00, 00, 00, clock.UTC)
+	expire, err = gubernator.GregorianExpiration(now, gubernator.GregorianWeeks)
+	require.NoError(t, err)
+	assert.Equal(t, clock.Date(2019, clock.November, 17, 23, 59, 59, 999000000, clock.UTC),
+		clock.Unix(0, expire*1000000).UTC())
+
+	// Monday should expire at end of the following Sunday (November 24)
+	now = clock.Date(2019, clock.November, 18, 00, 00, 00, 00, clock.UTC)
+	expire, err = gubernator.GregorianExpiration(now, gubernator.GregorianWeeks)
+	require.NoError(t, err)
+	assert.Equal(t, clock.Date(2019, clock.November, 24, 23, 59, 59, 999000000, clock.UTC),
+		clock.Unix(0, expire*1000000).UTC())
+}
+
 func TestGregorianExpirationMonth(t *testing.T) {
 	// Validate calculation assumption
 	now := clock.Date(2019, clock.November, 1, 00, 00, 00, 00, clock.UTC)

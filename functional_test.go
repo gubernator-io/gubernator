@@ -295,6 +295,75 @@ func TestTokenBucketGregorian(t *testing.T) {
 	}
 }
 
+func TestTokenBucketGregorianWeek(t *testing.T) {
+	defer clock.Freeze(clock.Now()).Unfreeze()
+
+	client, err := guber.DialV1Server(cluster.GetRandomPeer(cluster.DataCenterNone).GRPCAddress, nil)
+	require.NoError(t, err)
+
+	tests := []struct {
+		Name      string
+		Remaining int64
+		Status    guber.Status
+		Sleep     clock.Duration
+		Hits      int64
+	}{
+		{
+			Name:      "first hit",
+			Hits:      1,
+			Remaining: 59,
+			Status:    guber.Status_UNDER_LIMIT,
+		},
+		{
+			Name:      "consume remaining hits",
+			Hits:      59,
+			Remaining: 0,
+			Status:    guber.Status_UNDER_LIMIT,
+		},
+		{
+			Name:      "should be over the limit",
+			Hits:      1,
+			Remaining: 0,
+			Status:    guber.Status_OVER_LIMIT,
+			Sleep:     clock.Hour * 24 * 8,
+		},
+		{
+			Name:      "should be under the limit after week boundary",
+			Hits:      0,
+			Remaining: 60,
+			Status:    guber.Status_UNDER_LIMIT,
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.Name, func(t *testing.T) {
+			resp, err := client.GetRateLimits(context.Background(), &guber.GetRateLimitsReq{
+				Requests: []*guber.RateLimitReq{
+					{
+						Name:      "test_token_bucket_greg_week",
+						UniqueKey: "account:greg_week",
+						Behavior:  guber.Behavior_DURATION_IS_GREGORIAN,
+						Algorithm: guber.Algorithm_TOKEN_BUCKET,
+						Duration:  guber.GregorianWeeks,
+						Hits:      test.Hits,
+						Limit:     60,
+					},
+				},
+			})
+			require.NoError(t, err)
+
+			rl := resp.Responses[0]
+
+			assert.Empty(t, rl.Error)
+			assert.Equal(t, test.Status, rl.Status)
+			assert.Equal(t, test.Remaining, rl.Remaining)
+			assert.Equal(t, int64(60), rl.Limit)
+			assert.True(t, rl.ResetTime != 0)
+			clock.Advance(test.Sleep)
+		})
+	}
+}
+
 func TestTokenBucketNegativeHits(t *testing.T) {
 	defer clock.Freeze(clock.Now()).Unfreeze()
 
@@ -775,7 +844,77 @@ func TestLeakyBucketGregorian(t *testing.T) {
 			assert.Equal(t, test.Status, rl.Status)
 			assert.Equal(t, test.Remaining, rl.Remaining)
 			assert.Equal(t, int64(60), rl.Limit)
-			assert.Greater(t, rl.ResetTime, now.Unix())
+			// ResetTime is milliseconds since epoch; it must never be in the past.
+			assert.GreaterOrEqual(t, rl.ResetTime, clock.Now().UnixMilli())
+			clock.Advance(test.Sleep)
+		})
+	}
+}
+
+func TestLeakyBucketGregorianWeek(t *testing.T) {
+	defer clock.Freeze(clock.Now()).Unfreeze()
+
+	client, err := guber.DialV1Server(cluster.PeerAt(0).GRPCAddress, nil)
+	require.NoError(t, err)
+
+	// Leak rate for a week-long bucket with limit 60: 604800000ms / 60 = 10080000ms (~168 min) per token.
+	// Sleep 1: clock.Hour (60 min < 168 min) → no leak
+	// Sleep 2: clock.Hour * 3 (180 min > 168 min) → 1 token leaks: floor(10800000/10080000) = 1
+	tests := []struct {
+		Name      string
+		Hits      int64
+		Remaining int64
+		Status    guber.Status
+		Sleep     clock.Duration
+	}{
+		{
+			Name:      "first hit",
+			Hits:      1,
+			Remaining: 59,
+			Status:    guber.Status_UNDER_LIMIT,
+			Sleep:     clock.Hour,
+		},
+		{
+			Name:      "second hit; no leak",
+			Hits:      1,
+			Remaining: 58,
+			Status:    guber.Status_UNDER_LIMIT,
+			Sleep:     clock.Hour * 3,
+		},
+		{
+			Name:      "third hit; leak one hit",
+			Hits:      1,
+			Remaining: 58,
+			Status:    guber.Status_UNDER_LIMIT,
+		},
+	}
+
+	name := t.Name()
+	key := guber.RandomString(10)
+
+	for _, test := range tests {
+		t.Run(test.Name, func(t *testing.T) {
+			resp, err := client.GetRateLimits(context.Background(), &guber.GetRateLimitsReq{
+				Requests: []*guber.RateLimitReq{
+					{
+						Name:      name,
+						UniqueKey: key,
+						Behavior:  guber.Behavior_DURATION_IS_GREGORIAN,
+						Algorithm: guber.Algorithm_LEAKY_BUCKET,
+						Duration:  guber.GregorianWeeks,
+						Hits:      test.Hits,
+						Limit:     60,
+					},
+				},
+			})
+			require.NoError(t, err)
+
+			rl := resp.Responses[0]
+			assert.Equal(t, test.Status, rl.Status)
+			assert.Equal(t, test.Remaining, rl.Remaining)
+			assert.Equal(t, int64(60), rl.Limit)
+			// ResetTime is milliseconds since epoch; it must never be in the past.
+			assert.GreaterOrEqual(t, rl.ResetTime, clock.Now().UnixMilli())
 			clock.Advance(test.Sleep)
 		})
 	}

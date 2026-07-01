@@ -90,7 +90,7 @@ func GregorianDuration(now clock.Time, d int64) (int64, error) {
 	case GregorianDays:
 		return 8.64e+7, nil
 	case GregorianWeeks:
-		return 0, errors.New("`Duration = GregorianWeeks` not yet supported; consider making a PR!`")
+		return 604800000, nil
 	case GregorianMonths:
 		y, m, _ := now.Date()
 		// Given the beginning of the month, subtract the end of the current month to get the duration
@@ -131,7 +131,10 @@ func GregorianExpiration(now clock.Time, d int64) (int64, error) {
 		return clock.Date(y, m, d, 23, 59, 59, int(clock.Second-clock.Nanosecond), now.Location()).
 			UnixNano() / 1000000, nil
 	case GregorianWeeks:
-		return 0, errors.New("`Duration = GregorianWeeks` not yet supported; consider making a PR!`")
+		y, m, d := now.Date()
+		daysUntilSunday := (7 - int(now.Weekday())) % 7
+		return clock.Date(y, m, d+daysUntilSunday, 23, 59, 59, int(clock.Second-clock.Nanosecond), now.Location()).
+			UnixNano() / 1000000, nil
 	case GregorianMonths:
 		y, m, _ := now.Date()
 		return clock.Date(y, m, 1, 0, 0, 0, 0, now.Location()).
