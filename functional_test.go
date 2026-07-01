@@ -843,7 +843,8 @@ func TestLeakyBucketGregorian(t *testing.T) {
 			assert.Equal(t, test.Status, rl.Status)
 			assert.Equal(t, test.Remaining, rl.Remaining)
 			assert.Equal(t, int64(60), rl.Limit)
-			assert.Greater(t, rl.ResetTime, now.Unix())
+			// ResetTime is milliseconds since epoch; it must never be in the past.
+			assert.GreaterOrEqual(t, rl.ResetTime, clock.Now().UnixMilli())
 			clock.Advance(test.Sleep)
 		})
 	}
@@ -887,7 +888,6 @@ func TestLeakyBucketGregorianWeek(t *testing.T) {
 		},
 	}
 
-	now := clock.Now()
 	name := t.Name()
 	key := guber.RandomString(10)
 
@@ -912,7 +912,8 @@ func TestLeakyBucketGregorianWeek(t *testing.T) {
 			assert.Equal(t, test.Status, rl.Status)
 			assert.Equal(t, test.Remaining, rl.Remaining)
 			assert.Equal(t, int64(60), rl.Limit)
-			assert.Greater(t, rl.ResetTime, now.Unix())
+			// ResetTime is milliseconds since epoch; it must never be in the past.
+			assert.GreaterOrEqual(t, rl.ResetTime, clock.Now().UnixMilli())
 			clock.Advance(test.Sleep)
 		})
 	}
