@@ -10,6 +10,24 @@ import (
 	meta_v1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
+// TestNewK8sPoolStartFailureReturnsNil ensures that NewK8sPool returns a nil *K8sPool when
+// start() fails, so callers that assign the result to a PoolInterface cannot end up with a
+// non-nil interface wrapping a nil pointer (which would panic on Close).
+func TestNewK8sPoolStartFailureReturnsNil(t *testing.T) {
+	// Unset in-cluster env vars so RestConfig() fails deterministically.
+	// t.Setenv with "" is equivalent to Unsetenv for InClusterConfig (checks len > 0).
+	t.Setenv("KUBERNETES_SERVICE_HOST", "")
+	t.Setenv("KUBERNETES_SERVICE_PORT", "")
+	t.Setenv("KUBECONFIG", "")
+
+	pool, err := NewK8sPool(K8sPoolConfig{
+		Namespace: "default",
+		Mechanism: WatchEndpointSlices,
+	})
+	require.Error(t, err)
+	assert.Nil(t, pool, "NewK8sPool must return nil on error to avoid typed-nil-in-interface panic")
+}
+
 func TestWatchMechanismFromString(t *testing.T) {
 	for _, test := range []struct {
 		input    string

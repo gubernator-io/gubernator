@@ -90,7 +90,11 @@ func NewEtcdPool(conf EtcdPoolConfig) (*EtcdPool, error) {
 		conf:      conf,
 		ctx:       ctx,
 	}
-	return pool, pool.run(conf.Advertise)
+	if err := pool.run(conf.Advertise); err != nil {
+		pool.cancelCtx()
+		return nil, err
+	}
+	return pool, nil
 }
 
 func (e *EtcdPool) run(peer PeerInfo) error {
@@ -315,6 +319,9 @@ func (e *EtcdPool) register(peer PeerInfo) error {
 }
 
 func (e *EtcdPool) Close() {
+	if e == nil {
+		return
+	}
 	e.cancelCtx()
 	e.wg.Stop()
 }
