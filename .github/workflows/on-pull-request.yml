@@ -76,8 +76,11 @@ jobs:
           external-data-json-path: ./cache/benchmark-data.json
           # Do not save the data
           save-data-file: false
-          # Workflow will fail when an alert happens
-          fail-on-alert: true
+          # Warn only. `make bench` takes one sample per benchmark, and this step compares
+          # that single sample against a single cached sample from master. On a shared
+          # runner that cannot tell a real regression from scheduler noise, so alerts are
+          # reported in the job summary but no longer fail the build. See ENG-164.
+          fail-on-alert: false
           github-token: ${{ secrets.GITHUB_TOKEN }}
           # Enable Job Summary for PRs
           summary-always: true
