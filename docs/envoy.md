@@ -135,8 +135,9 @@ This is a route-config change, not a flag flip:
 
 For each descriptor, in order:
 
-1. **Validate.** Zero descriptors in the request fails the whole call with
-   `InvalidArgument: no descriptors`. A descriptor with zero entries fails
+1. **Validate.** An empty `domain` fails the whole call with
+   `InvalidArgument: domain is required`. Zero descriptors in the request
+   fails the whole call with `InvalidArgument: no descriptors`. A descriptor with zero entries fails
    with `InvalidArgument: domain "<d>" descriptor has no entries`. More than
    1000 descriptors fails with `OutOfRange` — before any of them are
    evaluated, so an all-`deny` call is bounded too.
@@ -239,8 +240,8 @@ service EnvoyPolicyV1 {
 ```
 
 `DomainPolicy` carries `domain` (required, non-empty), `algorithm`,
-`behavior` (a `Behavior` bitflag, OR'd onto anything the adapter itself adds),
-and `on_missing_limit`. `version` and `origin` are read-only: the server
+`behavior` (a `Behavior` bitflag applied unchanged to every rate limit created
+for the domain), and `on_missing_limit`. `version` and `origin` are read-only: the server
 stamps every applied entry with them, and any value a client sends for either
 field is silently ignored.
 
@@ -301,6 +302,8 @@ gubernator-cli envoy delete <domain>...
 
 All three take the connection flags `gubernator-cli` already has: `-e <grpc
 address>`, `-config <env file>`, or `GUBER_GRPC_ADDRESS` in the environment.
+Flags may follow the domains; a domain that starts with `-` goes after `--`
+(`gubernator-cli envoy delete -e host:1051 -- -internal`).
 
 `apply` reads a YAML file:
 
