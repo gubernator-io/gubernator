@@ -28,6 +28,7 @@ import (
 	"syscall"
 
 	"github.com/gubernator-io/gubernator/v2"
+	"github.com/gubernator-io/gubernator/v2/envoy"
 	"github.com/mailgun/holster/v4/tracing"
 	"github.com/sirupsen/logrus"
 	"go.opentelemetry.io/otel/sdk/resource"
@@ -109,6 +110,7 @@ func Main(ctx context.Context) error {
 	if err != nil {
 		return fmt.Errorf("while collecting daemon config: %w", err)
 	}
+	conf.Envoy.RegisterRLS = envoy.Register
 
 	// Start the daemon
 	daemon, err := gubernator.SpawnDaemon(ctx, conf)

@@ -423,6 +423,13 @@ Gubernator publishes Prometheus metrics for realtime monitoring.  See
 ## OpenTelemetry Tracing (OTEL)
 Gubernator supports OpenTelemetry. See [tracing.md](docs/tracing.md) for details.
 
+## Envoy Rate Limit Service
+Gubernator can serve Envoy's `RateLimitService` gRPC API directly, so Envoy's
+`rate_limit_service` filter can point at a gubernator cluster instead of
+running `envoyproxy/ratelimit` plus Redis. Off by default; see
+[envoy.md](docs/envoy.md) for enabling it, the Envoy route config it needs,
+and a migration note for existing `envoyproxy/ratelimit` users.
+
 ### Contributing
 - Please read the [Contributing Docs](CONTRIBUTING.md)
 - Open a Pull Request!

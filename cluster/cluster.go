@@ -225,3 +225,16 @@ func (o *eventChannelOption) Apply(cfg *gubernator.DaemonConfig) {
 func WithEventChannel(eventChannel chan<- gubernator.HitEvent) option {
 	return &eventChannelOption{eventChannel: eventChannel}
 }
+
+type envoyOption struct {
+	conf gubernator.EnvoyConfig
+}
+
+func (o *envoyOption) Apply(cfg *gubernator.DaemonConfig) {
+	cfg.Envoy = o.conf
+}
+
+// WithEnvoy sets the Envoy RateLimitService adapter config on every daemon.
+func WithEnvoy(conf gubernator.EnvoyConfig) option {
+	return &envoyOption{conf: conf}
+}

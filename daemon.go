@@ -171,6 +171,11 @@ func (s *Daemon) Start(ctx context.Context) error {
 		AdvertiseAddr: s.conf.AdvertiseAddress,
 		Store:         s.conf.Store,
 		Loader:        s.conf.Loader,
+		Envoy:         s.conf.Envoy,
+	}
+
+	if s.conf.Envoy.Enabled && s.conf.Envoy.RegisterRLS == nil {
+		return errors.New("Envoy.Enabled requires Envoy.RegisterRLS; cmd/gubernator sets it to envoy.Register")
 	}
 
 	s.V1Server, err = NewV1Instance(s.instanceConf)
@@ -180,6 +185,10 @@ func (s *Daemon) Start(ctx context.Context) error {
 
 	// V1Server instance also implements prometheus.Collector interface
 	_ = s.promRegister.Register(s.V1Server)
+
+	if s.conf.Envoy.Enabled {
+		_ = s.promRegister.Register(s.conf.Envoy.RegisterRLS(s.grpcSrvs, s.V1Server))
+	}
 
 	l, err := net.Listen("tcp", s.conf.GRPCListenAddress)
 	if err != nil {
@@ -290,6 +299,13 @@ func (s *Daemon) Start(ctx context.Context) error {
 		[]grpc.DialOption{grpc.WithTransportCredentials(insecure.NewCredentials())})
 	if err != nil {
 		return errors.Wrap(err, "while registering GRPC gateway handler")
+	}
+	if s.conf.Envoy.Enabled {
+		err = RegisterEnvoyPolicyV1HandlerFromEndpoint(gwCtx, gateway, gatewayAddr,
+			[]grpc.DialOption{grpc.WithTransportCredentials(insecure.NewCredentials())})
+		if err != nil {
+			return errors.Wrap(err, "while registering GRPC gateway handler for EnvoyPolicyV1")
+		}
 	}
 
 	// Serve the JSON Gateway and metrics handlers via standard HTTP/1

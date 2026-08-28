@@ -50,6 +50,13 @@ var (
 
 func main() {
 	log = logrus.StandardLogger()
+	if len(os.Args) > 1 && os.Args[1] == "envoy" {
+		if err := Run(context.Background(), os.Args[1:], Options{}); err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			os.Exit(1)
+		}
+		return
+	}
 	flag.StringVar(&configFile, "config", "", "Environment config file")
 	flag.StringVar(&grpcAddress, "e", "", "Gubernator GRPC endpoint address")
 	flag.Uint64Var(&concurrency, "concurrency", 1, "Concurrent threads (default 1)")

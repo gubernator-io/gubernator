@@ -34,8 +34,10 @@ import (
 const _ = grpc.SupportPackageIsVersion7
 
 const (
-	PeersV1_GetPeerRateLimits_FullMethodName = "/pb.gubernator.PeersV1/GetPeerRateLimits"
-	PeersV1_UpdatePeerGlobals_FullMethodName = "/pb.gubernator.PeersV1/UpdatePeerGlobals"
+	PeersV1_GetPeerRateLimits_FullMethodName  = "/pb.gubernator.PeersV1/GetPeerRateLimits"
+	PeersV1_UpdatePeerGlobals_FullMethodName  = "/pb.gubernator.PeersV1/UpdatePeerGlobals"
+	PeersV1_UpdatePeerPolicies_FullMethodName = "/pb.gubernator.PeersV1/UpdatePeerPolicies"
+	PeersV1_GetPeerPolicies_FullMethodName    = "/pb.gubernator.PeersV1/GetPeerPolicies"
 )
 
 // PeersV1Client is the client API for PeersV1 service.
@@ -46,6 +48,10 @@ type PeersV1Client interface {
 	GetPeerRateLimits(ctx context.Context, in *GetPeerRateLimitsReq, opts ...grpc.CallOption) (*GetPeerRateLimitsResp, error)
 	// Used by owner peers to send global rate limit updates to non-owner peers
 	UpdatePeerGlobals(ctx context.Context, in *UpdatePeerGlobalsReq, opts ...grpc.CallOption) (*UpdatePeerGlobalsResp, error)
+	// Receives Envoy domain policies (including tombstones) from another peer; merges by (version, origin)
+	UpdatePeerPolicies(ctx context.Context, in *UpdatePeerPoliciesReq, opts ...grpc.CallOption) (*UpdatePeerPoliciesResp, error)
+	// Returns every Envoy domain policy this peer holds, tombstones included, for bootstrap and anti-entropy
+	GetPeerPolicies(ctx context.Context, in *GetPeerPoliciesReq, opts ...grpc.CallOption) (*GetPeerPoliciesResp, error)
 }
 
 type peersV1Client struct {
@@ -74,6 +80,24 @@ func (c *peersV1Client) UpdatePeerGlobals(ctx context.Context, in *UpdatePeerGlo
 	return out, nil
 }
 
+func (c *peersV1Client) UpdatePeerPolicies(ctx context.Context, in *UpdatePeerPoliciesReq, opts ...grpc.CallOption) (*UpdatePeerPoliciesResp, error) {
+	out := new(UpdatePeerPoliciesResp)
+	err := c.cc.Invoke(ctx, PeersV1_UpdatePeerPolicies_FullMethodName, in, out, opts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *peersV1Client) GetPeerPolicies(ctx context.Context, in *GetPeerPoliciesReq, opts ...grpc.CallOption) (*GetPeerPoliciesResp, error) {
+	out := new(GetPeerPoliciesResp)
+	err := c.cc.Invoke(ctx, PeersV1_GetPeerPolicies_FullMethodName, in, out, opts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 // PeersV1Server is the server API for PeersV1 service.
 // All implementations should embed UnimplementedPeersV1Server
 // for forward compatibility
@@ -82,6 +106,10 @@ type PeersV1Server interface {
 	GetPeerRateLimits(context.Context, *GetPeerRateLimitsReq) (*GetPeerRateLimitsResp, error)
 	// Used by owner peers to send global rate limit updates to non-owner peers
 	UpdatePeerGlobals(context.Context, *UpdatePeerGlobalsReq) (*UpdatePeerGlobalsResp, error)
+	// Receives Envoy domain policies (including tombstones) from another peer; merges by (version, origin)
+	UpdatePeerPolicies(context.Context, *UpdatePeerPoliciesReq) (*UpdatePeerPoliciesResp, error)
+	// Returns every Envoy domain policy this peer holds, tombstones included, for bootstrap and anti-entropy
+	GetPeerPolicies(context.Context, *GetPeerPoliciesReq) (*GetPeerPoliciesResp, error)
 }
 
 // UnimplementedPeersV1Server should be embedded to have forward compatible implementations.
@@ -93,6 +121,12 @@ func (UnimplementedPeersV1Server) GetPeerRateLimits(context.Context, *GetPeerRat
 }
 func (UnimplementedPeersV1Server) UpdatePeerGlobals(context.Context, *UpdatePeerGlobalsReq) (*UpdatePeerGlobalsResp, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method UpdatePeerGlobals not implemented")
+}
+func (UnimplementedPeersV1Server) UpdatePeerPolicies(context.Context, *UpdatePeerPoliciesReq) (*UpdatePeerPoliciesResp, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method UpdatePeerPolicies not implemented")
+}
+func (UnimplementedPeersV1Server) GetPeerPolicies(context.Context, *GetPeerPoliciesReq) (*GetPeerPoliciesResp, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method GetPeerPolicies not implemented")
 }
 
 // UnsafePeersV1Server may be embedded to opt out of forward compatibility for this service.
@@ -142,6 +176,42 @@ func _PeersV1_UpdatePeerGlobals_Handler(srv interface{}, ctx context.Context, de
 	return interceptor(ctx, in, info, handler)
 }
 
+func _PeersV1_UpdatePeerPolicies_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(UpdatePeerPoliciesReq)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(PeersV1Server).UpdatePeerPolicies(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: PeersV1_UpdatePeerPolicies_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(PeersV1Server).UpdatePeerPolicies(ctx, req.(*UpdatePeerPoliciesReq))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _PeersV1_GetPeerPolicies_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(GetPeerPoliciesReq)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(PeersV1Server).GetPeerPolicies(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: PeersV1_GetPeerPolicies_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(PeersV1Server).GetPeerPolicies(ctx, req.(*GetPeerPoliciesReq))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 // PeersV1_ServiceDesc is the grpc.ServiceDesc for PeersV1 service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
@@ -156,6 +226,14 @@ var PeersV1_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "UpdatePeerGlobals",
 			Handler:    _PeersV1_UpdatePeerGlobals_Handler,
+		},
+		{
+			MethodName: "UpdatePeerPolicies",
+			Handler:    _PeersV1_UpdatePeerPolicies_Handler,
+		},
+		{
+			MethodName: "GetPeerPolicies",
+			Handler:    _PeersV1_GetPeerPolicies_Handler,
 		},
 	},
 	Streams:  []grpc.StreamDesc{},

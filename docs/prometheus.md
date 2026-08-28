@@ -41,3 +41,13 @@ Finally, configure a Prometheus job to scrape the server's `/metrics` URI.
 | `gubernator_batch_queue_length`        | Gauge   | The getRateLimitsBatch() queue length in PeerClient.  This represents rate checks queued by for batching to a remote peer. |
 | `gubernator_batch_send_duration`       | Summary | The timings of batch send operations to a remote peer. |
 | `gubernator_batch_send_retries`        | Counter | The count of retries occurred in asyncRequests() forwarding a request to another peer. |
+
+### Envoy Rate Limit Service
+| Metric                                       | Type      | Description |
+| --------------------------------------------- | --------- | ----------- |
+| `gubernator_envoy_rls_requests_total`         | Counter   | The count of `ShouldRateLimit` calls, labeled by `domain` and `code` (`OK`, `OVER_LIMIT`, or the gRPC status code of a failed call). |
+| `gubernator_envoy_rls_missing_limit_total`    | Counter   | The count of descriptors that arrived with no limit override, labeled by `domain` and the `on_missing_limit` action taken (`deny`, `allow`, `error`). |
+| `gubernator_envoy_rls_duration_seconds`       | Histogram | The duration of `ShouldRateLimit` calls in seconds. |
+| `gubernator_envoy_policy_version`             | Gauge     | The version of the Envoy domain policy this peer currently holds, labeled by `domain`. Useful for confirming a peer has converged after an apply. |
+
+See [envoy.md](envoy.md) for the Envoy `RateLimitService` adapter these metrics belong to.

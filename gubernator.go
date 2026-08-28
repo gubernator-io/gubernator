@@ -47,7 +47,9 @@ const (
 type V1Instance struct {
 	UnimplementedV1Server
 	UnimplementedPeersV1Server
+	UnimplementedEnvoyPolicyV1Server
 	global     *globalManager
+	envoy      *envoyPolicyManager
 	peerMutex  sync.RWMutex
 	log        FieldLogger
 	conf       Config
@@ -134,11 +136,17 @@ func NewV1Instance(conf Config) (s *V1Instance, err error) {
 
 	s.workerPool = NewWorkerPool(&conf)
 	s.global = newGlobalManager(conf.Behaviors, s)
+	if conf.Envoy.Enabled {
+		s.envoy = newEnvoyPolicyManager(conf.Envoy, s)
+	}
 
 	// Register our instance with all GRPC servers
 	for _, srv := range conf.GRPCServers {
 		RegisterV1Server(srv, s)
 		RegisterPeersV1Server(srv, s)
+		if s.envoy != nil {
+			RegisterEnvoyPolicyV1Server(srv, s)
+		}
 	}
 
 	if s.conf.Loader == nil {
@@ -160,6 +168,9 @@ func (s *V1Instance) Close() (err error) {
 	}
 
 	s.global.Close()
+	if s.envoy != nil {
+		s.envoy.Close()
+	}
 
 	if s.conf.Loader != nil {
 		err = s.workerPool.Store(context.Background())
@@ -748,6 +759,9 @@ func (s *V1Instance) SetPeers(peerInfo []PeerInfo) {
 	s.peerMutex.Unlock()
 
 	s.log.WithField("peers", peerInfo).Debug("peers updated")
+	if s.envoy != nil {
+		s.envoy.bootstrap()
+	}
 
 	// Shutdown any old peers we no longer need
 	ctx, cancel := context.WithTimeout(context.Background(), s.conf.Behaviors.BatchTimeout)
@@ -829,6 +843,7 @@ func (s *V1Instance) Describe(ch chan<- *prometheus.Desc) {
 	metricOverLimitCounter.Describe(ch)
 	metricWorkerQueue.Describe(ch)
 	metricUpdatePeerGlobalsCounter.Describe(ch)
+	metricEnvoyPolicyVersion.Describe(ch)
 	s.global.metricBroadcastDuration.Describe(ch)
 	s.global.metricBroadcastErrors.Describe(ch)
 	s.global.metricGlobalQueueLength.Describe(ch)
@@ -850,6 +865,7 @@ func (s *V1Instance) Collect(ch chan<- prometheus.Metric) {
 	metricOverLimitCounter.Collect(ch)
 	metricWorkerQueue.Collect(ch)
 	metricUpdatePeerGlobalsCounter.Collect(ch)
+	metricEnvoyPolicyVersion.Collect(ch)
 	s.global.metricBroadcastDuration.Collect(ch)
 	s.global.metricBroadcastErrors.Collect(ch)
 	s.global.metricGlobalQueueLength.Collect(ch)

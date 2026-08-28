@@ -208,6 +208,36 @@ func (c *PeerClient) UpdatePeerGlobals(ctx context.Context, r *UpdatePeerGlobals
 	return resp, err
 }
 
+// UpdatePeerPolicies sends Envoy domain policies (including tombstones) to a peer
+func (c *PeerClient) UpdatePeerPolicies(ctx context.Context, r *UpdatePeerPoliciesReq) (resp *UpdatePeerPoliciesResp, err error) {
+	// See NOTE above about RLock and wg.Add(1)
+	c.wgMutex.Lock()
+	c.wg.Add(1)
+	c.wgMutex.Unlock()
+	defer c.wg.Done()
+
+	resp, err = c.client.UpdatePeerPolicies(ctx, r)
+	if err != nil {
+		_ = c.setLastErr(err)
+	}
+	return resp, err
+}
+
+// GetPeerPolicies fetches every Envoy domain policy a peer holds, tombstones included
+func (c *PeerClient) GetPeerPolicies(ctx context.Context, r *GetPeerPoliciesReq) (resp *GetPeerPoliciesResp, err error) {
+	// See NOTE above about RLock and wg.Add(1)
+	c.wgMutex.Lock()
+	c.wg.Add(1)
+	c.wgMutex.Unlock()
+	defer c.wg.Done()
+
+	resp, err = c.client.GetPeerPolicies(ctx, r)
+	if err != nil {
+		_ = c.setLastErr(err)
+	}
+	return resp, err
+}
+
 func (c *PeerClient) setLastErr(err error) error {
 	// If we get a nil error return without caching it
 	if err == nil {

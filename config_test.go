@@ -5,8 +5,10 @@ import (
 	"os"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/sirupsen/logrus"
+	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
@@ -177,4 +179,50 @@ GUBER_K8S_SERVICE_NAME=gubernator`
 	require.Error(t, err)
 	require.ErrorContains(t, err, "endpointslices")
 	require.ErrorContains(t, err, "pods")
+}
+
+func TestEnvoyDefaults(t *testing.T) {
+	os.Clearenv()
+	conf, err := SetupDaemonConfig(logrus.StandardLogger(), strings.NewReader(""))
+	require.NoError(t, err)
+	assert.False(t, conf.Envoy.Enabled)
+	assert.Equal(t, Algorithm_TOKEN_BUCKET, conf.Envoy.Algorithm)
+	assert.Equal(t, Behavior_BATCHING, conf.Envoy.Behavior)
+	assert.Equal(t, MissingLimitAction_DENY, conf.Envoy.OnMissingLimit)
+	assert.Equal(t, 30*time.Second, conf.Envoy.PolicySyncInterval)
+}
+
+func TestEnvoyConfigFromEnv(t *testing.T) {
+	os.Clearenv()
+	s := `
+GUBER_ENVOY_RLS_ENABLED=true
+GUBER_ENVOY_ALGORITHM=LEAKY_BUCKET
+GUBER_ENVOY_BEHAVIOR=GLOBAL,DURATION_IS_GREGORIAN
+GUBER_ENVOY_ON_MISSING_LIMIT=allow
+GUBER_ENVOY_POLICY_SYNC_INTERVAL=5s`
+	conf, err := SetupDaemonConfig(logrus.StandardLogger(), strings.NewReader(s))
+	require.NoError(t, err)
+	assert.True(t, conf.Envoy.Enabled)
+	assert.Equal(t, Algorithm_LEAKY_BUCKET, conf.Envoy.Algorithm)
+	assert.Equal(t, Behavior_GLOBAL|Behavior_DURATION_IS_GREGORIAN, conf.Envoy.Behavior)
+	assert.Equal(t, MissingLimitAction_ALLOW, conf.Envoy.OnMissingLimit)
+	assert.Equal(t, 5*time.Second, conf.Envoy.PolicySyncInterval)
+}
+
+func TestEnvoyConfigRejectsUnknownValues(t *testing.T) {
+	for _, test := range []struct {
+		name    string
+		env     string
+		wantErr string
+	}{
+		{name: "Algorithm", env: "GUBER_ENVOY_ALGORITHM=SLIDING", wantErr: "GUBER_ENVOY_ALGORITHM=SLIDING"},
+		{name: "Behavior", env: "GUBER_ENVOY_BEHAVIOR=GLOBAL,TURBO", wantErr: "GUBER_ENVOY_BEHAVIOR=TURBO"},
+		{name: "OnMissingLimit", env: "GUBER_ENVOY_ON_MISSING_LIMIT=shrug", wantErr: "GUBER_ENVOY_ON_MISSING_LIMIT=shrug"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			os.Clearenv()
+			_, err := SetupDaemonConfig(logrus.StandardLogger(), strings.NewReader(test.env))
+			require.ErrorContains(t, err, test.wantErr)
+		})
+	}
 }
