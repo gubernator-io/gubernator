@@ -23,6 +23,7 @@ option cc_generic_services = true;
 package pb.gubernator;
 
 import "gubernator.proto";
+import "envoy_policy.proto";
 
 // NOTE: For use by gubernator peers only
 service PeersV1 {
@@ -31,6 +32,12 @@ service PeersV1 {
 
   // Used by owner peers to send global rate limit updates to non-owner peers
   rpc UpdatePeerGlobals (UpdatePeerGlobalsReq) returns (UpdatePeerGlobalsResp) {}
+
+  // Receives Envoy domain policies (including tombstones) from another peer; merges by (version, origin)
+  rpc UpdatePeerPolicies (UpdatePeerPoliciesReq) returns (UpdatePeerPoliciesResp) {}
+
+  // Returns every Envoy domain policy this peer holds, tombstones included, for bootstrap and anti-entropy
+  rpc GetPeerPolicies (GetPeerPoliciesReq) returns (GetPeerPoliciesResp) {}
 }
 
 message GetPeerRateLimitsReq {
@@ -71,3 +78,19 @@ message UpdatePeerGlobal {
   int64 created_at = 5;
 }
 message UpdatePeerGlobalsResp {}
+
+message PeerPolicy {
+  DomainPolicy policy = 1;
+  // True when the domain has been deleted; the entry is a tombstone carrying the delete's version
+  bool deleted = 2;
+}
+
+message UpdatePeerPoliciesReq {
+  repeated PeerPolicy policies = 1;
+}
+message UpdatePeerPoliciesResp {}
+
+message GetPeerPoliciesReq {}
+message GetPeerPoliciesResp {
+  repeated PeerPolicy policies = 1;
+}

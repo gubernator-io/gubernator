@@ -8,7 +8,7 @@ breaking:
     - FILE
 lint:
   use:
-    - DEFAULT
+    - STANDARD
   rpc_allow_same_request_response: false
   rpc_allow_google_protobuf_empty_requests: true
   rpc_allow_google_protobuf_empty_responses: true

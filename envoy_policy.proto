@@ -1,0 +1,106 @@
+/*
+Copyright 2018-2022 Mailgun Technologies Inc
+
+Licensed under the Apache License, Version 2.0 (the "License");
+you may not use this file except in compliance with the License.
+You may obtain a copy of the License at
+
+http://www.apache.org/licenses/LICENSE-2.0
+
+Unless required by applicable law or agreed to in writing, software
+distributed under the License is distributed on an "AS IS" BASIS,
+WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+See the License for the specific language governing permissions and
+limitations under the License.
+*/
+
+syntax = "proto3";
+
+option go_package = "github.com/gubernator-io/gubernator";
+
+option cc_generic_services = true;
+
+package pb.gubernator;
+
+import "google/api/annotations.proto";
+import "gubernator.proto";
+
+// Per-domain policy for the Envoy RateLimitService adapter. Policy holds how a
+// domain is counted, never a limit value; limits arrive on each descriptor.
+// Registered only when GUBER_ENVOY_RLS_ENABLED=true.
+service EnvoyPolicyV1 {
+  // Upserts each policy; broadcasts to all known peers; returns peers that did not ack.
+  rpc ApplyPolicies (ApplyPoliciesReq) returns (ApplyPoliciesResp) {
+    option (google.api.http) = {
+      post: "/v1/envoy/policies"
+      body: "*"
+    };
+  }
+
+  // Tombstones each domain; same propagation as apply.
+  rpc DeletePolicies (DeletePoliciesReq) returns (DeletePoliciesResp) {
+    option (google.api.http) = {
+      post: "/v1/envoy/policies.delete"
+      body: "*"
+    };
+  }
+
+  // Returns this peer's current non-tombstoned policies.
+  rpc ListPolicies (ListPoliciesReq) returns (ListPoliciesResp) {
+    option (google.api.http) = {
+      get: "/v1/envoy/policies"
+    };
+  }
+}
+
+// What a domain does with a descriptor that carries no limit override.
+enum MissingLimitAction {
+  // Report the descriptor OVER_LIMIT without creating a rate limit.
+  DENY = 0;
+  // Report the descriptor OK without creating a rate limit.
+  ALLOW = 1;
+  // Fail the whole ShouldRateLimit call with InvalidArgument.
+  ERROR = 2;
+}
+
+message DomainPolicy {
+  // The RLS domain this policy applies to. Required, non-empty.
+  string domain = 1;
+  // Algorithm used to count every rate limit in this domain.
+  Algorithm algorithm = 2;
+  // Behavior bitflags OR'd onto every rate limit in this domain.
+  int32 behavior = 3;
+  MissingLimitAction on_missing_limit = 4;
+  // Set by the server on apply; a client-supplied value is ignored.
+  // Wall-clock milliseconds ratcheted above the previously stored version.
+  int64 version = 5;
+  // Advertise address of the applying peer. Breaks ties between equal
+  // versions. Set by the server on apply; a client-supplied value is ignored.
+  string origin = 6;
+}
+
+message ApplyPoliciesReq {
+  repeated DomainPolicy policies = 1;
+}
+
+message ApplyPoliciesResp {
+  // Every policy from the request with its assigned version and origin.
+  repeated DomainPolicy applied = 1;
+  // Peers that did not acknowledge the broadcast within the timeout.
+  repeated string unreachable_peers = 2;
+}
+
+message DeletePoliciesReq {
+  repeated string domains = 1;
+}
+
+message DeletePoliciesResp {
+  // Peers that did not acknowledge the broadcast within the timeout.
+  repeated string unreachable_peers = 1;
+}
+
+message ListPoliciesReq {}
+
+message ListPoliciesResp {
+  repeated DomainPolicy policies = 1;
+}
