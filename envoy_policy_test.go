@@ -96,3 +96,70 @@ func TestCloseWaitsForBootstrapPull(t *testing.T) {
 	stacks = stacks[:runtime.Stack(stacks, true)]
 	assert.NotContains(t, string(stacks), "envoyPolicyManager).pull")
 }
+
+// Without an advertise address the instance id identifies the applying peer.
+func TestOriginFallsBackToInstanceID(t *testing.T) {
+	instance, err := guber.NewV1Instance(guber.Config{
+		GRPCServers: []*grpc.Server{grpc.NewServer()},
+		InstanceID:  "instance-7",
+		Envoy: guber.EnvoyConfig{
+			Enabled:     true,
+			RegisterRLS: func([]*grpc.Server, *guber.V1Instance) prometheus.Collector { return nil },
+		},
+	})
+	require.NoError(t, err)
+	defer func() { _ = instance.Close() }()
+
+	resp, err := instance.ApplyPolicies(context.Background(), &guber.ApplyPoliciesReq{
+		Policies: []*guber.DomainPolicy{{Domain: "d"}},
+	})
+	require.NoError(t, err)
+	assert.Equal(t, "instance-7", resp.Applied[0].Origin)
+}
+
+// rogueEnvoyPeer answers GetPeerPolicies with whatever it is given, so a test
+// can hand an instance entries a conforming peer would never produce.
+type rogueEnvoyPeer struct {
+	guber.UnimplementedPeersV1Server
+	policies []*guber.PeerPolicy
+}
+
+func (r *rogueEnvoyPeer) GetPeerPolicies(context.Context, *guber.GetPeerPoliciesReq) (*guber.GetPeerPoliciesResp, error) {
+	return &guber.GetPeerPoliciesResp{Policies: r.policies}, nil
+}
+
+// A pull keeps the entries that pass validation and drops the rest, so one
+// malformed entry from a peer cannot poison the store or block the others.
+func TestPullSkipsInvalidEntriesFromPeer(t *testing.T) {
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	require.NoError(t, err)
+	rogue := grpc.NewServer()
+	guber.RegisterPeersV1Server(rogue, &rogueEnvoyPeer{policies: []*guber.PeerPolicy{
+		{Policy: &guber.DomainPolicy{Domain: "bad", Version: 0, Origin: "rogue"}},
+		{Policy: &guber.DomainPolicy{Domain: "good", Version: 5, Origin: "rogue", OnMissingLimit: guber.MissingLimitAction_ALLOW}},
+	}})
+	go func() { _ = rogue.Serve(listener) }()
+	defer rogue.Stop()
+
+	instance, err := guber.NewV1Instance(guber.Config{
+		GRPCServers:   []*grpc.Server{grpc.NewServer()},
+		AdvertiseAddr: "127.0.0.1:1",
+		Behaviors:     guber.BehaviorConfig{GlobalTimeout: 3 * time.Second},
+		Envoy: guber.EnvoyConfig{
+			Enabled:     true,
+			RegisterRLS: func([]*grpc.Server, *guber.V1Instance) prometheus.Collector { return nil },
+		},
+	})
+	require.NoError(t, err)
+	defer func() { _ = instance.Close() }()
+	instance.SetPeers([]guber.PeerInfo{
+		{GRPCAddress: "127.0.0.1:1", IsOwner: true},
+		{GRPCAddress: listener.Addr().String()},
+	})
+
+	require.Eventually(t, func() bool {
+		resp, err := instance.ListPolicies(context.Background(), &guber.ListPoliciesReq{})
+		require.NoError(t, err)
+		return len(resp.Policies) == 1 && resp.Policies[0].Domain == "good"
+	}, 5*time.Second, 50*time.Millisecond)
+}

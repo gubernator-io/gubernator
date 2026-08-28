@@ -194,6 +194,13 @@ func TestDisabledReturnsUnimplemented(t *testing.T) {
 	})
 	assert.Equal(t, codes.Unimplemented, status.Code(err))
 
+	_, err = peersClient(t, addr).UpdatePeerPolicies(ctx, &guber.UpdatePeerPoliciesReq{
+		Policies: []*guber.PeerPolicy{{Policy: &guber.DomainPolicy{Domain: "disabled", Version: 1, Origin: "peer"}}},
+	})
+	assert.Equal(t, codes.Unimplemented, status.Code(err))
+	_, err = peersClient(t, addr).GetPeerPolicies(ctx, &guber.GetPeerPoliciesReq{})
+	assert.Equal(t, codes.Unimplemented, status.Code(err))
+
 	// The V1 API is unaffected by the flag
 	v1, err := guber.DialV1Server(addr, nil)
 	require.NoError(t, err)
@@ -1121,4 +1128,115 @@ func TestEveryUnitTranslates(t *testing.T) {
 		// Gubernator's calendar boundary is one millisecond before the next interval
 		assert.InDelta(t, test.want.Milliseconds(), resp.Statuses[0].DurationUntilReset.AsDuration().Milliseconds(), 1)
 	}
+}
+
+// A descriptor's hits_addend is a uint64 on the wire; gubernator counts hits
+// as int64. A value above math.MaxInt64 cannot be evaluated and must fail the
+// call, never be reinterpreted as a negative hit that reports OK.
+func TestHitsAddendAboveMaxInt64FailsTheCall(t *testing.T) {
+	t.Skip("review-suite: RS-012 hits_addend above MaxInt64 is reinterpreted as a negative hit and reports OK; see review-suite.html")
+	domain := uniqueDomain(t)
+	client := rlsClient(t, cluster.GetRandomPeer(cluster.DataCenterNone).GRPCAddress)
+	d := limited(10, typev3.RateLimitUnit_MINUTE, entry("path", "/overflow"))
+	d.HitsAddend = wrapperspb.UInt64(uint64(1) << 63)
+
+	_, err := client.ShouldRateLimit(context.Background(), &ratelimitv3.RateLimitRequest{
+		Domain:      domain,
+		Descriptors: []*commonv3.RateLimitDescriptor{d},
+	})
+	require.Error(t, err)
+	assert.Equal(t, codes.InvalidArgument, status.Code(err))
+}
+
+// A limit that is present but carries no usable value is a missing limit.
+func TestUnusableLimitIsTreatedAsMissing(t *testing.T) {
+	peer := cluster.GetRandomPeer(cluster.DataCenterNone)
+	client := rlsClient(t, peer.GRPCAddress)
+	for _, test := range []struct {
+		name  string
+		limit *commonv3.RateLimitDescriptor_RateLimitOverride
+	}{
+		{name: "ZeroRequestsPerUnit", limit: &commonv3.RateLimitDescriptor_RateLimitOverride{RequestsPerUnit: 0, Unit: typev3.RateLimitUnit_MINUTE}},
+		{name: "UnknownUnit", limit: &commonv3.RateLimitDescriptor_RateLimitOverride{RequestsPerUnit: 5, Unit: typev3.RateLimitUnit_UNKNOWN}},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			domain := uniqueDomain(t)
+			resp, err := client.ShouldRateLimit(context.Background(), &ratelimitv3.RateLimitRequest{
+				Domain:      domain,
+				Descriptors: []*commonv3.RateLimitDescriptor{{Entries: []*commonv3.RateLimitDescriptor_Entry{entry("path", "/x")}, Limit: test.limit}},
+			})
+			require.NoError(t, err)
+			assert.Equal(t, ratelimitv3.RateLimitResponse_OVER_LIMIT, resp.OverallCode)
+			assert.Nil(t, resp.Statuses[0].CurrentLimit)
+			assert.Equal(t, uint32(0), resp.Statuses[0].LimitRemaining)
+			assert.Equal(t, float64(1), metricValue(t, peer.HTTPAddress, "gubernator_envoy_rls_missing_limit_total",
+				map[string]string{"domain": domain, "action": "deny"}))
+		})
+	}
+}
+
+// Deleting a domain removes its version gauge rather than leaving a stale sample.
+func TestPolicyVersionGaugeIsRemovedOnDelete(t *testing.T) {
+	domain := uniqueDomain(t)
+	peer := cluster.PeerAt(1)
+	resp, err := policyClient(t, peer.GRPCAddress).ApplyPolicies(context.Background(), &guber.ApplyPoliciesReq{
+		Policies: []*guber.DomainPolicy{{Domain: domain}},
+	})
+	require.NoError(t, err)
+	require.Equal(t, float64(resp.Applied[0].Version), metricValue(t, peer.HTTPAddress,
+		"gubernator_envoy_policy_version", map[string]string{"domain": domain}))
+
+	_, err = policyClient(t, peer.GRPCAddress).DeletePolicies(context.Background(), &guber.DeletePoliciesReq{Domains: []string{domain}})
+	require.NoError(t, err)
+
+	metrics, err := http.Get(fmt.Sprintf("http://%s/metrics", peer.HTTPAddress))
+	require.NoError(t, err)
+	defer metrics.Body.Close()
+	body, err := io.ReadAll(metrics.Body)
+	require.NoError(t, err)
+	assert.NotContains(t, string(body), fmt.Sprintf(`gubernator_envoy_policy_version{domain=%q}`, domain))
+}
+
+// Policy never crosses datacenters: a peer in another region is neither
+// broadcast to nor pulled from, so it keeps its own independent policy set.
+func TestPolicyStaysWithinTheDatacenter(t *testing.T) {
+	const syncInterval = 300 * time.Millisecond
+	var peers []guber.PeerInfo
+	var daemons []*guber.Daemon
+	for i, dc := range []string{cluster.DataCenterOne, cluster.DataCenterOne, cluster.DataCenterTwo} {
+		addr := fmt.Sprintf("127.0.0.1:%d", 4112+2*i)
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		d, err := guber.SpawnDaemon(ctx, guber.DaemonConfig{
+			GRPCListenAddress: addr,
+			HTTPListenAddress: fmt.Sprintf("127.0.0.1:%d", 4111+2*i),
+			AdvertiseAddress:  addr,
+			DataCenter:        dc,
+			Behaviors:         guber.BehaviorConfig{GlobalTimeout: time.Second},
+			Envoy:             guber.EnvoyConfig{Enabled: true, PolicySyncInterval: syncInterval, RegisterRLS: envoy.Register},
+		})
+		cancel()
+		require.NoError(t, err)
+		defer d.Close()
+		daemons = append(daemons, d)
+		peers = append(peers, guber.PeerInfo{GRPCAddress: addr, DataCenter: dc})
+	}
+	for _, d := range daemons {
+		d.SetPeers(peers)
+	}
+
+	domain := uniqueDomain(t)
+	resp, err := policyClient(t, peers[0].GRPCAddress).ApplyPolicies(context.Background(), &guber.ApplyPoliciesReq{
+		Policies: []*guber.DomainPolicy{{Domain: domain, OnMissingLimit: guber.MissingLimitAction_ALLOW}},
+	})
+	require.NoError(t, err)
+	assert.Empty(t, resp.UnreachablePeers)
+
+	require.Eventually(t, func() bool {
+		got := listPolicy(t, peers[1].GRPCAddress, domain)
+		return got != nil && got.Version == resp.Applied[0].Version
+	}, 5*time.Second, 50*time.Millisecond)
+
+	// Give the other region several sync intervals to (wrongly) pull it
+	time.Sleep(3 * syncInterval)
+	assert.Nil(t, listPolicy(t, peers[2].GRPCAddress, domain))
 }

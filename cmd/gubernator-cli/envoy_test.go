@@ -20,6 +20,8 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"io"
+	"net"
 	"os"
 	"path/filepath"
 	"testing"
@@ -294,4 +296,79 @@ func TestDeleteAcceptsDomainsStartingWithDash(t *testing.T) {
 	got := listPolicies(t)
 	assert.NotContains(t, got, "-internal-svc")
 	assert.NotContains(t, got, "-other")
+}
+
+// blackholeAddr accepts connections and never answers.
+func blackholeAddr(t *testing.T) string {
+	t.Helper()
+	l, err := net.Listen("tcp", "127.0.0.1:0")
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = l.Close() })
+	go func() {
+		for {
+			conn, err := l.Accept()
+			if err != nil {
+				return
+			}
+			defer func() { _ = conn.Close() }()
+		}
+	}()
+	return l.Addr().String()
+}
+
+func TestApplyWarnsAboutUnreachablePeersAndStillSucceeds(t *testing.T) {
+	unreachable := blackholeAddr(t)
+	peer := cluster.DaemonAt(0)
+	peer.SetPeers(append(cluster.GetPeers(), guber.PeerInfo{GRPCAddress: unreachable}))
+	defer peer.SetPeers(cluster.GetPeers())
+
+	stdout, stderr, err := run(t, "envoy", "apply", "-f", writeFile(t, "policies:\n  - domain: warn-one\n"))
+	require.NoError(t, err)
+	assert.Contains(t, stdout, "applied warn-one version")
+	assert.Contains(t, stderr, "warning")
+	assert.Contains(t, stderr, unreachable)
+	assert.Contains(t, listPolicies(t), "warn-one")
+
+	_, stderr, err = run(t, "envoy", "delete", "warn-one")
+	require.NoError(t, err)
+	assert.Contains(t, stderr, unreachable)
+}
+
+func TestConnectionFromConfigFileAndEnvironment(t *testing.T) {
+	addr := cluster.PeerAt(0).GRPCAddress
+	_, _, err := run(t, "envoy", "apply", "-f", writeFile(t, "policies:\n  - domain: conn-one\n"))
+	require.NoError(t, err)
+
+	config := filepath.Join(t.TempDir(), "gubernator.conf")
+	require.NoError(t, os.WriteFile(config, []byte("GUBER_GRPC_ADDRESS="+addr+"\n"), 0o600))
+	var out bytes.Buffer
+	require.NoError(t, cli.Run(context.Background(), []string{"envoy", "get", "-config", config}, cli.Options{Stdout: &out, Stderr: io.Discard}))
+	assert.Contains(t, out.String(), "conn-one")
+
+	t.Setenv("GUBER_GRPC_ADDRESS", addr)
+	out.Reset()
+	require.NoError(t, cli.Run(context.Background(), []string{"envoy", "get"}, cli.Options{Stdout: &out, Stderr: io.Discard}))
+	assert.Contains(t, out.String(), "conn-one")
+}
+
+func TestConnectionErrorsAreReported(t *testing.T) {
+	file := writeFile(t, "policies:\n  - domain: unreachable\n")
+	for _, test := range []struct {
+		name    string
+		args    []string
+		wantErr string
+	}{
+		{name: "ApplyDeadEndpoint", args: []string{"envoy", "apply", "-f", file, "-e", "127.0.0.1:1"}, wantErr: "while applying policies"},
+		{name: "DeleteDeadEndpoint", args: []string{"envoy", "delete", "unreachable", "-e", "127.0.0.1:1"}, wantErr: "while deleting policies"},
+		{name: "GetDeadEndpoint", args: []string{"envoy", "get", "-e", "127.0.0.1:1"}, wantErr: "while listing policies"},
+		{name: "UnknownFlag", args: []string{"envoy", "get", "-bogus"}, wantErr: "flag provided but not defined"},
+		{name: "MissingConfigFile", args: []string{"envoy", "get", "-config", "/nonexistent/gubernator.conf"}, wantErr: "while opening config file"},
+		{name: "NoEndpoint", args: []string{"envoy", "get"}, wantErr: "please provide a GRPC endpoint"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			t.Setenv("GUBER_GRPC_ADDRESS", "")
+			err := cli.Run(context.Background(), test.args, cli.Options{Stdout: io.Discard, Stderr: io.Discard})
+			require.ErrorContains(t, err, test.wantErr)
+		})
+	}
 }
