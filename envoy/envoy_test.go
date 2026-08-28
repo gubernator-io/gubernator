@@ -21,8 +21,10 @@ import (
 	"crypto/tls"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"os"
+	"sort"
 	"strings"
 	"testing"
 	"time"
@@ -996,4 +998,127 @@ func TestPolicyVersionGaugeReportsOnlyThisPeersStore(t *testing.T) {
 		"gubernator_envoy_policy_version", map[string]string{"domain": domain}))
 	assert.Equal(t, float64(0), metricValue(t, peerC.PeerInfo.HTTPAddress,
 		"gubernator_envoy_policy_version", map[string]string{"domain": domain}))
+}
+
+// A descriptor gubernator rejects per item (an empty value yields an empty
+// unique_key) must fail the whole call; no status may say OK for it.
+func TestPerItemErrorFailsTheWholeCall(t *testing.T) {
+	domain := uniqueDomain(t)
+	client := rlsClient(t, cluster.GetRandomPeer(cluster.DataCenterNone).GRPCAddress)
+	_, err := client.ShouldRateLimit(context.Background(), &ratelimitv3.RateLimitRequest{
+		Domain: domain,
+		Descriptors: []*commonv3.RateLimitDescriptor{
+			limited(10, typev3.RateLimitUnit_MINUTE, entry("path", "/ok")),
+			limited(10, typev3.RateLimitUnit_MINUTE, entry("user", "")),
+		},
+	})
+	require.Error(t, err)
+	assert.Equal(t, codes.Internal, status.Code(err))
+	assert.ErrorContains(t, err, "unique_key")
+	assert.Equal(t, float64(1), metricValue(t, cluster.PeerAt(0).HTTPAddress, "gubernator_envoy_rls_requests_total",
+		map[string]string{"domain": domain, "code": codes.Internal.String()})+
+		metricValue(t, cluster.PeerAt(1).HTTPAddress, "gubernator_envoy_rls_requests_total",
+			map[string]string{"domain": domain, "code": codes.Internal.String()})+
+		metricValue(t, cluster.PeerAt(2).HTTPAddress, "gubernator_envoy_rls_requests_total",
+			map[string]string{"domain": domain, "code": codes.Internal.String()}))
+}
+
+// blackholeListener accepts connections and never answers, so an RPC to it
+// lasts until the caller's deadline.
+func blackholeListener(t *testing.T) string {
+	t.Helper()
+	l, err := net.Listen("tcp", "127.0.0.1:0")
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = l.Close() })
+	go func() {
+		for {
+			conn, err := l.Accept()
+			if err != nil {
+				return
+			}
+			defer func() { _ = conn.Close() }()
+		}
+	}()
+	return l.Addr().String()
+}
+
+// Unreachable peers cost one GlobalTimeout in total, not one each: they are
+// contacted in parallel, listed as unreachable, and the apply succeeds locally.
+func TestApplyIsBoundedByGlobalTimeoutAcrossUnreachablePeers(t *testing.T) {
+	domain := uniqueDomain(t)
+	unreachable := []string{blackholeListener(t), blackholeListener(t)}
+	sort.Strings(unreachable)
+
+	peerA := cluster.DaemonAt(0)
+	peerA.SetPeers(append(cluster.GetPeers(),
+		guber.PeerInfo{GRPCAddress: unreachable[0]}, guber.PeerInfo{GRPCAddress: unreachable[1]}))
+	defer peerA.SetPeers(cluster.GetPeers())
+
+	timeout := peerA.Config().Behaviors.GlobalTimeout
+	ctx, cancel := context.WithTimeout(context.Background(), 3*timeout)
+	defer cancel()
+	started := time.Now()
+	resp, err := policyClient(t, peerA.PeerInfo.GRPCAddress).ApplyPolicies(ctx, &guber.ApplyPoliciesReq{
+		Policies: []*guber.DomainPolicy{{Domain: domain}},
+	})
+	require.NoError(t, err)
+	assert.Less(t, time.Since(started), timeout+time.Second)
+	assert.Equal(t, unreachable, resp.UnreachablePeers)
+	assert.NotNil(t, listPolicy(t, peerA.PeerInfo.GRPCAddress, domain))
+	requireConverged(t, domain, resp.Applied[0])
+}
+
+// Every unit maps to the reference implementation's plain duration, and under
+// DURATION_IS_GREGORIAN to the distance to the next calendar boundary.
+func TestEveryUnitTranslates(t *testing.T) {
+	now := clock.Date(2026, clock.March, 3, 12, 20, 30, 0, clock.UTC)
+	defer clock.Freeze(now).Unfreeze()
+	peer := cluster.GetRandomPeer(cluster.DataCenterNone)
+	client := rlsClient(t, peer.GRPCAddress)
+	const day = 24 * time.Hour
+
+	plain := uniqueDomain(t)
+	for _, test := range []struct {
+		unit typev3.RateLimitUnit
+		want time.Duration
+	}{
+		{unit: typev3.RateLimitUnit_SECOND, want: time.Second},
+		{unit: typev3.RateLimitUnit_MINUTE, want: time.Minute},
+		{unit: typev3.RateLimitUnit_HOUR, want: time.Hour},
+		{unit: typev3.RateLimitUnit_DAY, want: day},
+		{unit: typev3.RateLimitUnit_MONTH, want: 30 * day},
+		{unit: typev3.RateLimitUnit_YEAR, want: 365 * day},
+	} {
+		resp, err := client.ShouldRateLimit(context.Background(), &ratelimitv3.RateLimitRequest{
+			Domain:      plain,
+			Descriptors: []*commonv3.RateLimitDescriptor{limited(5, test.unit, entry("unit", test.unit.String()))},
+		})
+		require.NoError(t, err)
+		assert.Equal(t, test.want, resp.Statuses[0].DurationUntilReset.AsDuration())
+		assert.Equal(t, ratelimitv3.RateLimitResponse_RateLimit_Unit(test.unit), resp.Statuses[0].CurrentLimit.Unit)
+	}
+
+	gregorian := uniqueDomain(t)
+	_, err := policyClient(t, peer.GRPCAddress).ApplyPolicies(context.Background(), &guber.ApplyPoliciesReq{
+		Policies: []*guber.DomainPolicy{{Domain: gregorian, Behavior: int32(guber.Behavior_DURATION_IS_GREGORIAN)}},
+	})
+	require.NoError(t, err)
+	for _, test := range []struct {
+		unit typev3.RateLimitUnit
+		want time.Duration
+	}{
+		{unit: typev3.RateLimitUnit_MINUTE, want: 30 * time.Second},
+		{unit: typev3.RateLimitUnit_HOUR, want: 39*time.Minute + 30*time.Second},
+		{unit: typev3.RateLimitUnit_DAY, want: 11*time.Hour + 39*time.Minute + 30*time.Second},
+		{unit: typev3.RateLimitUnit_MONTH, want: 28*day + 11*time.Hour + 39*time.Minute + 30*time.Second},
+		{unit: typev3.RateLimitUnit_YEAR, want: 303*day + 11*time.Hour + 39*time.Minute + 30*time.Second},
+	} {
+		resp, err := client.ShouldRateLimit(context.Background(), &ratelimitv3.RateLimitRequest{
+			Domain:      gregorian,
+			Descriptors: []*commonv3.RateLimitDescriptor{limited(5, test.unit, entry("unit", test.unit.String()))},
+		})
+		require.NoError(t, err)
+		// Gubernator's calendar boundary is one millisecond before the next interval
+		assert.InDelta(t, test.want.Milliseconds(), resp.Statuses[0].DurationUntilReset.AsDuration().Milliseconds(), 1)
+	}
 }
