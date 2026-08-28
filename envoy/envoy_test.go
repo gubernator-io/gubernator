@@ -859,7 +859,7 @@ func TestPolicyHTTPGateway(t *testing.T) {
 	defer resp.Body.Close()
 	body, err := io.ReadAll(resp.Body)
 	require.NoError(t, err)
-	require.Equal(t, http.StatusOK, resp.StatusCode, string(body))
+	require.Equal(t, http.StatusOK, resp.StatusCode)
 	assert.Contains(t, string(body), `"applied"`)
 
 	list, err := http.Get(fmt.Sprintf("http://%s/v1/envoy/policies", peer.HTTPAddress))
@@ -968,4 +968,32 @@ func TestRepeatedDomainInOneApplyKeepsTheLastEntry(t *testing.T) {
 	require.Len(t, resp.Applied, 2)
 	assert.Equal(t, resp.Applied[0].Version+1, resp.Applied[1].Version)
 	requireConverged(t, domain, resp.Applied[1])
+}
+
+// The version gauge is per peer: a peer that has not received a policy must
+// not report the version another in-process peer just merged.
+func TestPolicyVersionGaugeReportsOnlyThisPeersStore(t *testing.T) {
+	domain := uniqueDomain(t)
+	peerA, peerC := cluster.DaemonAt(0), cluster.DaemonAt(2)
+
+	// Hide C from A so A's broadcast never reaches it
+	var withoutC []guber.PeerInfo
+	for _, p := range cluster.GetPeers() {
+		if p.GRPCAddress != peerC.PeerInfo.GRPCAddress {
+			withoutC = append(withoutC, p)
+		}
+	}
+	peerA.SetPeers(withoutC)
+	defer peerA.SetPeers(cluster.GetPeers())
+
+	resp, err := policyClient(t, peerA.PeerInfo.GRPCAddress).ApplyPolicies(context.Background(), &guber.ApplyPoliciesReq{
+		Policies: []*guber.DomainPolicy{{Domain: domain}},
+	})
+	require.NoError(t, err)
+	require.Nil(t, listPolicy(t, peerC.PeerInfo.GRPCAddress, domain))
+
+	assert.Equal(t, float64(resp.Applied[0].Version), metricValue(t, peerA.PeerInfo.HTTPAddress,
+		"gubernator_envoy_policy_version", map[string]string{"domain": domain}))
+	assert.Equal(t, float64(0), metricValue(t, peerC.PeerInfo.HTTPAddress,
+		"gubernator_envoy_policy_version", map[string]string{"domain": domain}))
 }

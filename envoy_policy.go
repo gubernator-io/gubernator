@@ -72,10 +72,7 @@ const defaultPolicySyncInterval = 30 * time.Second
 const allBehaviors = Behavior_BATCHING | Behavior_NO_BATCHING | Behavior_GLOBAL | Behavior_DURATION_IS_GREGORIAN |
 	Behavior_RESET_REMAINING | Behavior_MULTI_REGION | Behavior_DRAIN_OVER_LIMIT
 
-var metricEnvoyPolicyVersion = prometheus.NewGaugeVec(prometheus.GaugeOpts{
-	Name: "gubernator_envoy_policy_version",
-	Help: "The version of the Envoy domain policy this peer holds, per domain. Tombstoned domains are removed.",
-}, []string{"domain"})
+var errEnvoyDisabled = status.Error(codes.Unimplemented, "envoy rate limit service is not enabled on this peer")
 
 // envoyPolicyEntry is one domain's slot in the store. A deleted entry is a
 // tombstone that keeps its version so a stale apply cannot resurrect it.
@@ -89,10 +86,18 @@ type envoyPolicyEntry struct {
 type envoyPolicyStore struct {
 	snapshot atomic.Pointer[map[string]*envoyPolicyEntry]
 	mutex    sync.Mutex
+	// Per store, not package level: several instances share a test process
+	// and each must report only the versions it holds.
+	metricVersion *prometheus.GaugeVec
 }
 
 func newEnvoyPolicyStore() *envoyPolicyStore {
-	s := &envoyPolicyStore{}
+	s := &envoyPolicyStore{
+		metricVersion: prometheus.NewGaugeVec(prometheus.GaugeOpts{
+			Name: "gubernator_envoy_policy_version",
+			Help: "The version of the Envoy domain policy this peer holds, per domain. Tombstoned domains are removed.",
+		}, []string{"domain"}),
+	}
 	s.snapshot.Store(&map[string]*envoyPolicyEntry{})
 	return s
 }
@@ -147,9 +152,9 @@ func (s *envoyPolicyStore) mergeLocked(incoming []*PeerPolicy) {
 		}
 		next[domain] = &envoyPolicyEntry{policy: proto.Clone(in.Policy).(*DomainPolicy), deleted: in.Deleted}
 		if in.Deleted {
-			metricEnvoyPolicyVersion.DeleteLabelValues(domain)
+			s.metricVersion.DeleteLabelValues(domain)
 		} else {
-			metricEnvoyPolicyVersion.WithLabelValues(domain).Set(float64(in.Policy.Version))
+			s.metricVersion.WithLabelValues(domain).Set(float64(in.Policy.Version))
 		}
 	}
 	s.snapshot.Store(&next)
@@ -353,6 +358,9 @@ func (s *V1Instance) ResolveEnvoyPolicy(domain string) *DomainPolicy {
 // ApplyPolicies validates every entry, stamps each with a version and this
 // peer's origin, merges locally, then broadcasts to every other local peer.
 func (s *V1Instance) ApplyPolicies(ctx context.Context, r *ApplyPoliciesReq) (*ApplyPoliciesResp, error) {
+	if s.envoy == nil {
+		return nil, errEnvoyDisabled
+	}
 	entries := make([]*PeerPolicy, 0, len(r.Policies))
 	for _, p := range r.Policies {
 		if err := validateDomainPolicy(p); err != nil {
@@ -372,6 +380,9 @@ func (s *V1Instance) ApplyPolicies(ctx context.Context, r *ApplyPoliciesReq) (*A
 // DeletePolicies tombstones each domain with a fresh version and broadcasts
 // the tombstones like an apply.
 func (s *V1Instance) DeletePolicies(ctx context.Context, r *DeletePoliciesReq) (*DeletePoliciesResp, error) {
+	if s.envoy == nil {
+		return nil, errEnvoyDisabled
+	}
 	entries := make([]*PeerPolicy, 0, len(r.Domains))
 	for _, domain := range r.Domains {
 		if domain == "" {
@@ -385,6 +396,9 @@ func (s *V1Instance) DeletePolicies(ctx context.Context, r *DeletePoliciesReq) (
 
 // ListPolicies returns this peer's live policies; tombstones are omitted.
 func (s *V1Instance) ListPolicies(_ context.Context, _ *ListPoliciesReq) (*ListPoliciesResp, error) {
+	if s.envoy == nil {
+		return nil, errEnvoyDisabled
+	}
 	resp := &ListPoliciesResp{}
 	for _, e := range s.envoy.store.Entries() {
 		if !e.Deleted {
@@ -398,7 +412,7 @@ func (s *V1Instance) ListPolicies(_ context.Context, _ *ListPoliciesReq) (*ListP
 // are discarded silently; malformed entries fail the call.
 func (s *V1Instance) UpdatePeerPolicies(_ context.Context, r *UpdatePeerPoliciesReq) (*UpdatePeerPoliciesResp, error) {
 	if s.envoy == nil {
-		return nil, status.Error(codes.Unimplemented, "envoy rate limit service is not enabled on this peer")
+		return nil, errEnvoyDisabled
 	}
 	for _, p := range r.Policies {
 		if err := validatePeerPolicy(p); err != nil {
@@ -412,7 +426,7 @@ func (s *V1Instance) UpdatePeerPolicies(_ context.Context, r *UpdatePeerPolicies
 // GetPeerPolicies returns every entry this peer holds, tombstones included.
 func (s *V1Instance) GetPeerPolicies(_ context.Context, _ *GetPeerPoliciesReq) (*GetPeerPoliciesResp, error) {
 	if s.envoy == nil {
-		return nil, status.Error(codes.Unimplemented, "envoy rate limit service is not enabled on this peer")
+		return nil, errEnvoyDisabled
 	}
 	return &GetPeerPoliciesResp{Policies: s.envoy.store.Entries()}, nil
 }

@@ -28,6 +28,7 @@ import (
 	guber "github.com/gubernator-io/gubernator/v2"
 	"github.com/mailgun/holster/v4/setter"
 	"github.com/sirupsen/logrus"
+	"go.opentelemetry.io/contrib/instrumentation/google.golang.org/grpc/otelgrpc"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials"
 	"google.golang.org/grpc/credentials/insecure"
@@ -80,7 +81,8 @@ func Run(ctx context.Context, args []string, opts Options) error {
 	if args[1] == "apply" {
 		flags.StringVar(&file, "f", "", "Policy YAML file")
 	}
-	// Allow flags after positional args, e.g. `envoy delete checkout -e host:port`
+	// Allow flags after positional args, e.g. `envoy delete checkout -e host:port`.
+	// Everything after "--" is positional so domains that start with "-" stay reachable.
 	var domains []string
 	rest := args[2:]
 	for {
@@ -88,6 +90,10 @@ func Run(ctx context.Context, args []string, opts Options) error {
 			return err
 		}
 		if flags.NArg() == 0 {
+			break
+		}
+		if i := len(rest) - flags.NArg() - 1; i >= 0 && rest[i] == "--" {
+			domains = append(domains, flags.Args()...)
 			break
 		}
 		domains = append(domains, flags.Arg(0))
@@ -282,7 +288,9 @@ func dialPolicy(configFile, grpcAddress string) (guber.EnvoyPolicyV1Client, func
 	if conf.ClientTLS() != nil {
 		creds = credentials.NewTLS(conf.ClientTLS())
 	}
-	conn, err := grpc.NewClient(conf.GRPCListenAddress, grpc.WithTransportCredentials(creds))
+	// Propagate spans like DialV1Server does
+	conn, err := grpc.NewClient(conf.GRPCListenAddress, grpc.WithTransportCredentials(creds),
+		grpc.WithStatsHandler(otelgrpc.NewClientHandler()))
 	if err != nil {
 		return nil, nil, err
 	}

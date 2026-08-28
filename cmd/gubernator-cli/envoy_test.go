@@ -84,7 +84,7 @@ func writeFile(t *testing.T, content string) string {
 func run(t *testing.T, args ...string) (stdout, stderr string, err error) {
 	t.Helper()
 	var out, errOut bytes.Buffer
-	err = cli.Run(context.Background(), append(args, "-e", cluster.PeerAt(0).GRPCAddress),
+	err = cli.Run(context.Background(), append([]string{args[0], args[1], "-e", cluster.PeerAt(0).GRPCAddress}, args[2:]...),
 		cli.Options{Stdout: &out, Stderr: &errOut})
 	return out.String(), errOut.String(), err
 }
@@ -110,8 +110,8 @@ policies:
     on_missing_limit: error
   - domain: cli-billing
 `)
-	stdout, stderr, err := run(t, "envoy", "apply", "-f", file)
-	require.NoError(t, err, stderr)
+	stdout, _, err := run(t, "envoy", "apply", "-f", file)
+	require.NoError(t, err)
 	assert.Contains(t, stdout, "cli-checkout")
 	assert.Contains(t, stdout, "cli-billing")
 	assert.Contains(t, stdout, "version")
@@ -281,4 +281,17 @@ func TestUnknownSubcommandFails(t *testing.T) {
 	_, _, err = run(t, "envoy", "apply")
 	require.Error(t, err)
 	assert.ErrorContains(t, err, "-f")
+}
+
+func TestDeleteAcceptsDomainsStartingWithDash(t *testing.T) {
+	_, _, err := run(t, "envoy", "apply", "-f", writeFile(t, "policies:\n  - domain: -internal-svc\n  - domain: -other\n"))
+	require.NoError(t, err)
+	require.Contains(t, listPolicies(t), "-internal-svc")
+
+	// Everything after "--" is a domain, however many there are
+	_, _, err = run(t, "envoy", "delete", "--", "-internal-svc", "-other")
+	require.NoError(t, err)
+	got := listPolicies(t)
+	assert.NotContains(t, got, "-internal-svc")
+	assert.NotContains(t, got, "-other")
 }

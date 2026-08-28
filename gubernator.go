@@ -137,6 +137,9 @@ func NewV1Instance(conf Config) (s *V1Instance, err error) {
 	s.workerPool = NewWorkerPool(&conf)
 	s.global = newGlobalManager(conf.Behaviors, s)
 	if conf.Envoy.Enabled {
+		if conf.Envoy.RegisterRLS == nil {
+			return nil, errors.New("Envoy.Enabled requires Envoy.RegisterRLS; cmd/gubernator sets it to envoy.Register")
+		}
 		s.envoy = newEnvoyPolicyManager(conf.Envoy, s)
 	}
 
@@ -843,7 +846,9 @@ func (s *V1Instance) Describe(ch chan<- *prometheus.Desc) {
 	metricOverLimitCounter.Describe(ch)
 	metricWorkerQueue.Describe(ch)
 	metricUpdatePeerGlobalsCounter.Describe(ch)
-	metricEnvoyPolicyVersion.Describe(ch)
+	if s.envoy != nil {
+		s.envoy.store.metricVersion.Describe(ch)
+	}
 	s.global.metricBroadcastDuration.Describe(ch)
 	s.global.metricBroadcastErrors.Describe(ch)
 	s.global.metricGlobalQueueLength.Describe(ch)
@@ -865,7 +870,9 @@ func (s *V1Instance) Collect(ch chan<- prometheus.Metric) {
 	metricOverLimitCounter.Collect(ch)
 	metricWorkerQueue.Collect(ch)
 	metricUpdatePeerGlobalsCounter.Collect(ch)
-	metricEnvoyPolicyVersion.Collect(ch)
+	if s.envoy != nil {
+		s.envoy.store.metricVersion.Collect(ch)
+	}
 	s.global.metricBroadcastDuration.Collect(ch)
 	s.global.metricBroadcastErrors.Collect(ch)
 	s.global.metricGlobalQueueLength.Collect(ch)

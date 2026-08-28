@@ -174,10 +174,6 @@ func (s *Daemon) Start(ctx context.Context) error {
 		Envoy:         s.conf.Envoy,
 	}
 
-	if s.conf.Envoy.Enabled && s.conf.Envoy.RegisterRLS == nil {
-		return errors.New("Envoy.Enabled requires Envoy.RegisterRLS; cmd/gubernator sets it to envoy.Register")
-	}
-
 	s.V1Server, err = NewV1Instance(s.instanceConf)
 	if err != nil {
 		return errors.Wrap(err, "while creating new gubernator instance")
