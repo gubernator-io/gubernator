@@ -1134,7 +1134,6 @@ func TestEveryUnitTranslates(t *testing.T) {
 // as int64. A value above math.MaxInt64 cannot be evaluated and must fail the
 // call, never be reinterpreted as a negative hit that reports OK.
 func TestHitsAddendAboveMaxInt64FailsTheCall(t *testing.T) {
-	t.Skip("review-suite: RS-012 hits_addend above MaxInt64 is reinterpreted as a negative hit and reports OK; see review-suite.html")
 	domain := uniqueDomain(t)
 	client := rlsClient(t, cluster.GetRandomPeer(cluster.DataCenterNone).GRPCAddress)
 	d := limited(10, typev3.RateLimitUnit_MINUTE, entry("path", "/overflow"))

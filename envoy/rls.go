@@ -187,6 +187,9 @@ func (s *Service) ShouldRateLimit(ctx context.Context, r *ratelimitv3.RateLimitR
 		// Descriptor addend wins when set (zero included), then the request addend, then one
 		hits := int64(1)
 		if d.HitsAddend != nil {
+			if d.HitsAddend.Value > math.MaxInt64 {
+				return nil, status.Errorf(codes.InvalidArgument, "hits_addend %d exceeds MaxInt64", d.HitsAddend.Value)
+			}
 			hits = int64(d.HitsAddend.Value)
 		} else if r.HitsAddend != 0 {
 			hits = int64(r.HitsAddend)

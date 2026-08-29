@@ -157,7 +157,10 @@ For each descriptor, in order:
    `request.hits_addend`, else `1`. If `is_negative_hits` is set, negate it.
    Gubernator already banks credit above `limit` on negative hits, and never
    reports `OVER_LIMIT` for them; the adapter passes `is_negative_hits`
-   through unchanged.
+   through unchanged. `descriptor.hits_addend` is a `uint64` on the wire but
+   gubernator counts hits as `int64`; a value above `math.MaxInt64` fails the
+   whole call with `InvalidArgument: hits_addend <n> exceeds MaxInt64` instead
+   of wrapping negative.
 5. **Resolve the limit.** If `descriptor.limit` is present with `unit !=
    UNKNOWN` and `requests_per_unit > 0`, this descriptor becomes one
    gubernator rate limit (`Limit = requests_per_unit`, duration from the table
