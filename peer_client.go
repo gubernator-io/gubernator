@@ -147,7 +147,7 @@ func (c *PeerClient) GetPeerRateLimit(ctx context.Context, r *RateLimitReq) (res
 		})
 		if err != nil {
 			err = errors.Wrap(err, "Error in GetPeerRateLimits")
-			return nil, c.setLastErr(err)
+			return nil, c.setLastErrFromCaller(ctx, err)
 		}
 		return resp.RateLimits[0], nil
 	}
@@ -155,7 +155,7 @@ func (c *PeerClient) GetPeerRateLimit(ctx context.Context, r *RateLimitReq) (res
 	resp, err = c.getPeerRateLimitsBatch(ctx, r)
 	if err != nil {
 		err = errors.Wrap(err, "Error in getPeerRateLimitsBatch")
-		return nil, c.setLastErr(err)
+		return nil, c.setLastErrFromCaller(ctx, err)
 	}
 
 	return resp, nil
@@ -175,7 +175,7 @@ func (c *PeerClient) GetPeerRateLimits(ctx context.Context, r *GetPeerRateLimits
 	if err != nil {
 		err = errors.Wrap(err, "Error in client.GetPeerRateLimits")
 		// metricCheckErrorCounter is updated within client.GetPeerRateLimits().
-		return nil, c.setLastErr(err)
+		return nil, c.setLastErrFromCaller(ctx, err)
 	}
 
 	// Unlikely, but this avoids a panic if something wonky happens
@@ -202,10 +202,46 @@ func (c *PeerClient) UpdatePeerGlobals(ctx context.Context, r *UpdatePeerGlobals
 
 	resp, err = c.client.UpdatePeerGlobals(ctx, r)
 	if err != nil {
-		_ = c.setLastErr(err)
+		_ = c.setLastErrFromCaller(ctx, err)
 	}
 
 	return resp, err
+}
+
+// isCallerCancellation reports whether err was caused by the caller abandoning
+// the request rather than by a fault in this peer.
+//
+// It matters because HealthCheck reports this instance unhealthy while any peer
+// holds a cached error, so recording a caller's cancellation lets a single
+// client that hangs up mark every instance in the ring unhealthy for the whole
+// cache TTL.
+//
+// A cancelled or expired caller context is decisive: whatever error the request
+// ended with, the caller had already stopped waiting for it. Failing that,
+// codes.Canceled is still caller-driven on these paths, because the only place
+// gubernator cancels a peer call itself is sendBatch, and that reports a
+// non-responsive peer as DeadlineExceeded on its own timeout context.
+func isCallerCancellation(ctx context.Context, err error) bool {
+	if err == nil {
+		return false
+	}
+
+	if ctx.Err() != nil {
+		return true
+	}
+
+	return errors.Is(err, context.Canceled) || status.Code(err) == codes.Canceled
+}
+
+// setLastErrFromCaller records err against this peer unless the caller
+// abandoned the request. Use it for errors from requests carrying a caller's
+// context, and setLastErr directly only where the context is gubernator's own.
+func (c *PeerClient) setLastErrFromCaller(ctx context.Context, err error) error {
+	if isCallerCancellation(ctx, err) {
+		return err
+	}
+
+	return c.setLastErr(err)
 }
 
 func (c *PeerClient) setLastErr(err error) error {
@@ -274,8 +310,9 @@ func (c *PeerClient) getPeerRateLimitsBatch(ctx context.Context, r *RateLimitReq
 	select {
 	case re := <-req.resp:
 		if re.err != nil {
-			err := errors.Wrap(c.setLastErr(re.err), "Request error")
-			return nil, c.setLastErr(err)
+			// sendBatch has already recorded this against the peer. Caching it
+			// again here would add a second entry for a single failure.
+			return nil, errors.Wrap(re.err, "Request error")
 		}
 		return re.rl, nil
 	case <-ctx.Done():
@@ -396,6 +433,7 @@ func (c *PeerClient) sendBatch(ctx context.Context, queue []*request) {
 	// Unlikely, but this avoids a panic if something wonky happens
 	if len(resp.RateLimits) != len(queue) {
 		err = errors.New("server responded with incorrect rate limit list size")
+		_ = c.setLastErr(err)
 
 		for _, r := range queue {
 			metricCheckErrorCounter.WithLabelValues("Item mismatch").Add(1)

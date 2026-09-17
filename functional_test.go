@@ -2879,6 +2879,130 @@ func TestAsyncRequestConcurrentMapWrite(t *testing.T) {
 	time.Sleep(500 * time.Millisecond)
 }
 
+// TestCallerCancellationKeepsPeersHealthy is a regression test: a caller that
+// gives up on a request must not be recorded as a fault in the peer the request
+// was forwarded to.
+//
+// HealthCheck reports an instance unhealthy while any of its peers holds a
+// cached error, and those errors are cached for five minutes. Recording a
+// caller's cancellation therefore let a single client that hung up mark an
+// instance unhealthy for far longer than any probe interval — enough for a
+// liveness probe on /v1/HealthCheck to restart every pod in the ring, whose
+// restarts then produced more cancellations.
+func TestCallerCancellationKeepsPeersHealthy(t *testing.T) {
+	const rateLimitName = "TestCallerCancellationKeepsPeersHealthy"
+
+	const (
+		grpc0 = "127.0.0.1:7894"
+		http0 = "127.0.0.1:7884"
+		grpc1 = "127.0.0.1:7895"
+		http1 = "127.0.0.1:7885"
+	)
+
+	start := func(grpcAddr, httpAddr string) *guber.Daemon {
+		logger := logrus.New()
+		logger.SetLevel(logrus.ErrorLevel)
+
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+		d, err := guber.SpawnDaemon(ctx, guber.DaemonConfig{
+			Logger:            logrus.NewEntry(logger),
+			InstanceID:        grpcAddr,
+			GRPCListenAddress: grpcAddr,
+			HTTPListenAddress: httpAddr,
+			AdvertiseAddress:  grpcAddr,
+			Behaviors: guber.BehaviorConfig{
+				// BatchWait is far longer than the caller deadline below, so
+				// the batch never dispatches and the caller's context is what
+				// fails the request.
+				BatchWait:    5 * time.Second,
+				BatchTimeout: 10 * time.Second,
+			},
+		})
+		require.NoError(t, err)
+		t.Cleanup(func() { d.Close() })
+
+		d.PeerInfo = guber.PeerInfo{
+			GRPCAddress: d.GRPCListeners[0].Addr().String(),
+			HTTPAddress: d.HTTPListener.Addr().String(),
+		}
+		return d
+	}
+
+	peer0 := start(grpc0, http0)
+	peer1 := start(grpc1, http1)
+
+	peers := []guber.PeerInfo{peer0.PeerInfo, peer1.PeerInfo}
+	peer0.SetPeers(peers)
+	peer1.SetPeers(peers)
+
+	daemons := []*guber.Daemon{peer0, peer1}
+
+	assertHealthy := func(t *testing.T, msg string) {
+		for _, d := range daemons {
+			resp, err := d.MustClient().HealthCheck(context.Background(), &guber.HealthCheckReq{})
+			if !assert.NoError(t, err, "%s: %s", msg, d.InstanceID) {
+				continue
+			}
+			assert.Equal(t, "healthy", resp.Status, "%s: %s: %s", msg, d.InstanceID, resp.Message)
+		}
+	}
+
+	assertHealthy(t, "before the cancelled request")
+
+	// Find a key owned by peer1, so peer0 forwards it and exercises the peer
+	// request path rather than answering locally.
+	var key string
+	for i := 0; i < 1000; i++ {
+		k := guber.RandomString(10)
+		owner, err := peer0.V1Server.GetPeer(context.Background(), rateLimitName+"_"+k)
+		require.NoError(t, err)
+		if owner.Info().GRPCAddress == peer1.PeerInfo.GRPCAddress {
+			key = k
+			break
+		}
+	}
+	require.NotEmpty(t, key)
+
+	client, err := guber.DialV1Server(peer0.PeerInfo.GRPCAddress, nil)
+	require.NoError(t, err)
+
+	// The caller gives up long before BatchWait elapses.
+	ctx, cancel := context.WithTimeout(context.Background(), 200*time.Millisecond)
+	defer cancel()
+	_, _ = client.GetRateLimits(ctx, &guber.GetRateLimitsReq{
+		Requests: []*guber.RateLimitReq{
+			{
+				Name:      rateLimitName,
+				UniqueKey: key,
+				Algorithm: guber.Algorithm_TOKEN_BUCKET,
+				Duration:  guber.Second * 60,
+				Limit:     100,
+				Hits:      1,
+			},
+		},
+	})
+
+	// asyncRequest goes on retrying in the background after the caller has
+	// gone, so poll for the length of those retries rather than sampling health
+	// once: the instance must never report unhealthy while they drain.
+	assert.Never(t, func() bool {
+		for _, d := range daemons {
+			resp, err := d.MustClient().HealthCheck(context.Background(), &guber.HealthCheckReq{})
+			if err != nil {
+				t.Logf("%s reported unhealthy: %v", d.InstanceID, err)
+				return true
+			}
+			if resp.Status != "healthy" {
+				t.Logf("%s reported %q: %s", d.InstanceID, resp.Status, resp.Message)
+				return true
+			}
+		}
+		return false
+	}, time.Second, 50*time.Millisecond,
+		"caller cancellation must not mark an instance unhealthy")
+}
+
 // TestSpawnDaemon_K8sStartupFailure_NoPanic is a regression test for issue #101.
 // When the Kubernetes API is unreachable, SpawnDaemon must return an error rather than
 // panicking with a nil pointer dereference in (*K8sPool).Close().
