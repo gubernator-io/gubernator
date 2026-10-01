@@ -23,6 +23,7 @@ import (
 	"fmt"
 	"io"
 	"math/rand"
+	"net"
 	"net/http"
 	"os"
 	"sort"
@@ -43,6 +44,8 @@ import (
 	"github.com/sirupsen/logrus"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"go.opentelemetry.io/otel"
+	sdktrace "go.opentelemetry.io/otel/sdk/trace"
 	"golang.org/x/exp/maps"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials/insecure"
@@ -2750,6 +2753,130 @@ func TestAsyncRequestPreservesContextError(t *testing.T) {
 	for _, entry := range entries {
 		assert.NotNil(t, entry.Data["error"])
 	}
+}
+
+// slowPeerServer is a PeersV1Server that stalls every GetPeerRateLimits call, used to force
+// asyncRequest() retries in TestAsyncRequestConcurrentMapWrite.
+type slowPeerServer struct {
+	guber.UnimplementedPeersV1Server
+	delay time.Duration
+}
+
+func (s *slowPeerServer) GetPeerRateLimits(_ context.Context, r *guber.GetPeerRateLimitsReq) (*guber.GetPeerRateLimitsResp, error) {
+	time.Sleep(s.delay)
+	resp := &guber.GetPeerRateLimitsResp{RateLimits: make([]*guber.RateLimitResp, len(r.Requests))}
+	for i := range r.Requests {
+		resp.RateLimits[i] = &guber.RateLimitResp{}
+	}
+	return resp, nil
+}
+
+// TestAsyncRequestConcurrentMapWrite is a regression test for ENG-192
+// (https://github.com/gubernator-io/gubernator/issues/118). asyncRequest() forwarded the
+// caller's *RateLimitReq pointer to the owning peer and, on retry after a context timeout,
+// reused that same pointer. With batching on, the stale attempt and the retry can each land
+// in a different batch; both batches write RateLimitReq.Metadata (via TraceContext.Inject) in
+// their own goroutine, so the two writes race. This only writes when the active span is
+// sampled, which is why the bug needs a real OTel SDK TracerProvider installed (the default
+// no-op provider makes Inject() skip the write).
+//
+// The slow mock peer here holds every batch's RPC open well past the caller's deadline, so
+// GetRateLimits() times out mid-forward while the batch is still in flight and asyncRequest()
+// retries, queuing a second batch for the same key. Run under `go test -race`: on the pre-fix
+// code this reliably reports a concurrent map write on RateLimitReq.Metadata.
+func TestAsyncRequestConcurrentMapWrite(t *testing.T) {
+	const rateLimitName = "TestAsyncRequestConcurrentMapWrite"
+
+	prevTP := otel.GetTracerProvider()
+	tp := sdktrace.NewTracerProvider(sdktrace.WithSampler(sdktrace.AlwaysSample()))
+	otel.SetTracerProvider(tp)
+	// Restoring prevTP alone is not enough: the first SetTracerProvider permanently delegates
+	// the default global provider to tp. Shutdown is what makes tp hand out no-op tracers again.
+	t.Cleanup(func() {
+		otel.SetTracerProvider(prevTP)
+		_ = tp.Shutdown(context.Background())
+	})
+
+	slow := &slowPeerServer{delay: 300 * time.Millisecond}
+	lis, err := net.Listen("tcp", "127.0.0.1:0")
+	require.NoError(t, err)
+	srv := grpc.NewServer()
+	guber.RegisterPeersV1Server(srv, slow)
+	go func() { _ = srv.Serve(lis) }()
+	t.Cleanup(srv.Stop)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	// The slow peer produces hundreds of "peer not connected" errors that would flood CI output.
+	logger := logrus.New()
+	logger.SetOutput(io.Discard)
+	d, err := guber.SpawnDaemon(ctx, guber.DaemonConfig{
+		Logger:            logrus.NewEntry(logger),
+		InstanceID:        "peer0",
+		GRPCListenAddress: "127.0.0.1:0",
+		HTTPListenAddress: "127.0.0.1:0",
+		AdvertiseAddress:  "127.0.0.1:0",
+		Behaviors: guber.BehaviorConfig{
+			BatchWait:    time.Millisecond,
+			BatchTimeout: 2 * time.Second,
+		},
+	})
+	require.NoError(t, err)
+	t.Cleanup(func() { d.Close() })
+
+	d.PeerInfo = guber.PeerInfo{
+		GRPCAddress: d.GRPCListeners[0].Addr().String(),
+		HTTPAddress: d.HTTPListener.Addr().String(),
+	}
+	slowPeer := guber.PeerInfo{GRPCAddress: lis.Addr().String()}
+	d.SetPeers([]guber.PeerInfo{d.PeerInfo, slowPeer})
+
+	// Find keys owned by the slow mock peer so GetRateLimits() forwards them via asyncRequest().
+	const numKeys = 300
+	var keys []string
+	for i := 0; len(keys) < numKeys && i < 5000; i++ {
+		k := guber.RandomString(10)
+		owner, err := d.V1Server.GetPeer(context.Background(), rateLimitName+"_"+k)
+		require.NoError(t, err)
+		if owner.Info().GRPCAddress == slowPeer.GRPCAddress {
+			keys = append(keys, k)
+		}
+	}
+	require.Len(t, keys, numKeys)
+
+	client, err := guber.DialV1Server(d.PeerInfo.GRPCAddress, nil)
+	require.NoError(t, err)
+
+	// Each request's deadline is shorter than the mock peer's delay, so its batch is still
+	// in flight when the caller gives up and asyncRequest() retries. Deadlines are staggered
+	// so retries land in many separate batch windows instead of piling into one or two.
+	var wg sync.WaitGroup
+	for i, key := range keys {
+		wg.Add(1)
+		go func(i int, key string) {
+			defer wg.Done()
+			deadline := time.Duration(10+i%20) * time.Millisecond
+			reqCtx, reqCancel := context.WithTimeout(context.Background(), deadline)
+			defer reqCancel()
+			_, _ = client.GetRateLimits(reqCtx, &guber.GetRateLimitsReq{
+				Requests: []*guber.RateLimitReq{
+					{
+						Name:      rateLimitName,
+						UniqueKey: key,
+						Algorithm: guber.Algorithm_TOKEN_BUCKET,
+						Duration:  guber.Second * 60,
+						Limit:     100,
+						Hits:      1,
+					},
+				},
+			})
+		}(i, key)
+	}
+	wg.Wait()
+
+	// The racing writes already happened before each batch's RPC was sent. This only lets
+	// batches still held by the slow peer drain so daemon shutdown stays quiet.
+	time.Sleep(500 * time.Millisecond)
 }
 
 // TestSpawnDaemon_K8sStartupFailure_NoPanic is a regression test for issue #101.

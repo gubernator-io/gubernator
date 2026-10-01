@@ -358,9 +358,12 @@ func (s *V1Instance) asyncRequest(ctx context.Context, req *AsyncReq) {
 			}
 		}
 
-		// Make an RPC call to the peer that owns this rate limit
+		// Make an RPC call to the peer that owns this rate limit. Clone the request so each
+		// attempt (and any batch that queues it) has its own Metadata map; retries reuse
+		// req.Req, and GetPeerRateLimit mutates Metadata in place via TraceContext.Inject,
+		// which races when an earlier attempt's batch is still in flight (ENG-192).
 		var r *RateLimitResp
-		r, err = req.Peer.GetPeerRateLimit(ctx, req.Req)
+		r, err = req.Peer.GetPeerRateLimit(ctx, proto.Clone(req.Req).(*RateLimitReq))
 		if err != nil {
 			if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
 				attempts++
