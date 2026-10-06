@@ -146,6 +146,41 @@ func TestCallerCancellationIsNotRecorded(t *testing.T) {
 	}
 }
 
+// asyncRequest retries a forward whose context has ended, so a forward that
+// starts after the caller left must not reach the peer, or each retry would
+// apply the hits again.
+func TestForwardAfterCallerLeftIsNotSent(t *testing.T) {
+	for _, test := range []struct {
+		name     string
+		behavior gubernator.Behavior
+	}{
+		{name: "Batching", behavior: gubernator.Behavior_BATCHING},
+		{name: "NoBatching", behavior: gubernator.Behavior_NO_BATCHING},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			stub, addr := startStubPeer(t)
+			close(stub.release)
+			client := newPeerClient(t, addr, gubernator.BehaviorConfig{
+				BatchWait:    time.Millisecond,
+				BatchTimeout: 5 * time.Second,
+				BatchLimit:   100,
+			})
+
+			ctx, cancel := context.WithCancel(context.Background())
+			cancel()
+			for i := 0; i < 6; i++ {
+				_, err := client.GetPeerRateLimit(ctx, rateLimitReq(test.behavior))
+				require.ErrorIs(t, err, context.Canceled)
+			}
+
+			// Give any request that slipped through time to reach the peer.
+			time.Sleep(200 * time.Millisecond)
+			assert.Equal(t, int32(0), stub.received.Load())
+			assert.Empty(t, client.GetLastErr())
+		})
+	}
+}
+
 // A peer that never answers within gubernator's own timeout is a fault in the
 // peer, whichever path reached it, and is recorded exactly once.
 func TestHungPeerIsRecordedOnce(t *testing.T) {

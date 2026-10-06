@@ -173,6 +173,12 @@ func (c *PeerClient) getPeerRateLimitSingle(ctx context.Context, r *RateLimitReq
 		return nil, status.Error(codes.Canceled, "grpc: the client connection is closing")
 	}
 
+	// A caller that already left gets nothing from sending, and asyncRequest
+	// retries this error, so each send would apply the hits again.
+	if err := ctx.Err(); err != nil {
+		return nil, errors.Wrap(err, "Context error before sending request")
+	}
+
 	// WithoutCancel keeps the caller's trace values for the linked span
 	// while making sure the caller's deadline never reaches the peer call.
 	go c.sendBatch(context.WithoutCancel(ctx), []*request{&req})
@@ -302,6 +308,12 @@ func (c *PeerClient) getPeerRateLimitsBatch(ctx context.Context, r *RateLimitReq
 	if c.queueClosed.Load() {
 		// this check prevents "panic: send on close channel"
 		return nil, status.Error(codes.Canceled, "grpc: the client connection is closing")
+	}
+
+	// select picks at random when both cases are ready, so without this a
+	// caller that already left could still be queued and sent.
+	if err := ctx.Err(); err != nil {
+		return nil, errors.Wrap(err, "Context error while enqueuing request")
 	}
 
 	select {
