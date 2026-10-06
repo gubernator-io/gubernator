@@ -20,6 +20,7 @@ import (
 	"context"
 	"fmt"
 	"math/rand"
+	"strings"
 
 	"github.com/gubernator-io/gubernator/v2"
 	"github.com/mailgun/holster/v4/clock"
@@ -150,6 +151,14 @@ func Restart(ctx context.Context) error {
 // StartWith a local cluster with specific addresses
 func StartWith(localPeers []gubernator.PeerInfo, opts ...option) error {
 	for _, peer := range localPeers {
+		// net.Listen() resolves "localhost" to a concrete IP, so the listener's
+		// reported address never matches the pre-resolution AdvertiseAddress a
+		// caller passed in here; that mismatch makes Daemon.SetPeers unable to
+		// recognize a peer as itself (IsOwner). Normalize up front so the address
+		// we advertise is byte-identical to the one the listener reports.
+		peer.GRPCAddress = strings.Replace(peer.GRPCAddress, "localhost", "127.0.0.1", 1)
+		peer.HTTPAddress = strings.Replace(peer.HTTPAddress, "localhost", "127.0.0.1", 1)
+
 		ctx, cancel := context.WithTimeout(context.Background(), clock.Second*10)
 		cfg := gubernator.DaemonConfig{
 			Logger:            logrus.WithField("instance", peer.GRPCAddress),
@@ -224,4 +233,17 @@ func (o *eventChannelOption) Apply(cfg *gubernator.DaemonConfig) {
 // WithEventChannel sets EventChannel to Gubernator config.
 func WithEventChannel(eventChannel chan<- gubernator.HitEvent) option {
 	return &eventChannelOption{eventChannel: eventChannel}
+}
+
+type envoyOption struct {
+	conf gubernator.EnvoyConfig
+}
+
+func (o *envoyOption) Apply(cfg *gubernator.DaemonConfig) {
+	cfg.Envoy = o.conf
+}
+
+// WithEnvoy sets the Envoy RateLimitService adapter config on every daemon.
+func WithEnvoy(conf gubernator.EnvoyConfig) option {
+	return &envoyOption{conf: conf}
 }

@@ -27,6 +27,7 @@ import (
 	"net"
 	"os"
 	"runtime"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -127,6 +128,9 @@ type Config struct {
 
 	// (Optional) EventChannel receives hit events
 	EventChannel chan<- HitEvent
+
+	// (Optional) Envoy RateLimitService adapter settings; off unless Envoy.Enabled
+	Envoy EnvoyConfig
 }
 
 type HitEvent struct {
@@ -144,6 +148,7 @@ func (c *Config) SetDefaults() error {
 	setter.SetDefault(&c.Behaviors.GlobalSyncWait, time.Millisecond*100)
 
 	setter.SetDefault(&c.Behaviors.GlobalPeerRequestsConcurrency, 100)
+	setter.SetDefault(&c.Envoy.PolicySyncInterval, defaultPolicySyncInterval)
 
 	setter.SetDefault(&c.LocalPicker, NewReplicatedConsistentHash(nil, defaultReplicas))
 	setter.SetDefault(&c.RegionPicker, NewRegionPicker(nil))
@@ -281,6 +286,9 @@ type DaemonConfig struct {
 	// (Optional) A loader from a persistent store. Allows the implementor the ability to load and save
 	// the contents of the cache when the gubernator instance is started and stopped
 	Loader Loader
+
+	// (Optional) Envoy RateLimitService adapter settings as selected by `GUBER_ENVOY_*`
+	Envoy EnvoyConfig
 }
 
 func (d *DaemonConfig) ClientTLS() *tls.Config {
@@ -385,6 +393,31 @@ func SetupDaemonConfig(logger *logrus.Logger, configFile io.Reader) (DaemonConfi
 	setter.SetDefault(&conf.Behaviors.GlobalBatchLimit, getEnvInteger(log, "GUBER_GLOBAL_BATCH_LIMIT"))
 	setter.SetDefault(&conf.Behaviors.GlobalSyncWait, getEnvDuration(log, "GUBER_GLOBAL_SYNC_WAIT"))
 	setter.SetDefault(&conf.Behaviors.ForceGlobal, getEnvBool(log, "GUBER_FORCE_GLOBAL"))
+
+	// Envoy RateLimitService adapter
+	setter.SetDefault(&conf.Envoy.Enabled, getEnvBool(log, "GUBER_ENVOY_RLS_ENABLED"))
+	setter.SetDefault(&conf.Envoy.PolicySyncInterval, getEnvDuration(log, "GUBER_ENVOY_POLICY_SYNC_INTERVAL"), defaultPolicySyncInterval)
+	if v := os.Getenv("GUBER_ENVOY_ALGORITHM"); v != "" {
+		a, ok := Algorithm_value[v]
+		if !ok {
+			return conf, errors.Errorf("'GUBER_ENVOY_ALGORITHM=%s' is invalid; choices are [%s]", v, enumChoices(Algorithm_name))
+		}
+		conf.Envoy.Algorithm = Algorithm(a)
+	}
+	for _, name := range getEnvSlice("GUBER_ENVOY_BEHAVIOR") {
+		b, ok := Behavior_value[strings.TrimSpace(name)]
+		if !ok {
+			return conf, errors.Errorf("'GUBER_ENVOY_BEHAVIOR=%s' is invalid; choices are [%s]", name, enumChoices(Behavior_name))
+		}
+		conf.Envoy.Behavior |= Behavior(b)
+	}
+	if v := os.Getenv("GUBER_ENVOY_ON_MISSING_LIMIT"); v != "" {
+		a, ok := MissingLimitAction_value[strings.ToUpper(v)]
+		if !ok {
+			return conf, errors.Errorf("'GUBER_ENVOY_ON_MISSING_LIMIT=%s' is invalid; choices are [deny,allow,error]", v)
+		}
+		conf.Envoy.OnMissingLimit = MissingLimitAction(a)
+	}
 
 	// TLS Config
 	if anyHasPrefix("GUBER_TLS_", os.Environ()) {
@@ -730,6 +763,15 @@ func validClientAuthTypes(m map[string]tls.ClientAuthType) string {
 	for k := range m {
 		rs = append(rs, k)
 	}
+	return strings.Join(rs, ",")
+}
+
+func enumChoices(names map[int32]string) string {
+	rs := make([]string, 0, len(names))
+	for _, name := range names {
+		rs = append(rs, name)
+	}
+	sort.Strings(rs)
 	return strings.Join(rs, ",")
 }
 

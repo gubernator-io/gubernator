@@ -25,6 +25,16 @@ class PeersV1Stub(object):
                 request_serializer=peers__pb2.UpdatePeerGlobalsReq.SerializeToString,
                 response_deserializer=peers__pb2.UpdatePeerGlobalsResp.FromString,
                 )
+        self.UpdatePeerPolicies = channel.unary_unary(
+                '/pb.gubernator.PeersV1/UpdatePeerPolicies',
+                request_serializer=peers__pb2.UpdatePeerPoliciesReq.SerializeToString,
+                response_deserializer=peers__pb2.UpdatePeerPoliciesResp.FromString,
+                )
+        self.GetPeerPolicies = channel.unary_unary(
+                '/pb.gubernator.PeersV1/GetPeerPolicies',
+                request_serializer=peers__pb2.GetPeerPoliciesReq.SerializeToString,
+                response_deserializer=peers__pb2.GetPeerPoliciesResp.FromString,
+                )
 
 
 class PeersV1Servicer(object):
@@ -45,6 +55,20 @@ class PeersV1Servicer(object):
         context.set_details('Method not implemented!')
         raise NotImplementedError('Method not implemented!')
 
+    def UpdatePeerPolicies(self, request, context):
+        """Receives Envoy domain policies (including tombstones) from another peer; merges by (version, origin)
+        """
+        context.set_code(grpc.StatusCode.UNIMPLEMENTED)
+        context.set_details('Method not implemented!')
+        raise NotImplementedError('Method not implemented!')
+
+    def GetPeerPolicies(self, request, context):
+        """Returns every Envoy domain policy this peer holds, tombstones included, for bootstrap and anti-entropy
+        """
+        context.set_code(grpc.StatusCode.UNIMPLEMENTED)
+        context.set_details('Method not implemented!')
+        raise NotImplementedError('Method not implemented!')
+
 
 def add_PeersV1Servicer_to_server(servicer, server):
     rpc_method_handlers = {
@@ -57,6 +81,16 @@ def add_PeersV1Servicer_to_server(servicer, server):
                     servicer.UpdatePeerGlobals,
                     request_deserializer=peers__pb2.UpdatePeerGlobalsReq.FromString,
                     response_serializer=peers__pb2.UpdatePeerGlobalsResp.SerializeToString,
+            ),
+            'UpdatePeerPolicies': grpc.unary_unary_rpc_method_handler(
+                    servicer.UpdatePeerPolicies,
+                    request_deserializer=peers__pb2.UpdatePeerPoliciesReq.FromString,
+                    response_serializer=peers__pb2.UpdatePeerPoliciesResp.SerializeToString,
+            ),
+            'GetPeerPolicies': grpc.unary_unary_rpc_method_handler(
+                    servicer.GetPeerPolicies,
+                    request_deserializer=peers__pb2.GetPeerPoliciesReq.FromString,
+                    response_serializer=peers__pb2.GetPeerPoliciesResp.SerializeToString,
             ),
     }
     generic_handler = grpc.method_handlers_generic_handler(
@@ -100,5 +134,39 @@ class PeersV1(object):
         return grpc.experimental.unary_unary(request, target, '/pb.gubernator.PeersV1/UpdatePeerGlobals',
             peers__pb2.UpdatePeerGlobalsReq.SerializeToString,
             peers__pb2.UpdatePeerGlobalsResp.FromString,
+            options, channel_credentials,
+            insecure, call_credentials, compression, wait_for_ready, timeout, metadata)
+
+    @staticmethod
+    def UpdatePeerPolicies(request,
+            target,
+            options=(),
+            channel_credentials=None,
+            call_credentials=None,
+            insecure=False,
+            compression=None,
+            wait_for_ready=None,
+            timeout=None,
+            metadata=None):
+        return grpc.experimental.unary_unary(request, target, '/pb.gubernator.PeersV1/UpdatePeerPolicies',
+            peers__pb2.UpdatePeerPoliciesReq.SerializeToString,
+            peers__pb2.UpdatePeerPoliciesResp.FromString,
+            options, channel_credentials,
+            insecure, call_credentials, compression, wait_for_ready, timeout, metadata)
+
+    @staticmethod
+    def GetPeerPolicies(request,
+            target,
+            options=(),
+            channel_credentials=None,
+            call_credentials=None,
+            insecure=False,
+            compression=None,
+            wait_for_ready=None,
+            timeout=None,
+            metadata=None):
+        return grpc.experimental.unary_unary(request, target, '/pb.gubernator.PeersV1/GetPeerPolicies',
+            peers__pb2.GetPeerPoliciesReq.SerializeToString,
+            peers__pb2.GetPeerPoliciesResp.FromString,
             options, channel_credentials,
             insecure, call_credentials, compression, wait_for_ready, timeout, metadata)
