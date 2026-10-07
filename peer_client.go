@@ -122,7 +122,14 @@ func (c *PeerClient) Info() PeerInfo {
 }
 
 // GetPeerRateLimit forwards a rate limit request to a peer. If the rate limit has `behavior == BATCHING` configured,
-// this method will attempt to batch the rate limits
+// this method will attempt to batch the rate limits.
+//
+// The peer call never runs on the caller's context. It runs on a context this
+// client owns, bounded by BatchTimeout, and the caller's context only decides
+// how long the caller waits for the answer. Every error the peer call produces
+// is therefore a fault in the peer and sendBatch records it as one; a caller
+// that stops waiting records nothing, because nothing is known about the peer.
+// Errors returned from here are already recorded and must not be recorded again.
 func (c *PeerClient) GetPeerRateLimit(ctx context.Context, r *RateLimitReq) (resp *RateLimitResp, err error) {
 	span := trace.SpanFromContext(ctx)
 	span.SetAttributes(
@@ -132,36 +139,72 @@ func (c *PeerClient) GetPeerRateLimit(ctx context.Context, r *RateLimitReq) (res
 
 	// If config asked for no batching
 	if c.conf.Behavior.DisableBatching || HasBehavior(r.Behavior, Behavior_NO_BATCHING) {
-		// If no metadata is provided
-		if r.Metadata == nil {
-			r.Metadata = make(map[string]string)
-		}
-		// Propagate the trace context along with the rate limit so
-		// peers can continue to report traces for this rate limit.
-		prop := propagation.TraceContext{}
-		prop.Inject(ctx, &MetadataCarrier{Map: r.Metadata})
-
-		// Send a single low latency rate limit request
-		resp, err := c.GetPeerRateLimits(ctx, &GetPeerRateLimitsReq{
-			Requests: []*RateLimitReq{r},
-		})
+		resp, err = c.getPeerRateLimitSingle(ctx, r)
 		if err != nil {
-			err = errors.Wrap(err, "Error in GetPeerRateLimits")
-			return nil, c.setLastErr(err)
+			return nil, errors.Wrap(err, "Error in getPeerRateLimitSingle")
 		}
-		return resp.RateLimits[0], nil
+		return resp, nil
 	}
 
 	resp, err = c.getPeerRateLimitsBatch(ctx, r)
 	if err != nil {
-		err = errors.Wrap(err, "Error in getPeerRateLimitsBatch")
-		return nil, c.setLastErr(err)
+		return nil, errors.Wrap(err, "Error in getPeerRateLimitsBatch")
 	}
 
 	return resp, nil
 }
 
-// GetPeerRateLimits requests a list of rate limit statuses from a peer
+// getPeerRateLimitSingle sends one low latency rate limit request without
+// waiting for a batch window. It goes through sendBatch so that it shares the
+// batching path's timeout, error recording and trace propagation.
+func (c *PeerClient) getPeerRateLimitSingle(ctx context.Context, r *RateLimitReq) (*RateLimitResp, error) {
+	req := request{
+		resp:    make(chan *response, 1),
+		ctx:     ctx,
+		request: r,
+	}
+
+	c.wgMutex.Lock()
+	c.wg.Add(1)
+	c.wgMutex.Unlock()
+	defer c.wg.Done()
+
+	if c.queueClosed.Load() {
+		return nil, status.Error(codes.Canceled, "grpc: the client connection is closing")
+	}
+
+	// A caller that already left gets nothing from sending, and asyncRequest
+	// retries this error, so each send would apply the hits again.
+	if err := ctx.Err(); err != nil {
+		return nil, errors.Wrap(err, "Context error before sending request")
+	}
+
+	// WithoutCancel keeps the caller's trace values for the linked span
+	// while making sure the caller's deadline never reaches the peer call.
+	go c.sendBatch(context.WithoutCancel(ctx), []*request{&req})
+
+	return c.awaitResponse(ctx, &req)
+}
+
+// awaitResponse waits for sendBatch to answer req, or for the caller to stop
+// waiting, whichever comes first.
+func (c *PeerClient) awaitResponse(ctx context.Context, req *request) (*RateLimitResp, error) {
+	select {
+	case re := <-req.resp:
+		if re.err != nil {
+			return nil, errors.Wrap(re.err, "Request error")
+		}
+		return re.rl, nil
+	case <-ctx.Done():
+		return nil, errors.Wrap(ctx.Err(), "Context error while waiting for response")
+	}
+}
+
+// GetPeerRateLimits requests a list of rate limit statuses from a peer.
+//
+// ctx must be a context gubernator owns, never a caller's: every error is
+// recorded against the peer, so a caller's cancellation or deadline passed in
+// here would be reported as a peer fault by HealthCheck.
 func (c *PeerClient) GetPeerRateLimits(ctx context.Context, r *GetPeerRateLimitsReq) (resp *GetPeerRateLimitsResp, err error) {
 	// NOTE: This must be done within the Lock since calling Wait() in Shutdown() causes
 	// a race condition if called within a separate go routine if the internal wg is `0`
@@ -187,7 +230,8 @@ func (c *PeerClient) GetPeerRateLimits(ctx context.Context, r *GetPeerRateLimits
 	return resp, nil
 }
 
-// UpdatePeerGlobals sends global rate limit status updates to a peer
+// UpdatePeerGlobals sends global rate limit status updates to a peer.
+// ctx must be a context gubernator owns; see GetPeerRateLimits.
 func (c *PeerClient) UpdatePeerGlobals(ctx context.Context, r *UpdatePeerGlobalsReq) (resp *UpdatePeerGlobalsResp, err error) {
 	ctx = tracing.StartScope(ctx, trace.WithAttributes(
 		attribute.String("peer", c.Info().GRPCAddress),
@@ -208,6 +252,9 @@ func (c *PeerClient) UpdatePeerGlobals(ctx context.Context, r *UpdatePeerGlobals
 	return resp, err
 }
 
+// setLastErr records err as a fault in this peer. HealthCheck reports this
+// instance unhealthy while any peer holds a recorded error, so only call it
+// for errors from a peer call that ran on a context gubernator owns.
 func (c *PeerClient) setLastErr(err error) error {
 	// If we get a nil error return without caching it
 	if err == nil {
@@ -263,6 +310,12 @@ func (c *PeerClient) getPeerRateLimitsBatch(ctx context.Context, r *RateLimitReq
 		return nil, status.Error(codes.Canceled, "grpc: the client connection is closing")
 	}
 
+	// select picks at random when both cases are ready, so without this a
+	// caller that already left could still be queued and sent.
+	if err := ctx.Err(); err != nil {
+		return nil, errors.Wrap(err, "Context error while enqueuing request")
+	}
+
 	select {
 	case c.queue <- &req:
 		// Successfully enqueued request.
@@ -270,17 +323,7 @@ func (c *PeerClient) getPeerRateLimitsBatch(ctx context.Context, r *RateLimitReq
 		return nil, errors.Wrap(ctx.Err(), "Context error while enqueuing request")
 	}
 
-	// Wait for a response or context cancel
-	select {
-	case re := <-req.resp:
-		if re.err != nil {
-			err := errors.Wrap(c.setLastErr(re.err), "Request error")
-			return nil, c.setLastErr(err)
-		}
-		return re.rl, nil
-	case <-ctx.Done():
-		return nil, errors.Wrap(ctx.Err(), "Context error while waiting for response")
-	}
+	return c.awaitResponse(ctx, &req)
 }
 
 // runBatch processes batching requests by waiting for requests to be queued.  Send
@@ -396,6 +439,7 @@ func (c *PeerClient) sendBatch(ctx context.Context, queue []*request) {
 	// Unlikely, but this avoids a panic if something wonky happens
 	if len(resp.RateLimits) != len(queue) {
 		err = errors.New("server responded with incorrect rate limit list size")
+		_ = c.setLastErr(err)
 
 		for _, r := range queue {
 			metricCheckErrorCounter.WithLabelValues("Item mismatch").Add(1)

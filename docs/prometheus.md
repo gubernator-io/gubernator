@@ -39,5 +39,5 @@ Finally, configure a Prometheus job to scrape the server's `/metrics` URI.
 | Metric                                 | Type    | Description |
 | -------------------------------------- | ------- | ----------- |
 | `gubernator_batch_queue_length`        | Gauge   | The getRateLimitsBatch() queue length in PeerClient.  This represents rate checks queued by for batching to a remote peer. |
-| `gubernator_batch_send_duration`       | Summary | The timings of batch send operations to a remote peer. |
+| `gubernator_batch_send_duration`       | Summary | The timings of send operations to a remote peer, including unbatched requests, which are sent as a batch of one. |
 | `gubernator_batch_send_retries`        | Counter | The count of retries occurred in asyncRequests() forwarding a request to another peer. |

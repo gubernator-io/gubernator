@@ -105,7 +105,7 @@ var (
 	}, []string{"peerAddr"})
 	metricBatchSendDuration = prometheus.NewSummaryVec(prometheus.SummaryOpts{
 		Name: "gubernator_batch_send_duration",
-		Help: "The timings of batch send operations to a remote peer.",
+		Help: "The timings of send operations to a remote peer, including unbatched requests, which are sent as a batch of one.",
 		Objectives: map[float64]float64{
 			0.99: 0.001,
 		},
