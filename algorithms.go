@@ -115,7 +115,7 @@ func tokenBucket(ctx context.Context, s Store, c Cache, r *RateLimitReq, reqStat
 		}
 
 		rl := &RateLimitResp{
-			Status:    t.Status,
+			Status:    Status_UNDER_LIMIT,
 			Limit:     r.Limit,
 			Remaining: t.Remaining,
 			ResetTime: item.ExpireAt,
@@ -143,6 +143,7 @@ func tokenBucket(ctx context.Context, s Store, c Cache, r *RateLimitReq, reqStat
 			item.ExpireAt = expire
 			t.Duration = r.Duration
 			rl.ResetTime = expire
+			rl.Remaining = t.Remaining
 		}
 
 		if s != nil && reqState.IsOwner {
@@ -154,6 +155,11 @@ func tokenBucket(ctx context.Context, s Store, c Cache, r *RateLimitReq, reqStat
 		// Client is only interested in retrieving the current status or
 		// updating the rate limit config.
 		if r.Hits == 0 {
+			// t.Status is the last admit/refuse decision. It only applies while
+			// the bucket is empty; a limit increase or renewal makes it stale.
+			if rl.Remaining == 0 {
+				rl.Status = t.Status
+			}
 			return rl, nil
 		}
 
@@ -166,6 +172,10 @@ func tokenBucket(ctx context.Context, s Store, c Cache, r *RateLimitReq, reqStat
 			t.Status = rl.Status
 			return rl, nil
 		}
+
+		// Clears a stale OVER_LIMIT. Oversized refusals below leave it
+		// UNDER_LIMIT, which TestDrainOverLimit pins for hits=0 queries.
+		t.Status = Status_UNDER_LIMIT
 
 		// If requested hits takes the remainder.
 		if t.Remaining == r.Hits {

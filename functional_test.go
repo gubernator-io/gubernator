@@ -1484,6 +1484,246 @@ func TestGlobalResetRemaining(t *testing.T) {
 	assert.NotEqual(t, 100, resp.Responses[0].Remaining)
 }
 
+func TestTokenBucketStatusFollowsAdmission(t *testing.T) {
+	defer clock.Freeze(clock.Now()).Unfreeze()
+
+	client, err := guber.DialV1Server(cluster.GetRandomPeer(cluster.DataCenterNone).GRPCAddress, nil)
+	require.NoError(t, err)
+
+	send := func(name string, hits, limit, duration int64) *guber.RateLimitResp {
+		ctx, cancel := context.WithTimeout(context.Background(), clock.Second*10)
+		defer cancel()
+		resp, err := client.GetRateLimits(ctx, &guber.GetRateLimitsReq{
+			Requests: []*guber.RateLimitReq{{
+				Name:      name,
+				UniqueKey: "account:123456",
+				Algorithm: guber.Algorithm_TOKEN_BUCKET,
+				Duration:  duration,
+				Hits:      hits,
+				Limit:     limit,
+			}},
+		})
+		require.NoError(t, err)
+		require.Equal(t, "", resp.Responses[0].Error)
+		return resp.Responses[0]
+	}
+
+	t.Run("RaisedLimitAdmitsAfterRefusal", func(t *testing.T) {
+		const name = "test_token_status_raised_limit"
+		resp := send(name, 2, 2, guber.Minute)
+		assert.Equal(t, guber.Status_UNDER_LIMIT, resp.Status)
+		assert.Equal(t, int64(0), resp.Remaining)
+
+		resp = send(name, 1, 2, guber.Minute)
+		assert.Equal(t, guber.Status_OVER_LIMIT, resp.Status)
+		assert.Equal(t, int64(0), resp.Remaining)
+
+		resp = send(name, 1, 5, guber.Minute)
+		assert.Equal(t, guber.Status_UNDER_LIMIT, resp.Status)
+		assert.Equal(t, int64(2), resp.Remaining)
+
+		resp = send(name, 1, 5, guber.Minute)
+		assert.Equal(t, guber.Status_UNDER_LIMIT, resp.Status)
+		assert.Equal(t, int64(1), resp.Remaining)
+	})
+
+	t.Run("DurationChangeRenewalAdmitsRequest", func(t *testing.T) {
+		const name = "test_token_status_duration_renewal"
+		resp := send(name, 2, 2, guber.Minute)
+		assert.Equal(t, guber.Status_UNDER_LIMIT, resp.Status)
+		assert.Equal(t, int64(0), resp.Remaining)
+
+		clock.Advance(2 * clock.Second)
+
+		// The shorter duration has already elapsed, so the bucket refills first.
+		resp = send(name, 1, 2, guber.Second)
+		assert.Equal(t, guber.Status_UNDER_LIMIT, resp.Status)
+		assert.Equal(t, int64(1), resp.Remaining)
+
+		resp = send(name, 1, 2, guber.Second)
+		assert.Equal(t, guber.Status_UNDER_LIMIT, resp.Status)
+		assert.Equal(t, int64(0), resp.Remaining)
+	})
+
+}
+
+func TestTokenBucketAdmitAfterRefusal(t *testing.T) {
+	defer clock.Freeze(clock.Now()).Unfreeze()
+
+	client, err := guber.DialV1Server(cluster.GetRandomPeer(cluster.DataCenterNone).GRPCAddress, nil)
+	require.NoError(t, err)
+
+	send := func(name string, behavior guber.Behavior, hits, limit int64) *guber.RateLimitResp {
+		ctx, cancel := context.WithTimeout(context.Background(), clock.Second*10)
+		defer cancel()
+		resp, err := client.GetRateLimits(ctx, &guber.GetRateLimitsReq{
+			Requests: []*guber.RateLimitReq{{
+				Name:      name,
+				UniqueKey: "account:123456",
+				Algorithm: guber.Algorithm_TOKEN_BUCKET,
+				Behavior:  behavior,
+				Duration:  guber.Minute,
+				Hits:      hits,
+				Limit:     limit,
+			}},
+		})
+		require.NoError(t, err)
+		require.Equal(t, "", resp.Responses[0].Error)
+		return resp.Responses[0]
+	}
+
+	t.Run("SmallerHitAdmittedAfterRefusal", func(t *testing.T) {
+		const name = "test_token_admit_after_refusal"
+		resp := send(name, 0, 6, 10)
+		assert.Equal(t, guber.Status_UNDER_LIMIT, resp.Status)
+		assert.Equal(t, int64(4), resp.Remaining)
+
+		resp = send(name, 0, 8, 10)
+		assert.Equal(t, guber.Status_OVER_LIMIT, resp.Status)
+		assert.Equal(t, int64(4), resp.Remaining)
+
+		resp = send(name, 0, 3, 10)
+		assert.Equal(t, guber.Status_UNDER_LIMIT, resp.Status)
+		assert.Equal(t, int64(1), resp.Remaining)
+	})
+
+	t.Run("ExactRemainderAdmittedAfterRefusal", func(t *testing.T) {
+		const name = "test_token_exact_remainder_after_refusal"
+		resp := send(name, 0, 6, 10)
+		assert.Equal(t, guber.Status_UNDER_LIMIT, resp.Status)
+
+		resp = send(name, 0, 8, 10)
+		assert.Equal(t, guber.Status_OVER_LIMIT, resp.Status)
+
+		resp = send(name, 0, 4, 10)
+		assert.Equal(t, guber.Status_UNDER_LIMIT, resp.Status)
+		assert.Equal(t, int64(0), resp.Remaining)
+
+		resp = send(name, 0, 1, 10)
+		assert.Equal(t, guber.Status_OVER_LIMIT, resp.Status)
+		assert.Equal(t, int64(0), resp.Remaining)
+	})
+
+	t.Run("OversizedFirstRequestRefusedWithoutDraining", func(t *testing.T) {
+		const name = "test_token_oversized_first_request"
+		resp := send(name, 0, 100, 10)
+		assert.Equal(t, guber.Status_OVER_LIMIT, resp.Status)
+		assert.Equal(t, int64(10), resp.Remaining)
+
+		resp = send(name, 0, 10, 10)
+		assert.Equal(t, guber.Status_UNDER_LIMIT, resp.Status)
+		assert.Equal(t, int64(0), resp.Remaining)
+	})
+
+	t.Run("OversizedRequestRefusedWithoutDraining", func(t *testing.T) {
+		const name = "test_token_oversized_request"
+		resp := send(name, 0, 1, 10)
+		assert.Equal(t, guber.Status_UNDER_LIMIT, resp.Status)
+
+		resp = send(name, 0, 100, 10)
+		assert.Equal(t, guber.Status_OVER_LIMIT, resp.Status)
+		assert.Equal(t, int64(9), resp.Remaining)
+
+		resp = send(name, 0, 9, 10)
+		assert.Equal(t, guber.Status_UNDER_LIMIT, resp.Status)
+		assert.Equal(t, int64(0), resp.Remaining)
+	})
+
+	t.Run("DrainOverLimitThenRaiseLimit", func(t *testing.T) {
+		const name = "test_token_drain_then_raise"
+		resp := send(name, guber.Behavior_DRAIN_OVER_LIMIT, 1, 10)
+		assert.Equal(t, guber.Status_UNDER_LIMIT, resp.Status)
+		assert.Equal(t, int64(9), resp.Remaining)
+
+		resp = send(name, guber.Behavior_DRAIN_OVER_LIMIT, 100, 10)
+		assert.Equal(t, guber.Status_OVER_LIMIT, resp.Status)
+		assert.Equal(t, int64(0), resp.Remaining)
+
+		resp = send(name, guber.Behavior_DRAIN_OVER_LIMIT, 1, 15)
+		assert.Equal(t, guber.Status_UNDER_LIMIT, resp.Status)
+		assert.Equal(t, int64(4), resp.Remaining)
+	})
+
+	t.Run("DurationChangeRenewalRefusesOversizedRequest", func(t *testing.T) {
+		const name = "test_token_renewal_oversized"
+		resp := send(name, 0, 2, 2)
+		assert.Equal(t, guber.Status_UNDER_LIMIT, resp.Status)
+
+		clock.Advance(2 * clock.Second)
+
+		ctx, cancel := context.WithTimeout(context.Background(), clock.Second*10)
+		defer cancel()
+		got, err := client.GetRateLimits(ctx, &guber.GetRateLimitsReq{
+			Requests: []*guber.RateLimitReq{{
+				Name:      name,
+				UniqueKey: "account:123456",
+				Algorithm: guber.Algorithm_TOKEN_BUCKET,
+				Duration:  guber.Second,
+				Hits:      3,
+				Limit:     2,
+			}},
+		})
+		require.NoError(t, err)
+		assert.Equal(t, guber.Status_OVER_LIMIT, got.Responses[0].Status)
+		assert.Equal(t, int64(2), got.Responses[0].Remaining)
+	})
+}
+
+func TestGlobalTokenBucketStatusFollowsAdmission(t *testing.T) {
+	name := t.Name()
+	key := guber.RandomString(10)
+	owner, err := cluster.FindOwningDaemon(name, key)
+	require.NoError(t, err)
+	peers, err := cluster.ListNonOwningDaemons(name, key)
+	require.NoError(t, err)
+
+	send := func(d *guber.Daemon, hits, limit int64) *guber.RateLimitResp {
+		ctx, cancel := context.WithTimeout(context.Background(), clock.Second*10)
+		defer cancel()
+		resp, err := d.MustClient().GetRateLimits(ctx, &guber.GetRateLimitsReq{
+			Requests: []*guber.RateLimitReq{{
+				Name:      name,
+				UniqueKey: key,
+				Algorithm: guber.Algorithm_TOKEN_BUCKET,
+				Behavior:  guber.Behavior_GLOBAL,
+				Duration:  guber.Minute * 1_000,
+				Hits:      hits,
+				Limit:     limit,
+			}},
+		})
+		require.NoError(t, err)
+		require.Equal(t, "", resp.Responses[0].Error)
+		return resp.Responses[0]
+	}
+
+	require.NoError(t, waitForIdle(1*time.Minute, cluster.GetDaemons()...))
+
+	// Seed the non-owner so it holds a cached copy and an open connection.
+	send(peers[0], 0, 2)
+
+	broadcasts := getMetricValue(t, owner, "gubernator_broadcast_duration_count")
+	resp := send(owner, 2, 2)
+	assert.Equal(t, guber.Status_UNDER_LIMIT, resp.Status)
+	assert.Equal(t, int64(0), resp.Remaining)
+	require.NoError(t, waitForBroadcast(clock.Second*10, owner, broadcasts+1))
+
+	// Refused on the owner, and on a non-owner once it has the owner's state.
+	resp = send(owner, 1, 2)
+	assert.Equal(t, guber.Status_OVER_LIMIT, resp.Status)
+	assert.Equal(t, int64(0), resp.Remaining)
+	broadcasts = getMetricValue(t, owner, "gubernator_broadcast_duration_count")
+
+	// Raise the limit on the owner; an admitted hit must report UNDER_LIMIT.
+	resp = send(owner, 1, 5)
+	assert.Equal(t, guber.Status_UNDER_LIMIT, resp.Status)
+	assert.Equal(t, int64(2), resp.Remaining)
+	require.NoError(t, waitForBroadcast(clock.Second*10, owner, broadcasts+1))
+
+	// The non-owner must report what the owner would: the hit fits, so UNDER_LIMIT.
+	resp = send(peers[0], 1, 5)
+	assert.Equal(t, guber.Status_UNDER_LIMIT, resp.Status)
+}
+
 func TestChangeLimit(t *testing.T) {
 	client, err := guber.DialV1Server(cluster.GetRandomPeer(cluster.DataCenterNone).GRPCAddress, nil)
 	require.NoError(t, err)
