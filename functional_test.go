@@ -1708,9 +1708,16 @@ func TestGlobalTokenBucketStatusFollowsAdmission(t *testing.T) {
 	require.NoError(t, waitForBroadcast(clock.Second*10, owner, broadcasts+1))
 
 	// Refused on the owner, and on a non-owner once it has the owner's state.
+	broadcasts = getMetricValue(t, owner, "gubernator_broadcast_duration_count")
 	resp = send(owner, 1, 2)
 	assert.Equal(t, guber.Status_OVER_LIMIT, resp.Status)
 	assert.Equal(t, int64(0), resp.Remaining)
+	require.NoError(t, waitForBroadcast(clock.Second*10, owner, broadcasts+1))
+
+	resp = send(peers[0], 1, 2)
+	assert.Equal(t, guber.Status_OVER_LIMIT, resp.Status)
+	assert.Equal(t, int64(0), resp.Remaining)
+	require.NoError(t, waitForIdle(1*time.Minute, cluster.GetDaemons()...))
 	broadcasts = getMetricValue(t, owner, "gubernator_broadcast_duration_count")
 
 	// Raise the limit on the owner; an admitted hit must report UNDER_LIMIT.
