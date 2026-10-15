@@ -156,9 +156,12 @@ func tokenBucket(ctx context.Context, s Store, c Cache, r *RateLimitReq, reqStat
 		// updating the rate limit config.
 		if r.Hits == 0 {
 			// t.Status is the last admit/refuse decision. It only applies while
-			// the bucket is empty; a limit increase or renewal makes it stale.
+			// the bucket is empty; a limit increase or renewal makes it stale,
+			// so clear it or it resurfaces when the bucket empties again.
 			if rl.Remaining == 0 {
 				rl.Status = t.Status
+			} else {
+				t.Status = Status_UNDER_LIMIT
 			}
 			return rl, nil
 		}

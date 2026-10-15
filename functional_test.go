@@ -1669,6 +1669,40 @@ func TestTokenBucketAdmitAfterRefusal(t *testing.T) {
 	})
 }
 
+func TestTokenBucketStatusQueryAfterRaisedLimit(t *testing.T) {
+	defer clock.Freeze(clock.Now()).Unfreeze()
+
+	client, err := guber.DialV1Server(cluster.GetRandomPeer(cluster.DataCenterNone).GRPCAddress, nil)
+	require.NoError(t, err)
+
+	send := func(key string, hits, limit int64) *guber.RateLimitResp {
+		ctx, cancel := context.WithTimeout(context.Background(), clock.Second*10)
+		defer cancel()
+		resp, err := client.GetRateLimits(ctx, &guber.GetRateLimitsReq{
+			Requests: []*guber.RateLimitReq{{
+				Name:      "test_token_status_query_raised_limit",
+				UniqueKey: key,
+				Algorithm: guber.Algorithm_TOKEN_BUCKET,
+				Duration:  guber.Minute,
+				Hits:      hits,
+				Limit:     limit,
+			}},
+		})
+		require.NoError(t, err)
+		require.Equal(t, "", resp.Responses[0].Error)
+		return resp.Responses[0]
+	}
+
+	send("control", 2, 2)
+	control := send("control", 0, 2)
+	send("refused", 2, 2)
+	send("refused", 1, 2)
+	send("refused", 0, 5)
+	refused := send("refused", 0, 2)
+	assert.Equal(t, int64(0), refused.Remaining)
+	assert.Equal(t, control.Status, refused.Status)
+}
+
 func TestGlobalTokenBucketStatusFollowsAdmission(t *testing.T) {
 	name := t.Name()
 	key := guber.RandomString(10)
