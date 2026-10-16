@@ -3306,3 +3306,166 @@ func TestSpawnDaemon_K8sStartupFailure_NoPanic(t *testing.T) {
 	})
 	require.Error(t, err, "SpawnDaemon must return an error when k8s API is unreachable")
 }
+
+func TestLeakyBucketGregorianMonthsAndYears(t *testing.T) {
+	client, err := guber.DialV1Server(cluster.PeerAt(0).GRPCAddress, nil)
+	require.NoError(t, err)
+
+	const limit = 1000
+	for _, test := range []struct {
+		name     string
+		interval int64
+		now      clock.Time
+		period   clock.Duration
+	}{
+		{"months", guber.GregorianMonths, clock.Date(2026, clock.October, 1, 0, 0, 0, 0, clock.UTC), 31 * 24 * clock.Hour},
+		{"years", guber.GregorianYears, clock.Date(2026, clock.January, 1, 0, 0, 0, 0, clock.UTC), 365 * 24 * clock.Hour},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			defer clock.Freeze(test.now).Unfreeze()
+
+			key := guber.RandomString(10)
+			req := func(hits int64) *guber.RateLimitResp {
+				resp, err := client.GetRateLimits(context.Background(), &guber.GetRateLimitsReq{
+					Requests: []*guber.RateLimitReq{{
+						Name:      t.Name(),
+						UniqueKey: key,
+						Behavior:  guber.Behavior_DURATION_IS_GREGORIAN,
+						Algorithm: guber.Algorithm_LEAKY_BUCKET,
+						Duration:  test.interval,
+						Hits:      hits,
+						Limit:     limit,
+						Burst:     limit * 10,
+					}},
+				})
+				require.NoError(t, err)
+				return resp.Responses[0]
+			}
+
+			first := req(9500)
+			assert.Equal(t, guber.Status_UNDER_LIMIT, first.Status)
+			assert.Equal(t, int64(limit*10-9500), first.Remaining)
+
+			// A quarter of the period leaks a quarter of the limit back.
+			clock.Advance(test.period / 4)
+			second := req(0)
+			assert.Equal(t, int64(500+limit/4), second.Remaining)
+
+			// Reset time stays inside the current period; the old code returned a wrapped int64.
+			end := test.now.Add(test.period).UnixMilli()
+			assert.Greater(t, second.ResetTime, clock.Now().UnixMilli())
+			assert.LessOrEqual(t, second.ResetTime, end)
+		})
+	}
+}
+
+func TestLeakyBucketGregorianPeriodLengths(t *testing.T) {
+	client, err := guber.DialV1Server(cluster.PeerAt(0).GRPCAddress, nil)
+	require.NoError(t, err)
+
+	const limit = 1000
+	day := 24 * clock.Hour
+	for _, test := range []struct {
+		name     string
+		interval int64
+		now      clock.Time
+		period   clock.Duration
+	}{
+		{"minute", guber.GregorianMinutes, clock.Date(2026, clock.October, 15, 12, 0, 0, 0, clock.UTC), clock.Minute},
+		{"hour", guber.GregorianHours, clock.Date(2026, clock.October, 15, 12, 0, 0, 0, clock.UTC), clock.Hour},
+		{"day", guber.GregorianDays, clock.Date(2026, clock.October, 15, 0, 0, 0, 0, clock.UTC), day},
+		{"week", guber.GregorianWeeks, clock.Date(2026, clock.October, 12, 0, 0, 0, 0, clock.UTC), 7 * day},
+		{"month28", guber.GregorianMonths, clock.Date(2026, clock.February, 1, 0, 0, 0, 0, clock.UTC), 28 * day},
+		{"month29", guber.GregorianMonths, clock.Date(2028, clock.February, 1, 0, 0, 0, 0, clock.UTC), 29 * day},
+		{"month30", guber.GregorianMonths, clock.Date(2026, clock.November, 1, 0, 0, 0, 0, clock.UTC), 30 * day},
+		{"month31", guber.GregorianMonths, clock.Date(2026, clock.October, 1, 0, 0, 0, 0, clock.UTC), 31 * day},
+		{"year365", guber.GregorianYears, clock.Date(2026, clock.January, 1, 0, 0, 0, 0, clock.UTC), 365 * day},
+		{"year366", guber.GregorianYears, clock.Date(2028, clock.January, 1, 0, 0, 0, 0, clock.UTC), 366 * day},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			defer clock.Freeze(test.now).Unfreeze()
+
+			key := guber.RandomString(10)
+			req := func(hits int64) *guber.RateLimitResp {
+				resp, err := client.GetRateLimits(context.Background(), &guber.GetRateLimitsReq{
+					Requests: []*guber.RateLimitReq{{
+						Name:      t.Name(),
+						UniqueKey: key,
+						Behavior:  guber.Behavior_DURATION_IS_GREGORIAN,
+						Algorithm: guber.Algorithm_LEAKY_BUCKET,
+						Duration:  test.interval,
+						Hits:      hits,
+						Limit:     limit,
+					}},
+				})
+				require.NoError(t, err)
+				return resp.Responses[0]
+			}
+
+			first := req(limit)
+			assert.Equal(t, guber.Status_UNDER_LIMIT, first.Status)
+			assert.Equal(t, int64(0), first.Remaining)
+
+			// Half the period leaks half the limit back.
+			clock.Advance(test.period / 2)
+			second := req(0)
+			assert.Equal(t, int64(limit/2), second.Remaining)
+
+			// Reset is when the bucket is full again, which is the end of the period.
+			end := test.now.Add(test.period).UnixMilli()
+			assert.Greater(t, second.ResetTime, clock.Now().UnixMilli())
+			assert.LessOrEqual(t, second.ResetTime, end)
+		})
+	}
+}
+
+func TestLeakyBucketGregorianLargeBurst(t *testing.T) {
+	client, err := guber.DialV1Server(cluster.PeerAt(0).GRPCAddress, nil)
+	require.NoError(t, err)
+
+	const (
+		limit = 1000
+		burst = 1_000_000
+	)
+	for _, test := range []struct {
+		name     string
+		interval int64
+		now      clock.Time
+	}{
+		{"months", guber.GregorianMonths, clock.Date(2026, clock.October, 1, 0, 0, 0, 0, clock.UTC)},
+		{"years", guber.GregorianYears, clock.Date(2026, clock.January, 1, 0, 0, 0, 0, clock.UTC)},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			defer clock.Freeze(test.now).Unfreeze()
+
+			key := guber.RandomString(10)
+			req := func(hits int64) *guber.RateLimitResp {
+				resp, err := client.GetRateLimits(context.Background(), &guber.GetRateLimitsReq{
+					Requests: []*guber.RateLimitReq{{
+						Name:      t.Name(),
+						UniqueKey: key,
+						Behavior:  guber.Behavior_DURATION_IS_GREGORIAN,
+						Algorithm: guber.Algorithm_LEAKY_BUCKET,
+						Duration:  test.interval,
+						Hits:      hits,
+						Limit:     limit,
+						Burst:     burst,
+					}},
+				})
+				require.NoError(t, err)
+				return resp.Responses[0]
+			}
+
+			req(burst - 10)
+			clock.Advance(clock.Hour)
+			resp := req(1)
+			assert.Equal(t, guber.Status_UNDER_LIMIT, resp.Status)
+
+			// An int64 overflow wraps the reset time far from now in either direction.
+			const week = int64(7 * 24 * 3600 * 1000)
+			now := clock.Now().UnixMilli()
+			assert.Greater(t, resp.ResetTime, now-week)
+			assert.Less(t, resp.ResetTime, now+400*week)
+		})
+	}
+}

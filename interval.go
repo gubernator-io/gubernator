@@ -80,7 +80,9 @@ const (
 	GregorianYears
 )
 
-// GregorianDuration returns the entire duration of the Gregorian interval
+// GregorianDuration returns the entire duration of the Gregorian interval in
+// milliseconds. Months and years vary in length (28-31 days, 365-366 days), so
+// they are measured from the start of the current period to the start of the next.
 func GregorianDuration(now clock.Time, d int64) (int64, error) {
 	switch d {
 	case GregorianMinutes:
@@ -93,16 +95,12 @@ func GregorianDuration(now clock.Time, d int64) (int64, error) {
 		return 604800000, nil
 	case GregorianMonths:
 		y, m, _ := now.Date()
-		// Given the beginning of the month, subtract the end of the current month to get the duration
 		begin := clock.Date(y, m, 1, 0, 0, 0, 0, now.Location())
-		end := begin.AddDate(0, 1, 0).Add(-clock.Nanosecond)
-		return end.UnixNano() - begin.UnixNano()/1000000, nil
+		return begin.AddDate(0, 1, 0).Sub(begin).Milliseconds(), nil
 	case GregorianYears:
 		y, _, _ := now.Date()
-		// Given the beginning of the year, subtract the end of the current year to get the duration
 		begin := clock.Date(y, clock.January, 1, 0, 0, 0, 0, now.Location())
-		end := begin.AddDate(1, 0, 0).Add(-clock.Nanosecond)
-		return end.UnixNano() - begin.UnixNano()/1000000, nil
+		return begin.AddDate(1, 0, 0).Sub(begin).Milliseconds(), nil
 	}
 	return 0, errors.New("behavior DURATION_IS_GREGORIAN is set; but `Duration` is not a valid gregorian interval")
 
