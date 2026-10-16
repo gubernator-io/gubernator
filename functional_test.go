@@ -2943,14 +2943,13 @@ func (h *captureHook) captured() []*logrus.Entry {
 	return out
 }
 
-func TestAsyncRequestPreservesContextError(t *testing.T) {
-	const rateLimitName = "TestAsyncRequestPreservesContextError"
+func TestAsyncRequestCallerDeadlineIsNotPeerFault(t *testing.T) {
+	const rateLimitName = "TestAsyncRequestCallerDeadlineIsNotPeerFault"
 
 	hook := &captureHook{filter: "GetPeer() returned peer that is not connected"}
 
-	// Spawn a two-node cluster with BatchWait (5s) much longer than the test
-	// context deadline (200ms). The batch never fires, so asyncRequest() sees
-	// context.Canceled from getPeerRateLimitsBatch on every attempt.
+	// BatchWait (5s) is much longer than the test context deadline (200ms),
+	// so the caller gives up while its request is still waiting for a batch.
 	const (
 		grpc0 = "127.0.0.1:7890"
 		http0 = "127.0.0.1:7880"
@@ -3009,8 +3008,11 @@ func TestAsyncRequestPreservesContextError(t *testing.T) {
 	client, err := guber.DialV1Server(peer0.PeerInfo.GRPCAddress, nil)
 	require.NoError(t, err)
 
-	// Send a request with a 200ms deadline (shorter than BatchWait). The batch
-	// never dispatches, so asyncRequest retries until attempts > 5 and logs.
+	// countError files a deadline-exceeded error under "Timeout", so that is the
+	// series the old retry loop bumped for this caller.
+	const metricName = `gubernator_check_error_counter{error="Timeout"}`
+	before := counterValue(t, peer0.Config().HTTPListenAddress, metricName)
+
 	ctx, cancel := context.WithTimeout(context.Background(), 200*time.Millisecond)
 	defer cancel()
 	_, _ = client.GetRateLimits(ctx, &guber.GetRateLimitsReq{
@@ -3028,12 +3030,248 @@ func TestAsyncRequestPreservesContextError(t *testing.T) {
 
 	time.Sleep(500 * time.Millisecond)
 
-	entries := hook.captured()
-	require.NotEmpty(t, entries)
+	// Every peer is healthy, so a caller that left must not be reported as a
+	// peer that is not connected, in the log or in the error metric.
+	assert.Empty(t, hook.captured())
+	assert.Equal(t, before, counterValue(t, peer0.Config().HTTPListenAddress, metricName))
+}
 
-	for _, entry := range entries {
-		assert.NotNil(t, entry.Data["error"])
+// counterValue returns the current value of a metric series, or zero when the
+// series has never been incremented.
+func counterValue(t *testing.T, addr, series string) float64 {
+	t.Helper()
+	metrics, err := getMetrics(addr, series)
+	require.NoError(t, err)
+	if sample, ok := metrics[series]; ok {
+		return float64(sample.Value)
 	}
+	return 0
+}
+
+// countingPeerServer is a PeersV1Server that records how many RPCs and how
+// many rate limit requests it received.
+type countingPeerServer struct {
+	guber.UnimplementedPeersV1Server
+	rpcs     atomic.Int64
+	requests atomic.Int64
+}
+
+func (s *countingPeerServer) GetPeerRateLimits(_ context.Context, r *guber.GetPeerRateLimitsReq) (*guber.GetPeerRateLimitsResp, error) {
+	s.rpcs.Add(1)
+	s.requests.Add(int64(len(r.Requests)))
+	resp := &guber.GetPeerRateLimitsResp{RateLimits: make([]*guber.RateLimitResp, len(r.Requests))}
+	for i := range r.Requests {
+		resp.RateLimits[i] = &guber.RateLimitResp{Remaining: 77}
+	}
+	return resp, nil
+}
+
+// TestBatchSkipsCallersThatLeft covers callers that give up after their
+// request is queued for a batch but before the batch is sent.
+func TestBatchSkipsCallersThatLeft(t *testing.T) {
+	const rateLimitName = "TestBatchSkipsCallersThatLeft"
+
+	owner := &countingPeerServer{}
+	lis, err := net.Listen("tcp", "127.0.0.1:0")
+	require.NoError(t, err)
+	srv := grpc.NewServer()
+	guber.RegisterPeersV1Server(srv, owner)
+	go func() { _ = srv.Serve(lis) }()
+	t.Cleanup(srv.Stop)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	d, err := guber.SpawnDaemon(ctx, guber.DaemonConfig{
+		Logger:            logrus.NewEntry(logrus.New()),
+		InstanceID:        "peer0",
+		GRPCListenAddress: "127.0.0.1:0",
+		HTTPListenAddress: "127.0.0.1:0",
+		AdvertiseAddress:  "127.0.0.1:0",
+		Behaviors: guber.BehaviorConfig{
+			BatchWait:    500 * time.Millisecond,
+			BatchTimeout: 2 * time.Second,
+		},
+	})
+	require.NoError(t, err)
+	t.Cleanup(func() { d.Close() })
+
+	d.PeerInfo = guber.PeerInfo{
+		GRPCAddress: d.GRPCListeners[0].Addr().String(),
+		HTTPAddress: d.HTTPListener.Addr().String(),
+	}
+	ownerPeer := guber.PeerInfo{GRPCAddress: lis.Addr().String()}
+	d.SetPeers([]guber.PeerInfo{d.PeerInfo, ownerPeer})
+
+	const numKeys = 8
+	var keys []string
+	for i := 0; len(keys) < numKeys && i < 5000; i++ {
+		k := guber.RandomString(10)
+		peer, err := d.V1Server.GetPeer(context.Background(), rateLimitName+"_"+k)
+		require.NoError(t, err)
+		if peer.Info().GRPCAddress == ownerPeer.GRPCAddress {
+			keys = append(keys, k)
+		}
+	}
+	require.Len(t, keys, numKeys)
+
+	client, err := guber.DialV1Server(d.PeerInfo.GRPCAddress, nil)
+	require.NoError(t, err)
+
+	send := func(key string, timeout time.Duration) {
+		reqCtx, reqCancel := context.WithTimeout(context.Background(), timeout)
+		defer reqCancel()
+		_, _ = client.GetRateLimits(reqCtx, &guber.GetRateLimitsReq{
+			Requests: []*guber.RateLimitReq{
+				{
+					Name:      rateLimitName,
+					UniqueKey: key,
+					Algorithm: guber.Algorithm_TOKEN_BUCKET,
+					Duration:  guber.Second * 60,
+					Limit:     100,
+					Hits:      1,
+				},
+			},
+		})
+	}
+
+	t.Run("AllCallersLeft", func(t *testing.T) {
+		// Every caller leaves at 50ms, well before the 500ms batch window ends.
+		var wg sync.WaitGroup
+		for _, key := range keys[:4] {
+			wg.Add(1)
+			go func() {
+				defer wg.Done()
+				send(key, 50*time.Millisecond)
+			}()
+		}
+		wg.Wait()
+
+		time.Sleep(time.Second)
+		assert.Equal(t, int64(0), owner.rpcs.Load())
+		assert.Equal(t, int64(0), owner.requests.Load())
+	})
+
+	t.Run("SomeCallersLeft", func(t *testing.T) {
+		// Two callers leave at 50ms and two wait out the batch window.
+		var wg sync.WaitGroup
+		for i, key := range keys[4:] {
+			timeout := 50 * time.Millisecond
+			if i%2 == 0 {
+				timeout = 3 * time.Second
+			}
+			wg.Add(1)
+			go func() {
+				defer wg.Done()
+				send(key, timeout)
+			}()
+		}
+		wg.Wait()
+
+		assert.Equal(t, int64(1), owner.rpcs.Load())
+		assert.Equal(t, int64(2), owner.requests.Load())
+	})
+}
+
+// TestBatchCallerCancelAndStay covers explicit cancellation (not a deadline) by
+// callers queued in a batch, alongside callers that stay and must still be served.
+func TestBatchCallerCancelAndStay(t *testing.T) {
+	const rateLimitName = "TestBatchCallerCancelAndStay"
+
+	hook := &captureHook{filter: "GetPeer() returned peer that is not connected"}
+	owner := &countingPeerServer{}
+	lis, err := net.Listen("tcp", "127.0.0.1:0")
+	require.NoError(t, err)
+	srv := grpc.NewServer()
+	guber.RegisterPeersV1Server(srv, owner)
+	go func() { _ = srv.Serve(lis) }()
+	t.Cleanup(srv.Stop)
+
+	logger := logrus.New()
+	logger.SetLevel(logrus.ErrorLevel)
+	logger.AddHook(hook)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	d, err := guber.SpawnDaemon(ctx, guber.DaemonConfig{
+		Logger:            logrus.NewEntry(logger),
+		InstanceID:        "peer0",
+		GRPCListenAddress: "127.0.0.1:0",
+		HTTPListenAddress: "127.0.0.1:0",
+		AdvertiseAddress:  "127.0.0.1:0",
+		Behaviors: guber.BehaviorConfig{
+			BatchWait:    500 * time.Millisecond,
+			BatchTimeout: 2 * time.Second,
+		},
+	})
+	require.NoError(t, err)
+	t.Cleanup(func() { d.Close() })
+
+	d.PeerInfo = guber.PeerInfo{
+		GRPCAddress: d.GRPCListeners[0].Addr().String(),
+		HTTPAddress: d.HTTPListener.Addr().String(),
+	}
+	ownerPeer := guber.PeerInfo{GRPCAddress: lis.Addr().String()}
+	d.SetPeers([]guber.PeerInfo{d.PeerInfo, ownerPeer})
+
+	var keys []string
+	for i := 0; len(keys) < 3 && i < 5000; i++ {
+		k := guber.RandomString(10)
+		peer, err := d.V1Server.GetPeer(context.Background(), rateLimitName+"_"+k)
+		require.NoError(t, err)
+		if peer.Info().GRPCAddress == ownerPeer.GRPCAddress {
+			keys = append(keys, k)
+		}
+	}
+	require.Len(t, keys, 3)
+
+	client, err := guber.DialV1Server(d.PeerInfo.GRPCAddress, nil)
+	require.NoError(t, err)
+
+	const metricName = `gubernator_check_error_counter{error="Peer not connected"}`
+	before := counterValue(t, d.HTTPListener.Addr().String(), metricName)
+
+	send := func(reqCtx context.Context, key string) (*guber.GetRateLimitsResp, error) {
+		return client.GetRateLimits(reqCtx, &guber.GetRateLimitsReq{
+			Requests: []*guber.RateLimitReq{
+				{
+					Name:      rateLimitName,
+					UniqueKey: key,
+					Algorithm: guber.Algorithm_TOKEN_BUCKET,
+					Duration:  guber.Second * 60,
+					Limit:     100,
+					Hits:      1,
+				},
+			},
+		})
+	}
+
+	// Two callers cancel while queued; one stays and is answered by the owner.
+	var wg sync.WaitGroup
+	for _, key := range keys[:2] {
+		cancelCtx, cancelCaller := context.WithCancel(context.Background())
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			_, _ = send(cancelCtx, key)
+		}()
+		time.AfterFunc(50*time.Millisecond, cancelCaller)
+	}
+	stayCtx, stayCancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer stayCancel()
+	resp, err := send(stayCtx, keys[2])
+	wg.Wait()
+	require.NoError(t, err)
+	require.Len(t, resp.Responses, 1)
+	assert.Empty(t, resp.Responses[0].Error)
+	assert.Equal(t, int64(77), resp.Responses[0].Remaining)
+	assert.Equal(t, ownerPeer.GRPCAddress, resp.Responses[0].Metadata["owner"])
+
+	assert.Equal(t, int64(1), owner.rpcs.Load())
+	assert.Equal(t, int64(1), owner.requests.Load())
+
+	time.Sleep(500 * time.Millisecond)
+	assert.Empty(t, hook.captured())
+	assert.Equal(t, before, counterValue(t, d.HTTPListener.Addr().String(), metricName))
 }
 
 // slowPeerServer is a PeersV1Server that stalls every GetPeerRateLimits call, used to force

@@ -366,6 +366,13 @@ func (s *V1Instance) asyncRequest(ctx context.Context, req *AsyncReq) {
 		r, err = req.Peer.GetPeerRateLimit(ctx, proto.Clone(req.Req).(*RateLimitReq))
 		if err != nil {
 			if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+				// The caller's context is done, so a retry cannot succeed and the
+				// failure says nothing about the peer.
+				if ctxErr := ctx.Err(); ctxErr != nil {
+					err = fmt.Errorf("caller gave up on rate limit '%s': %w", req.Key, ctxErr)
+					resp.Resp = &RateLimitResp{Error: err.Error()}
+					break
+				}
 				attempts++
 				metricBatchSendRetries.WithLabelValues(req.Req.Name).Inc()
 				newPeer, peerErr := s.GetPeer(ctx, req.Key)
