@@ -855,7 +855,9 @@ func TestLeakyBucketGregorian(t *testing.T) {
 }
 
 func TestLeakyBucketGregorianWeek(t *testing.T) {
-	defer clock.Freeze(clock.Now()).Unfreeze()
+	// Wednesday noon keeps the 4 hours the test advances well clear of the Sunday 23:59:59.999
+	// week end, which would otherwise reset the bucket mid-test.
+	defer clock.Freeze(clock.Date(2026, clock.October, 14, 12, 0, 0, 0, clock.Now().Location())).Unfreeze()
 
 	client, err := guber.DialV1Server(cluster.PeerAt(0).GRPCAddress, nil)
 	require.NoError(t, err)
@@ -888,6 +890,74 @@ func TestLeakyBucketGregorianWeek(t *testing.T) {
 			Name:      "third hit; leak one hit",
 			Hits:      1,
 			Remaining: 58,
+			Status:    guber.Status_UNDER_LIMIT,
+		},
+	}
+
+	name := t.Name()
+	key := guber.RandomString(10)
+
+	for _, test := range tests {
+		t.Run(test.Name, func(t *testing.T) {
+			resp, err := client.GetRateLimits(context.Background(), &guber.GetRateLimitsReq{
+				Requests: []*guber.RateLimitReq{
+					{
+						Name:      name,
+						UniqueKey: key,
+						Behavior:  guber.Behavior_DURATION_IS_GREGORIAN,
+						Algorithm: guber.Algorithm_LEAKY_BUCKET,
+						Duration:  guber.GregorianWeeks,
+						Hits:      test.Hits,
+						Limit:     60,
+					},
+				},
+			})
+			require.NoError(t, err)
+
+			rl := resp.Responses[0]
+			assert.Equal(t, test.Status, rl.Status)
+			assert.Equal(t, test.Remaining, rl.Remaining)
+			assert.Equal(t, int64(60), rl.Limit)
+			// ResetTime is milliseconds since epoch; it must never be in the past.
+			assert.GreaterOrEqual(t, rl.ResetTime, clock.Now().UnixMilli())
+			clock.Advance(test.Sleep)
+		})
+	}
+}
+
+func TestLeakyBucketGregorianWeekBoundary(t *testing.T) {
+	// Sunday 21:00; the 4 hours advanced by the last step cross the end of the week.
+	defer clock.Freeze(clock.Date(2026, clock.October, 4, 21, 0, 0, 0, clock.Now().Location())).Unfreeze()
+
+	client, err := guber.DialV1Server(cluster.PeerAt(0).GRPCAddress, nil)
+	require.NoError(t, err)
+
+	// The week ends Sunday 23:59:59.999, so the bucket expires and the third hit creates a fresh one.
+	tests := []struct {
+		Name      string
+		Hits      int64
+		Remaining int64
+		Status    guber.Status
+		Sleep     clock.Duration
+	}{
+		{
+			Name:      "first hit",
+			Hits:      1,
+			Remaining: 59,
+			Status:    guber.Status_UNDER_LIMIT,
+			Sleep:     clock.Hour,
+		},
+		{
+			Name:      "second hit; no leak",
+			Hits:      1,
+			Remaining: 58,
+			Status:    guber.Status_UNDER_LIMIT,
+			Sleep:     clock.Hour * 3,
+		},
+		{
+			Name:      "third hit; week ended, bucket reset",
+			Hits:      1,
+			Remaining: 59,
 			Status:    guber.Status_UNDER_LIMIT,
 		},
 	}
