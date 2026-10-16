@@ -3371,3 +3371,49 @@ func TestGlobalLeavesCallerRequestUnchanged(t *testing.T) {
 	assert.Equal(t, int64(3), req3.Hits)
 	assert.Equal(t, guber.Behavior_GLOBAL, req3.Behavior)
 }
+
+func TestGlobalOwnerAllowsCallerToReuseRequest(t *testing.T) {
+	name := t.Name()
+	key := guber.RandomString(10)
+	owner, err := cluster.FindOwningDaemon(name, key)
+	require.NoError(t, err)
+	require.NoError(t, waitForIdle(1*time.Minute, cluster.GetDaemons()...))
+	prev := getMetricValue(t, owner, "gubernator_broadcast_duration_count")
+
+	req := &guber.RateLimitReq{
+		Name:      name,
+		UniqueKey: key,
+		Algorithm: guber.Algorithm_TOKEN_BUCKET,
+		Behavior:  guber.Behavior_GLOBAL,
+		Duration:  guber.Minute * 1_000,
+		Hits:      1,
+		Limit:     100,
+	}
+	_, err = owner.V1Server.GetRateLimits(context.Background(),
+		&guber.GetRateLimitsReq{Requests: []*guber.RateLimitReq{req}})
+	require.NoError(t, err)
+
+	// A caller that recycles its request must not race the owner's broadcast.
+	stop := make(chan struct{})
+	var wg sync.WaitGroup
+	wg.Add(1)
+	var once sync.Once
+	stopWriter := func() { once.Do(func() { close(stop); wg.Wait() }) }
+	defer stopWriter()
+	go func() {
+		defer wg.Done()
+		for {
+			select {
+			case <-stop:
+				return
+			default:
+				req.Name = name
+				req.Hits = 1
+				runtime.Gosched()
+			}
+		}
+	}()
+
+	require.NoError(t, waitForBroadcast(clock.Second*10, owner, prev+1))
+	stopWriter()
+}

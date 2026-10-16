@@ -91,7 +91,7 @@ func (gm *globalManager) QueueHit(r *RateLimitReq) {
 
 func (gm *globalManager) QueueUpdate(req *RateLimitReq) {
 	if req.Hits != 0 {
-		gm.broadcastQueue <- req
+		gm.broadcastQueue <- proto.Clone(req).(*RateLimitReq)
 	}
 }
 
