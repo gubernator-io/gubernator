@@ -26,6 +26,7 @@ import (
 	"net"
 	"net/http"
 	"os"
+	"runtime"
 	"sort"
 	"strings"
 	"sync"
@@ -3990,6 +3991,116 @@ func TestSpawnDaemon_K8sStartupFailure_NoPanic(t *testing.T) {
 		},
 	})
 	require.Error(t, err, "SpawnDaemon must return an error when k8s API is unreachable")
+}
+
+func TestGlobalLeavesCallerRequestUnchanged(t *testing.T) {
+	name := t.Name()
+	key := guber.RandomString(10)
+	owner, err := cluster.FindOwningDaemon(name, key)
+	require.NoError(t, err)
+	peers, err := cluster.ListNonOwningDaemons(name, key)
+	require.NoError(t, err)
+	require.NoError(t, waitForIdle(1*time.Minute, cluster.GetDaemons()...))
+
+	newReq := func(hits int64, behavior guber.Behavior) *guber.RateLimitReq {
+		return &guber.RateLimitReq{
+			Name:      name,
+			UniqueKey: key,
+			Algorithm: guber.Algorithm_TOKEN_BUCKET,
+			Behavior:  behavior,
+			Duration:  guber.Minute * 1_000,
+			Hits:      hits,
+			Limit:     100,
+		}
+	}
+	req1 := newReq(1, guber.Behavior_GLOBAL)
+	req2 := newReq(2, guber.Behavior_GLOBAL|guber.Behavior_RESET_REMAINING)
+	req3 := newReq(3, guber.Behavior_GLOBAL)
+
+	prev := getMetricValue(t, owner, "gubernator_broadcast_duration_count")
+
+	// Reader goroutine races with the global manager if it holds our pointers.
+	stop := make(chan struct{})
+	var wg sync.WaitGroup
+	wg.Add(1)
+	var once sync.Once
+	stopReader := func() { once.Do(func() { close(stop); wg.Wait() }) }
+	defer stopReader()
+	go func() {
+		defer wg.Done()
+		for {
+			select {
+			case <-stop:
+				return
+			default:
+				_ = req1.Hits + req2.Hits + req3.Hits + int64(req1.Behavior)
+				runtime.Gosched()
+			}
+		}
+	}()
+
+	for _, req := range []*guber.RateLimitReq{req1, req2, req3} {
+		_, err = peers[0].V1Server.GetRateLimits(context.Background(),
+			&guber.GetRateLimitsReq{Requests: []*guber.RateLimitReq{req}})
+		require.NoError(t, err)
+	}
+
+	// The owner broadcasts only after it received the aggregated hits.
+	require.NoError(t, waitForBroadcast(clock.Second*10, owner, prev+1))
+	stopReader()
+
+	assert.Equal(t, int64(1), req1.Hits)
+	assert.Equal(t, guber.Behavior_GLOBAL, req1.Behavior)
+	assert.Equal(t, int64(2), req2.Hits)
+	assert.Equal(t, guber.Behavior_GLOBAL|guber.Behavior_RESET_REMAINING, req2.Behavior)
+	assert.Equal(t, int64(3), req3.Hits)
+	assert.Equal(t, guber.Behavior_GLOBAL, req3.Behavior)
+}
+
+func TestGlobalOwnerAllowsCallerToReuseRequest(t *testing.T) {
+	name := t.Name()
+	key := guber.RandomString(10)
+	owner, err := cluster.FindOwningDaemon(name, key)
+	require.NoError(t, err)
+	require.NoError(t, waitForIdle(1*time.Minute, cluster.GetDaemons()...))
+	prev := getMetricValue(t, owner, "gubernator_broadcast_duration_count")
+
+	req := &guber.RateLimitReq{
+		Name:      name,
+		UniqueKey: key,
+		Algorithm: guber.Algorithm_TOKEN_BUCKET,
+		Behavior:  guber.Behavior_GLOBAL,
+		Duration:  guber.Minute * 1_000,
+		Hits:      1,
+		Limit:     100,
+	}
+	_, err = owner.V1Server.GetRateLimits(context.Background(),
+		&guber.GetRateLimitsReq{Requests: []*guber.RateLimitReq{req}})
+	require.NoError(t, err)
+
+	// A caller that recycles its request must not race the owner's broadcast.
+	stop := make(chan struct{})
+	var wg sync.WaitGroup
+	wg.Add(1)
+	var once sync.Once
+	stopWriter := func() { once.Do(func() { close(stop); wg.Wait() }) }
+	defer stopWriter()
+	go func() {
+		defer wg.Done()
+		for {
+			select {
+			case <-stop:
+				return
+			default:
+				req.Name = name
+				req.Hits = 1
+				runtime.Gosched()
+			}
+		}
+	}()
+
+	require.NoError(t, waitForBroadcast(clock.Second*10, owner, prev+1))
+	stopWriter()
 }
 
 func TestLeakyBucketGregorianMonthsAndYears(t *testing.T) {

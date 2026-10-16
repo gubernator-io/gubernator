@@ -84,13 +84,14 @@ func newGlobalManager(conf BehaviorConfig, instance *V1Instance) *globalManager 
 
 func (gm *globalManager) QueueHit(r *RateLimitReq) {
 	if r.Hits != 0 {
-		gm.hitsQueue <- r
+		// runAsyncHits mutates queued requests while aggregating, so it must not hold the caller's pointer.
+		gm.hitsQueue <- proto.Clone(r).(*RateLimitReq)
 	}
 }
 
 func (gm *globalManager) QueueUpdate(req *RateLimitReq) {
 	if req.Hits != 0 {
-		gm.broadcastQueue <- req
+		gm.broadcastQueue <- proto.Clone(req).(*RateLimitReq)
 	}
 }
 
