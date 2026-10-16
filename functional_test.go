@@ -1018,6 +1018,35 @@ func TestLeakyBucketContinuousLeak(t *testing.T) {
 			},
 		},
 		{
+			// Negative hits refund tokens but never lift the balance above
+			// burst, for an existing key and for a key's first request.
+			Name:     "NegativeHitsClampToBurst",
+			Limit:    10,
+			Duration: guber.Second * 10,
+			Burst:    10,
+			Steps: []step{
+				{Key: "a", Hits: 10, Remaining: 0, Status: under},
+				{Key: "a", Hits: -15, Remaining: 10, Status: under},
+				{Key: "a", Hits: 10, Remaining: 0, Status: under},
+				{Key: "b", Hits: -5, Remaining: 10, Status: under},
+				{Key: "b", Hits: 10, Remaining: 0, Status: under},
+			},
+		},
+		{
+			// DRAIN_OVER_LIMIT drains a balance below one token too, so the
+			// 0.9 token does not turn into 1.1 by the next request.
+			Name:     "DrainOverLimitBelowOneToken",
+			Limit:    10,
+			Duration: guber.Second * 10,
+			Burst:    10,
+			Steps: []step{
+				{Key: "a", Hits: 10, Remaining: 0, Status: under, Sleep: 900 * clock.Millisecond},
+				{Key: "a", Hits: 1, Behavior: guber.Behavior_DRAIN_OVER_LIMIT, Remaining: 0, Status: over, Sleep: 200 * clock.Millisecond},
+				{Key: "a", Hits: 1, Remaining: 0, Status: over, Sleep: 800 * clock.Millisecond},
+				{Key: "a", Hits: 1, Remaining: 0, Status: under},
+			},
+		},
+		{
 			// DRAIN_OVER_LIMIT zeroes the balance, fraction included, so the
 			// next token arrives one full token-time after the drain.
 			Name:     "DrainOverLimitDiscardsFraction",

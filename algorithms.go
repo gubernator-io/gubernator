@@ -399,15 +399,6 @@ func leakyBucket(ctx context.Context, s Store, c Cache, r *RateLimitReq, reqStat
 			}()
 		}
 
-		// If we are already at the limit
-		if wholeTokens(b.Remaining) == 0 && r.Hits > 0 {
-			if reqState.IsOwner {
-				metricOverLimitCounter.Add(1)
-			}
-			rl.Status = Status_OVER_LIMIT
-			return rl, nil
-		}
-
 		// If requested is more than available, then return over the limit
 		// without updating the bucket, unless `DRAIN_OVER_LIMIT` is set.
 		if r.Hits > wholeTokens(b.Remaining) {
@@ -430,7 +421,8 @@ func leakyBucket(ctx context.Context, s Store, c Cache, r *RateLimitReq, reqStat
 			return rl, nil
 		}
 
-		b.Remaining -= float64(r.Hits)
+		// Negative hits refund tokens, which must not lift the balance above burst.
+		b.Remaining = math.Min(float64(b.Burst), b.Remaining-float64(r.Hits))
 		rl.Remaining = wholeTokens(b.Remaining)
 		rl.ResetTime = createdAt + (rl.Limit-rl.Remaining)*int64(rate)
 		return rl, nil
@@ -463,8 +455,9 @@ func leakyBucketNewItem(ctx context.Context, s Store, c Cache, r *RateLimitReq, 
 	}
 
 	// Create a new leaky bucket
+	remaining := min(r.Burst, r.Burst-r.Hits)
 	b := LeakyBucketItem{
-		Remaining: float64(r.Burst - r.Hits),
+		Remaining: float64(remaining),
 		Limit:     r.Limit,
 		Duration:  duration,
 		UpdatedAt: createdAt,
@@ -474,8 +467,8 @@ func leakyBucketNewItem(ctx context.Context, s Store, c Cache, r *RateLimitReq, 
 	rl := RateLimitResp{
 		Status:    Status_UNDER_LIMIT,
 		Limit:     b.Limit,
-		Remaining: r.Burst - r.Hits,
-		ResetTime: createdAt + (b.Limit-(r.Burst-r.Hits))*int64(rate),
+		Remaining: remaining,
+		ResetTime: createdAt + (b.Limit-remaining)*int64(rate),
 	}
 
 	// Client could be requesting that we start with the bucket OVER_LIMIT
