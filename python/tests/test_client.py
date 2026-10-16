@@ -49,7 +49,12 @@ def cluster(tmp_path_factory):
         yield proc
     finally:
         proc.send_signal(signal.SIGINT)
-        proc.wait(timeout=10)
+        try:
+            proc.wait(timeout=10)
+        except subprocess.TimeoutExpired:
+            # Graceful shutdown has no deadline, so a hung cluster would hold the ports.
+            proc.kill()
+            proc.wait()
 
 
 def test_import_exposes_client():
