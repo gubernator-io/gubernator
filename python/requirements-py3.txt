@@ -1,5 +1,5 @@
-googleapis-common-protos==1.66.0
-grpcio==1.68.1
-grpcio-tools==1.68.1
-protobuf==5.29.6
-pytest==9.0.3
+googleapis-common-protos==1.75.5
+grpcio==1.84.0
+grpcio-tools==1.84.0
+protobuf==7.36.2
+pytest==9.1.1

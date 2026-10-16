@@ -16,17 +16,15 @@
 # limitations under the License.
 #
 
-try:  # for pip >= 10
-    from pip._internal.req import parse_requirements
-except ImportError:  # for pip <= 9.0.3
-    from pip.req import parse_requirements
 from setuptools import setup, find_packages
 
-with open('version', 'r') as version_file:
-    version = version_file.readline().strip()
+# requirements-py3.txt is also the dev environment; installing the client needs only the
+# runtime packages, with the tested versions as minimums.
+DEV_ONLY = ('pytest==', 'grpcio-tools==')
 
-reqs = parse_requirements('requirements-py3.txt', session='')
-requirements = [str(r.req) for r in reqs]
+with open('requirements-py3.txt', 'r') as requirements_file:
+    requirements = [line.strip().replace('==', '>=') for line in requirements_file
+                    if line.strip() and not line.startswith(DEV_ONLY)]
 
 setup(
     name='gubernator',
@@ -39,16 +37,15 @@ setup(
     packages=find_packages('.', exclude=['tests']),
     install_requires=requirements,
     license="Apache Software License 2.0",
-    python_requires='>=3.8',
+    python_requires='>=3.10',
     classifiers=[
         'Development Status :: 4 - Beta',
         'Intended Audience :: Developers',
         'License :: OSI Approved :: Apache Software License',
         'Natural Language :: English',
-        'Programming Language :: Python :: 3.8',
-        'Programming Language :: Python :: 3.9',
         'Programming Language :: Python :: 3.10',
         'Programming Language :: Python :: 3.11',
         'Programming Language :: Python :: 3.12',
+        'Programming Language :: Python :: 3.13',
     ],
 )
