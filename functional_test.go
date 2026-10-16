@@ -3152,6 +3152,7 @@ func TestBatchSkipsCallersThatLeft(t *testing.T) {
 	})
 
 	t.Run("SomeCallersLeft", func(t *testing.T) {
+		rpcsBefore, requestsBefore := owner.rpcs.Load(), owner.requests.Load()
 		// Two callers leave at 50ms and two wait out the batch window.
 		var wg sync.WaitGroup
 		for i, key := range keys[4:] {
@@ -3167,8 +3168,8 @@ func TestBatchSkipsCallersThatLeft(t *testing.T) {
 		}
 		wg.Wait()
 
-		assert.Equal(t, int64(1), owner.rpcs.Load())
-		assert.Equal(t, int64(2), owner.requests.Load())
+		assert.Equal(t, int64(1), owner.rpcs.Load()-rpcsBefore)
+		assert.Equal(t, int64(2), owner.requests.Load()-requestsBefore)
 	})
 }
 
