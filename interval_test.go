@@ -166,3 +166,34 @@ func TestGregorianExpirationInvalid(t *testing.T) {
 	assert.Equal(t, int64(0), expire)
 	assert.Equal(t, "behavior DURATION_IS_GREGORIAN is set; but `Duration` is not a valid gregorian interval", err.Error())
 }
+
+func TestGregorianDuration(t *testing.T) {
+	for _, test := range []struct {
+		name     string
+		now      clock.Time
+		interval int64
+		want     int64
+	}{
+		{"minutes", clock.Date(2026, clock.October, 15, 12, 0, 0, 0, clock.UTC), gubernator.GregorianMinutes, 60000},
+		{"hours", clock.Date(2026, clock.October, 15, 12, 0, 0, 0, clock.UTC), gubernator.GregorianHours, 3600000},
+		{"days", clock.Date(2026, clock.October, 15, 12, 0, 0, 0, clock.UTC), gubernator.GregorianDays, 86400000},
+		{"weeks", clock.Date(2026, clock.October, 15, 12, 0, 0, 0, clock.UTC), gubernator.GregorianWeeks, 604800000},
+		{"months31", clock.Date(2026, clock.October, 15, 12, 0, 0, 0, clock.UTC), gubernator.GregorianMonths, 31 * 86400000},
+		{"months30", clock.Date(2026, clock.November, 15, 12, 0, 0, 0, clock.UTC), gubernator.GregorianMonths, 30 * 86400000},
+		{"months28", clock.Date(2026, clock.February, 15, 12, 0, 0, 0, clock.UTC), gubernator.GregorianMonths, 28 * 86400000},
+		{"months29", clock.Date(2028, clock.February, 15, 12, 0, 0, 0, clock.UTC), gubernator.GregorianMonths, 29 * 86400000},
+		{"years365", clock.Date(2026, clock.October, 15, 12, 0, 0, 0, clock.UTC), gubernator.GregorianYears, 365 * 86400000},
+		{"years366", clock.Date(2028, clock.October, 15, 12, 0, 0, 0, clock.UTC), gubernator.GregorianYears, 366 * 86400000},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			got, err := gubernator.GregorianDuration(test.now, test.interval)
+			require.NoError(t, err)
+			assert.Equal(t, test.want, got)
+		})
+	}
+
+	t.Run("invalid", func(t *testing.T) {
+		_, err := gubernator.GregorianDuration(clock.Now(), 99)
+		require.ErrorContains(t, err, "not a valid gregorian interval")
+	})
+}
