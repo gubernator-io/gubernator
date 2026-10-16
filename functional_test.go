@@ -26,6 +26,7 @@ import (
 	"net"
 	"net/http"
 	"os"
+	"runtime"
 	"sort"
 	"strings"
 	"sync"
@@ -3337,6 +3338,9 @@ func TestGlobalLeavesCallerRequestUnchanged(t *testing.T) {
 	stop := make(chan struct{})
 	var wg sync.WaitGroup
 	wg.Add(1)
+	var once sync.Once
+	stopReader := func() { once.Do(func() { close(stop); wg.Wait() }) }
+	defer stopReader()
 	go func() {
 		defer wg.Done()
 		for {
@@ -3345,6 +3349,7 @@ func TestGlobalLeavesCallerRequestUnchanged(t *testing.T) {
 				return
 			default:
 				_ = req1.Hits + req2.Hits + req3.Hits + int64(req1.Behavior)
+				runtime.Gosched()
 			}
 		}
 	}()
@@ -3357,8 +3362,7 @@ func TestGlobalLeavesCallerRequestUnchanged(t *testing.T) {
 
 	// The owner broadcasts only after it received the aggregated hits.
 	require.NoError(t, waitForBroadcast(clock.Second*10, owner, prev+1))
-	close(stop)
-	wg.Wait()
+	stopReader()
 
 	assert.Equal(t, int64(1), req1.Hits)
 	assert.Equal(t, guber.Behavior_GLOBAL, req1.Behavior)
