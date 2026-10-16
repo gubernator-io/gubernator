@@ -782,6 +782,382 @@ func TestLeakyBucketWithBurst(t *testing.T) {
 	}
 }
 
+func TestLeakyBucketFractionalTokens(t *testing.T) {
+	client, err := guber.DialV1Server(cluster.PeerAt(0).GRPCAddress, nil)
+	require.NoError(t, err)
+
+	type step struct {
+		Key       string
+		Hits      int64
+		Remaining int64
+		Status    guber.Status
+		Sleep     clock.Duration
+	}
+
+	for _, test := range []struct {
+		Name     string
+		Limit    int64
+		Duration int64
+		Burst    int64
+		Steps    []step
+	}{
+		{
+			// A zero-hit status query must not change what later requests see.
+			// B is the control key and never receives the status query.
+			Name:     "StatusQueryKeepsFraction",
+			Limit:    10,
+			Duration: guber.Second * 10,
+			Burst:    10,
+			Steps: []step{
+				{Key: "a", Hits: 10, Remaining: 0, Status: guber.Status_UNDER_LIMIT},
+				{Key: "b", Hits: 10, Remaining: 0, Status: guber.Status_UNDER_LIMIT, Sleep: 1900 * clock.Millisecond},
+				{Key: "a", Hits: 0, Remaining: 1, Status: guber.Status_UNDER_LIMIT, Sleep: 100 * clock.Millisecond},
+				{Key: "a", Hits: 1, Remaining: 1, Status: guber.Status_UNDER_LIMIT},
+				{Key: "b", Hits: 1, Remaining: 1, Status: guber.Status_UNDER_LIMIT, Sleep: 100 * clock.Millisecond},
+				{Key: "a", Hits: 1, Remaining: 0, Status: guber.Status_UNDER_LIMIT},
+				{Key: "b", Hits: 1, Remaining: 0, Status: guber.Status_UNDER_LIMIT},
+			},
+		},
+		{
+			// 1.5 tokens leak, one is spent, and the 0.5 left must count
+			// toward the next 0.5 token that leaks.
+			Name:     "LeftoverFractionCarriesOver",
+			Limit:    10,
+			Duration: guber.Second * 10,
+			Burst:    10,
+			Steps: []step{
+				{Key: "a", Hits: 10, Remaining: 0, Status: guber.Status_UNDER_LIMIT, Sleep: 1500 * clock.Millisecond},
+				{Key: "a", Hits: 1, Remaining: 0, Status: guber.Status_UNDER_LIMIT, Sleep: 500 * clock.Millisecond},
+				{Key: "a", Hits: 1, Remaining: 0, Status: guber.Status_UNDER_LIMIT},
+			},
+		},
+		{
+			// Burst 3 at 7/min. The first sleep leaves the balance just over
+			// burst, and an unclamped balance carries that excess forward: the
+			// last hits=2 sees ~2.05 and is admitted, where clamped it sees
+			// ~1.7 and is refused.
+			Name:     "BalanceNeverExceedsBurst",
+			Limit:    7,
+			Duration: guber.Minute,
+			Burst:    3,
+			Steps: []step{
+				{Key: "a", Hits: 1, Remaining: 2, Status: guber.Status_UNDER_LIMIT, Sleep: 8572 * clock.Millisecond},
+				{Key: "a", Hits: 0, Remaining: 3, Status: guber.Status_UNDER_LIMIT, Sleep: 3 * clock.Second},
+				{Key: "a", Hits: 2, Remaining: 1, Status: guber.Status_UNDER_LIMIT, Sleep: 6 * clock.Second},
+				{Key: "a", Hits: 2, Remaining: 1, Status: guber.Status_OVER_LIMIT},
+			},
+		},
+	} {
+		t.Run(test.Name, func(t *testing.T) {
+			defer clock.Freeze(clock.Now()).Unfreeze()
+			name := "test_leaky_fractional_" + test.Name
+
+			for _, s := range test.Steps {
+				resp, err := client.GetRateLimits(context.Background(), &guber.GetRateLimitsReq{
+					Requests: []*guber.RateLimitReq{{
+						Name:      name,
+						UniqueKey: s.Key,
+						Algorithm: guber.Algorithm_LEAKY_BUCKET,
+						Duration:  test.Duration,
+						Limit:     test.Limit,
+						Burst:     test.Burst,
+						Hits:      s.Hits,
+					}},
+				})
+				require.NoError(t, err)
+				require.Len(t, resp.Responses, 1)
+				assert.Equal(t, s.Status, resp.Responses[0].Status)
+				assert.Equal(t, s.Remaining, resp.Responses[0].Remaining)
+				clock.Advance(s.Sleep)
+			}
+		})
+	}
+}
+
+func TestLeakyBucketContinuousLeak(t *testing.T) {
+	client, err := guber.DialV1Server(cluster.PeerAt(0).GRPCAddress, nil)
+	require.NoError(t, err)
+
+	const (
+		under = guber.Status_UNDER_LIMIT
+		over  = guber.Status_OVER_LIMIT
+		quart = 250 * clock.Millisecond
+	)
+
+	type step struct {
+		Key       string
+		Hits      int64
+		Burst     int64 // zero means the test's Burst
+		Behavior  guber.Behavior
+		Remaining int64
+		Status    guber.Status
+		Sleep     clock.Duration
+		ResetIn   int64 // milliseconds from now; zero skips the check
+	}
+
+	for _, test := range []struct {
+		Name     string
+		Limit    int64
+		Duration int64
+		Burst    int64
+		Steps    []step
+	}{
+		{
+			// Key a is polled with hits=0 at every quarter token, key b is
+			// the untouched control. Both must admit at the same instants.
+			Name:     "ZeroHitPollingMatchesControl",
+			Limit:    10,
+			Duration: guber.Second * 10,
+			Burst:    10,
+			Steps: []step{
+				{Key: "a", Hits: 10, Remaining: 0, Status: under},
+				{Key: "b", Hits: 10, Remaining: 0, Status: under, Sleep: quart},
+				{Key: "a", Hits: 0, Remaining: 0, Status: under, Sleep: quart},
+				{Key: "a", Hits: 0, Remaining: 0, Status: under, Sleep: quart},
+				{Key: "a", Hits: 0, Remaining: 0, Status: under, Sleep: quart},
+				{Key: "a", Hits: 0, Remaining: 1, Status: under},
+				{Key: "a", Hits: 1, Remaining: 0, Status: under},
+				{Key: "b", Hits: 1, Remaining: 0, Status: under, Sleep: 3 * quart},
+				{Key: "a", Hits: 1, Remaining: 0, Status: over},
+				{Key: "b", Hits: 1, Remaining: 0, Status: over, Sleep: quart},
+				{Key: "a", Hits: 1, Remaining: 0, Status: under},
+				{Key: "b", Hits: 1, Remaining: 0, Status: under},
+			},
+		},
+		{
+			// Several zero-hit queries in the same instant add no tokens.
+			Name:     "RepeatedQueriesInSameInstant",
+			Limit:    10,
+			Duration: guber.Second * 10,
+			Burst:    10,
+			Steps: []step{
+				{Key: "a", Hits: 10, Remaining: 0, Status: under, Sleep: 500 * clock.Millisecond},
+				{Key: "a", Hits: 0, Remaining: 0, Status: under},
+				{Key: "a", Hits: 0, Remaining: 0, Status: under},
+				{Key: "a", Hits: 0, Remaining: 0, Status: under, Sleep: 500 * clock.Millisecond},
+				{Key: "a", Hits: 1, Remaining: 0, Status: under},
+				{Key: "a", Hits: 1, Remaining: 0, Status: over},
+			},
+		},
+		{
+			// Spending exactly the whole tokens must keep the fraction.
+			Name:     "ExactHitsKeepsFraction",
+			Limit:    10,
+			Duration: guber.Second * 10,
+			Burst:    10,
+			Steps: []step{
+				{Key: "a", Hits: 10, Remaining: 0, Status: under, Sleep: 2500 * clock.Millisecond},
+				{Key: "a", Hits: 2, Remaining: 0, Status: under, Sleep: 500 * clock.Millisecond},
+				{Key: "a", Hits: 1, Remaining: 0, Status: under},
+				{Key: "a", Hits: 1, Remaining: 0, Status: over},
+			},
+		},
+		{
+			// A refused request must neither spend tokens nor drop the fraction.
+			Name:     "RefusedHitKeepsFraction",
+			Limit:    10,
+			Duration: guber.Second * 10,
+			Burst:    10,
+			Steps: []step{
+				{Key: "a", Hits: 10, Remaining: 0, Status: under, Sleep: 3 * quart},
+				{Key: "a", Hits: 1, Remaining: 0, Status: over, Sleep: quart},
+				{Key: "a", Hits: 1, Remaining: 0, Status: under},
+			},
+		},
+		{
+			// A request larger than the balance is refused and leaves the
+			// balance for a smaller request.
+			Name:     "OversizedHitDoesNotConsume",
+			Limit:    10,
+			Duration: guber.Second * 10,
+			Burst:    10,
+			Steps: []step{
+				{Key: "a", Hits: 10, Remaining: 0, Status: under, Sleep: 2500 * clock.Millisecond},
+				{Key: "a", Hits: 3, Remaining: 2, Status: over},
+				{Key: "a", Hits: 2, Remaining: 0, Status: under, Sleep: 500 * clock.Millisecond},
+				{Key: "a", Hits: 1, Remaining: 0, Status: under},
+			},
+		},
+		{
+			// Burst larger than limit: the balance grows past limit up to burst.
+			Name:     "BurstAboveLimit",
+			Limit:    10,
+			Duration: guber.Second * 10,
+			Burst:    15,
+			Steps: []step{
+				{Key: "a", Hits: 15, Remaining: 0, Status: under, Sleep: 8 * clock.Second},
+				{Key: "a", Hits: 0, Remaining: 8, Status: under, Sleep: 1500 * clock.Millisecond},
+				{Key: "a", Hits: 0, Remaining: 9, Status: under, Sleep: 500 * clock.Millisecond},
+				{Key: "a", Hits: 10, Remaining: 0, Status: under},
+			},
+		},
+		{
+			// Excess leak past burst is discarded, not banked: after hitting
+			// back down to zero, no extra token is waiting.
+			Name:     "ExcessBeyondBurstDiscarded",
+			Limit:    10,
+			Duration: guber.Second * 10,
+			Burst:    5,
+			Steps: []step{
+				{Key: "a", Hits: 1, Remaining: 4, Status: under, Sleep: 9500 * clock.Millisecond},
+				{Key: "a", Hits: 5, Remaining: 0, Status: under, Sleep: 500 * clock.Millisecond},
+				{Key: "a", Hits: 1, Remaining: 0, Status: over},
+			},
+		},
+		{
+			// Remaining is the whole tokens of an exact-multiple leak even when
+			// the rate is not representable (14 per 10s, 5s leaks 7 tokens).
+			Name:     "NonRepresentableRateLeaksWholeBurst",
+			Limit:    14,
+			Duration: guber.Second * 10,
+			Burst:    7,
+			Steps: []step{
+				{Key: "a", Hits: 7, Remaining: 0, Status: under, Sleep: 5 * clock.Second},
+				{Key: "a", Hits: 0, Remaining: 7, Status: under},
+				{Key: "a", Hits: 7, Remaining: 0, Status: under},
+			},
+		},
+		{
+			// Negative hits refund tokens but never lift the balance above
+			// burst, for an existing key and for a key's first request.
+			Name:     "NegativeHitsClampToBurst",
+			Limit:    10,
+			Duration: guber.Second * 10,
+			Burst:    10,
+			Steps: []step{
+				{Key: "a", Hits: 10, Remaining: 0, Status: under},
+				{Key: "a", Hits: -15, Remaining: 10, Status: under},
+				{Key: "a", Hits: 10, Remaining: 0, Status: under},
+				{Key: "b", Hits: -5, Remaining: 10, Status: under},
+				{Key: "b", Hits: 10, Remaining: 0, Status: under},
+			},
+		},
+		{
+			// DRAIN_OVER_LIMIT drains a balance below one token too, so the
+			// 0.9 token does not turn into 1.1 by the next request.
+			Name:     "DrainOverLimitBelowOneToken",
+			Limit:    10,
+			Duration: guber.Second * 10,
+			Burst:    10,
+			Steps: []step{
+				{Key: "a", Hits: 10, Remaining: 0, Status: under, Sleep: 900 * clock.Millisecond},
+				{Key: "a", Hits: 1, Behavior: guber.Behavior_DRAIN_OVER_LIMIT, Remaining: 0, Status: over, Sleep: 200 * clock.Millisecond},
+				{Key: "a", Hits: 1, Remaining: 0, Status: over, Sleep: 800 * clock.Millisecond},
+				{Key: "a", Hits: 1, Remaining: 0, Status: under},
+			},
+		},
+		{
+			// DRAIN_OVER_LIMIT zeroes the balance, fraction included, so the
+			// next token arrives one full token-time after the drain.
+			Name:     "DrainOverLimitDiscardsFraction",
+			Limit:    10,
+			Duration: guber.Second * 10,
+			Burst:    10,
+			Steps: []step{
+				{Key: "a", Hits: 6, Remaining: 4, Status: under, Sleep: 500 * clock.Millisecond},
+				{Key: "a", Hits: 5, Behavior: guber.Behavior_DRAIN_OVER_LIMIT, Remaining: 0, Status: over, Sleep: 500 * clock.Millisecond},
+				{Key: "a", Hits: 1, Remaining: 0, Status: over, Sleep: 500 * clock.Millisecond},
+				{Key: "a", Hits: 1, Remaining: 0, Status: under},
+			},
+		},
+		{
+			// RESET_REMAINING refills to burst and leaves no fraction behind.
+			Name:     "ResetRemainingDiscardsFraction",
+			Limit:    10,
+			Duration: guber.Second * 10,
+			Burst:    10,
+			Steps: []step{
+				{Key: "a", Hits: 10, Remaining: 0, Status: under, Sleep: 500 * clock.Millisecond},
+				{Key: "a", Hits: 10, Behavior: guber.Behavior_RESET_REMAINING, Remaining: 0, Status: under, Sleep: 500 * clock.Millisecond},
+				{Key: "a", Hits: 1, Remaining: 0, Status: over, Sleep: 500 * clock.Millisecond},
+				{Key: "a", Hits: 1, Remaining: 0, Status: under},
+			},
+		},
+		{
+			// Raising burst refills to the new burst.
+			Name:     "BurstIncrease",
+			Limit:    10,
+			Duration: guber.Second * 10,
+			Burst:    5,
+			Steps: []step{
+				{Key: "a", Hits: 5, Remaining: 0, Status: under},
+				{Key: "a", Hits: 0, Burst: 8, Remaining: 8, Status: under},
+			},
+		},
+		{
+			// Lowering burst must cap the reported balance even when no time
+			// has passed since the last request.
+			Name:     "BurstDecreaseSameInstant",
+			Limit:    10,
+			Duration: guber.Second * 10,
+			Burst:    5,
+			Steps: []step{
+				{Key: "a", Hits: 0, Remaining: 5, Status: under},
+				{Key: "a", Hits: 0, Burst: 3, Remaining: 3, Status: under},
+				{Key: "a", Hits: 3, Burst: 3, Remaining: 0, Status: under},
+				{Key: "a", Hits: 1, Burst: 3, Remaining: 0, Status: over},
+			},
+		},
+		{
+			// Lowering burst after time passed caps the balance too.
+			Name:     "BurstDecreaseLater",
+			Limit:    10,
+			Duration: guber.Second * 10,
+			Burst:    5,
+			Steps: []step{
+				{Key: "a", Hits: 0, Remaining: 5, Status: under, Sleep: clock.Second},
+				{Key: "a", Hits: 0, Burst: 3, Remaining: 3, Status: under},
+			},
+		},
+		{
+			// ResetTime is when the bucket would be full again, from whole tokens.
+			Name:     "ResetTime",
+			Limit:    10,
+			Duration: guber.Second * 10,
+			Burst:    10,
+			Steps: []step{
+				{Key: "a", Hits: 10, Remaining: 0, Status: under, ResetIn: 10000, Sleep: 3 * clock.Second},
+				{Key: "a", Hits: 0, Remaining: 3, Status: under, ResetIn: 7000},
+				{Key: "a", Hits: 2, Remaining: 1, Status: under, ResetIn: 9000},
+				{Key: "a", Hits: 20, Remaining: 1, Status: over, ResetIn: 9000},
+			},
+		},
+	} {
+		t.Run(test.Name, func(t *testing.T) {
+			defer clock.Freeze(clock.Now()).Unfreeze()
+			name := "test_leaky_continuous_" + test.Name
+
+			for _, s := range test.Steps {
+				burst := test.Burst
+				if s.Burst != 0 {
+					burst = s.Burst
+				}
+				resp, err := client.GetRateLimits(context.Background(), &guber.GetRateLimitsReq{
+					Requests: []*guber.RateLimitReq{{
+						Name:      name,
+						UniqueKey: s.Key,
+						Algorithm: guber.Algorithm_LEAKY_BUCKET,
+						Behavior:  s.Behavior,
+						Duration:  test.Duration,
+						Limit:     test.Limit,
+						Burst:     burst,
+						Hits:      s.Hits,
+					}},
+				})
+				require.NoError(t, err)
+				require.Len(t, resp.Responses, 1)
+				assert.Equal(t, s.Status, resp.Responses[0].Status)
+				assert.Equal(t, s.Remaining, resp.Responses[0].Remaining)
+				assert.LessOrEqual(t, resp.Responses[0].Remaining, burst)
+				if s.ResetIn != 0 {
+					assert.Equal(t, clock.Now().UnixMilli()+s.ResetIn, resp.Responses[0].ResetTime)
+				}
+				clock.Advance(s.Sleep)
+			}
+		})
+	}
+}
+
 func TestLeakyBucketGregorian(t *testing.T) {
 	defer clock.Freeze(clock.Now()).Unfreeze()
 
