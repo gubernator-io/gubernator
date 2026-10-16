@@ -63,6 +63,9 @@ clean-proto: ## Clean the generated source files from the protobuf sources
 proto: ## Build protos with config buf.gen.yaml
     # Install buf: https://buf.build/docs/installation
 	buf generate
+	# The protoc python plugin emits `import x_pb2`, which fails inside the gubernator package on
+	# python 3. Rewrite the imports between generated modules to be relative.
+	perl -pi -e 's/^import (gubernator_pb2|peers_pb2) as/from . import $$1 as/' python/gubernator/*_pb2*.py
 
 .PHONY: certs
 certs: ## Generate SSL certificates
