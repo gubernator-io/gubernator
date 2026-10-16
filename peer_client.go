@@ -217,7 +217,8 @@ func (c *PeerClient) GetPeerRateLimits(ctx context.Context, r *GetPeerRateLimits
 	resp, err = c.client.GetPeerRateLimits(ctx, r)
 	if err != nil {
 		err = errors.Wrap(err, "Error in client.GetPeerRateLimits")
-		// metricCheckErrorCounter is updated within client.GetPeerRateLimits().
+		// Nothing counts this error in metricCheckErrorCounter; it is only logged and
+		// recorded for HealthCheck by setLastErr.
 		return nil, c.setLastErr(err)
 	}
 
@@ -442,7 +443,8 @@ func (c *PeerClient) sendBatch(ctx context.Context, queue []*request) {
 			Error(logPart)
 		err = errors.Wrap(err, logPart)
 		_ = c.setLastErr(err)
-		// metricCheckErrorCounter is updated within client.GetPeerRateLimits().
+		// Nothing counts this error in metricCheckErrorCounter; it is only logged and
+		// recorded for HealthCheck by setLastErr.
 
 		for _, r := range queue {
 			r.resp <- &response{err: err}

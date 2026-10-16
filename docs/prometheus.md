@@ -28,6 +28,20 @@ Finally, configure a Prometheus job to scrape the server's `/metrics` URI.
 | `gubernator_over_limit_counter`        | Counter | The number of rate limit checks that are over the limit. |
 | `gubernator_worker_queue_length`       | Gauge   | The count of requests queued up in WorkerPool. |
 
+### `gubernator_check_error_counter` labels
+The `error` label says why a check failed.
+
+| `error` label                  | Counted when |
+| ------------------------------ | ------------ |
+| `Invalid request`              | A request had an empty `unique_key` or `name`. |
+| `Invalid algorithm`            | The request named an unknown algorithm. |
+| `Request too large`            | A request batch exceeded the size limit. |
+| `Item mismatch`                | A peer answered a batch with a different number of responses than requests. |
+| `Peer not connected`           | Retries to find a connected owning peer were exhausted. |
+| `during GetPeer()`             | Looking up the owning peer failed. |
+| `Timeout`                      | An error whose chain contains `context.DeadlineExceeded` reached the error counter. |
+| `Timeout forwarding to peer`   | The caller's own deadline had passed when a forwarded request finished. It counts callers that ran out of time while waiting on a forward, not peer timeouts. Callers that cancel rather than time out are not counted, and a deadline that passes just after a successful response is. A peer that exceeds `GUBER_BATCH_TIMEOUT` is not counted here. |
+
 ### Global Behavior
 | Metric                                 | Type    | Description |
 | -------------------------------------- | ------- | ----------- |
