@@ -217,7 +217,8 @@ func (c *PeerClient) GetPeerRateLimits(ctx context.Context, r *GetPeerRateLimits
 	resp, err = c.client.GetPeerRateLimits(ctx, r)
 	if err != nil {
 		err = errors.Wrap(err, "Error in client.GetPeerRateLimits")
-		// metricCheckErrorCounter is updated within client.GetPeerRateLimits().
+		// Nothing counts this error in metricCheckErrorCounter; it is only logged and
+		// recorded for HealthCheck by setLastErr.
 		return nil, c.setLastErr(err)
 	}
 
@@ -389,6 +390,20 @@ func (c *PeerClient) runBatch() {
 // sendBatch sends the queue provided and returns the responses to
 // waiting go routines
 func (c *PeerClient) sendBatch(ctx context.Context, queue []*request) {
+	// Skip requests whose caller already left; the owner would do work nobody reads.
+	live := make([]*request, 0, len(queue))
+	for _, r := range queue {
+		if err := r.ctx.Err(); err != nil {
+			r.resp <- &response{err: errors.Wrap(err, "Context error before sending batch")}
+			continue
+		}
+		live = append(live, r)
+	}
+	queue = live
+	if len(queue) == 0 {
+		return
+	}
+
 	batchSendTimer := prometheus.NewTimer(metricBatchSendDuration.WithLabelValues(c.conf.Info.GRPCAddress))
 	defer batchSendTimer.ObserveDuration()
 	funcTimer := prometheus.NewTimer(metricFuncTimeDuration.WithLabelValues("PeerClient.sendBatch"))
@@ -428,7 +443,8 @@ func (c *PeerClient) sendBatch(ctx context.Context, queue []*request) {
 			Error(logPart)
 		err = errors.Wrap(err, logPart)
 		_ = c.setLastErr(err)
-		// metricCheckErrorCounter is updated within client.GetPeerRateLimits().
+		// Nothing counts this error in metricCheckErrorCounter; it is only logged and
+		// recorded for HealthCheck by setLastErr.
 
 		for _, r := range queue {
 			r.resp <- &response{err: err}
