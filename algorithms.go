@@ -18,6 +18,7 @@ package gubernator
 
 import (
 	"context"
+	"math"
 
 	"github.com/mailgun/holster/v4/clock"
 	"github.com/prometheus/client_golang/prometheus"
@@ -369,24 +370,25 @@ func leakyBucket(ctx context.Context, s Store, c Cache, r *RateLimitReq, reqStat
 			c.UpdateExpiration(r.HashKey(), createdAt+duration)
 		}
 
-		// Calculate how much leaked out of the bucket since the last time we leaked a hit
-		elapsed := createdAt - b.UpdatedAt
-		leak := float64(elapsed) / rate
-
-		if int64(leak) > 0 {
-			b.Remaining += leak
+		// Credit elapsed time as fractional tokens on every request. Advancing
+		// UpdatedAt only after a whole token leaked drops or double counts the
+		// fraction, and clamping through int64 lets 3.0x pass burst 3.
+		if createdAt > b.UpdatedAt {
+			// A NaN rate (Limit and Duration both 0) must not poison the stored balance.
+			if leak := float64(createdAt-b.UpdatedAt) / rate; !math.IsNaN(leak) {
+				b.Remaining += leak
+			}
 			b.UpdatedAt = createdAt
 		}
-
-		if int64(b.Remaining) > b.Burst {
-			b.Remaining = float64(b.Burst)
-		}
+		// Outside the credit branch so a burst lowered on a request with no
+		// elapsed time still clamps.
+		b.Remaining = math.Min(float64(b.Burst), b.Remaining)
 
 		rl := &RateLimitResp{
 			Limit:     b.Limit,
-			Remaining: int64(b.Remaining),
+			Remaining: wholeTokens(b.Remaining),
 			Status:    Status_UNDER_LIMIT,
-			ResetTime: createdAt + (b.Limit-int64(b.Remaining))*int64(rate),
+			ResetTime: createdAt + (b.Limit-wholeTokens(b.Remaining))*int64(rate),
 		}
 
 		// TODO: Feature missing: check for Duration change between item/request.
@@ -398,7 +400,7 @@ func leakyBucket(ctx context.Context, s Store, c Cache, r *RateLimitReq, reqStat
 		}
 
 		// If we are already at the limit
-		if int64(b.Remaining) == 0 && r.Hits > 0 {
+		if wholeTokens(b.Remaining) == 0 && r.Hits > 0 {
 			if reqState.IsOwner {
 				metricOverLimitCounter.Add(1)
 			}
@@ -406,17 +408,9 @@ func leakyBucket(ctx context.Context, s Store, c Cache, r *RateLimitReq, reqStat
 			return rl, nil
 		}
 
-		// If requested hits takes the remainder
-		if int64(b.Remaining) == r.Hits {
-			b.Remaining = 0
-			rl.Remaining = int64(b.Remaining)
-			rl.ResetTime = createdAt + (rl.Limit-rl.Remaining)*int64(rate)
-			return rl, nil
-		}
-
 		// If requested is more than available, then return over the limit
 		// without updating the bucket, unless `DRAIN_OVER_LIMIT` is set.
-		if r.Hits > int64(b.Remaining) {
+		if r.Hits > wholeTokens(b.Remaining) {
 			if reqState.IsOwner {
 				metricOverLimitCounter.Add(1)
 			}
@@ -437,12 +431,19 @@ func leakyBucket(ctx context.Context, s Store, c Cache, r *RateLimitReq, reqStat
 		}
 
 		b.Remaining -= float64(r.Hits)
-		rl.Remaining = int64(b.Remaining)
+		rl.Remaining = wholeTokens(b.Remaining)
 		rl.ResetTime = createdAt + (rl.Limit-rl.Remaining)*int64(rate)
 		return rl, nil
 	}
 
 	return leakyBucketNewItem(ctx, s, c, r, reqState)
+}
+
+// wholeTokens converts a fractional balance to the tokens a caller can spend.
+// The epsilon absorbs float error so a rate like 10000/14 that leaks exactly 7
+// tokens in 5s reads 7 rather than 6.999999999999999.
+func wholeTokens(balance float64) int64 {
+	return int64(balance + 1e-9)
 }
 
 // Called by leakyBucket() when adding a new item in the store.
