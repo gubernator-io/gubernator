@@ -72,10 +72,11 @@ func ToTimeStamp(duration time.Duration) int64 {
 }
 
 // FromTimeStamp is a convenience function to convert a unix millisecond
-// timestamp to a time.Duration. Useful when working with gubernator
-// request and response duration and reset_time fields.
+// timestamp to the time.Duration remaining until it, such as a response
+// reset_time. It is negative when the timestamp is already in the past,
+// the same as time.Until.
 func FromTimeStamp(ts int64) time.Duration {
-	return clock.Now().Sub(FromUnixMilliseconds(ts))
+	return FromUnixMilliseconds(ts).Sub(clock.Now())
 }
 
 // FromUnixMilliseconds is a convenience function to convert a unix
