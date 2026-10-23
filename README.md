@@ -36,7 +36,8 @@ or document behind it.
 ### One owner per rate limit
 A rate limit is keyed by `name` and `unique_key`. A consistent-hash ring
 ([`replicated_hash.go`](replicated_hash.go)) maps each key to a single owning
-peer, and any node that receives a request forwards it there. One owner means
+peer, and a node that receives a request forwards it there, except `GLOBAL`
+requests, which are answered locally (see below). One owner means
 a count is incremented in one place, with no locks across the network and no
 agreement protocol between nodes. Adding a node moves only a slice of the keys
 to it.
@@ -45,8 +46,9 @@ to it.
 Peer discovery (memberlist gossip, Kubernetes EndpointSlices, etcd or DNS)
 hands the node a new peer list whenever the cluster changes, and
 [`SetPeers()`](gubernator.go) rebuilds the ring from it. When a forwarded call
-is cancelled or times out, the node looks up the key's owner again and retries,
-up to five times. After a ring change the new owner may be the node itself.
+is cancelled or times out while the caller is still waiting, the node looks up
+the key's owner again and retries, up to five times. After a ring change the
+new owner may be the node itself.
 See [`GetRateLimits`](gubernator.go).
 
 ### Batching hot keys
