@@ -26,9 +26,9 @@ to a single Gubernator peer tremendously.
 
 To ensure each peer in the cluster accurately calculates the correct hash for a
 rate limit key, the list of peers in the cluster must be distributed to each
-peer in the cluster in a timely and consistent manner. Currently Gubernator
-supports using etcd or the Kubernetes EndpointSlice API to discover gubernator
-peers. EndpointSlice resources are automatically created and managed by Kubernetes
+peer in the cluster in a timely and consistent manner. Gubernator
+discovers peers through memberlist gossip (the default), etcd, the Kubernetes
+EndpointSlice API, or round-robin DNS. With Kubernetes, EndpointSlice resources are automatically created and managed by Kubernetes
 when a Service exists that selects the gubernator pods.
 
 ## Gubernator Operation
