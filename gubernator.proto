@@ -128,9 +128,8 @@ enum Behavior {
   // cache value. For `LEAKY_BUCKET` it sets the `Remaining` to `Limit`.
   RESET_REMAINING = 8;
 
-  // Enables rate limits to be pushed to other regions. Currently this is only implemented when using
-  // 'member-list' peer discovery. Also requires GUBER_DATA_CENTER to be set to different values on at
-  // least 2 instances of Gubernator.
+  // Reserved for multi-region forwarding. Forwarding rate limits to other regions is not implemented,
+  // and setting this behavior has no effect.
   MULTI_REGION = 16;
 
   // A GetRateLimits call drains the remaining counter on first over limit
@@ -245,7 +244,7 @@ message HealthCheckResp {
   repeated PeerHealthResp local_peers = 5;
 
   // region_peers lists all peers in remote datacenters (RegionPicker).
-  // These peers receive forwarded rate limit requests for GLOBAL behavior.
+  // Rate limits are not forwarded to these peers, multi-region forwarding is not implemented.
   // Empty when not using multi-datacenter peer discovery.
   repeated PeerHealthResp region_peers = 6;
 }

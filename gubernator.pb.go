@@ -143,9 +143,8 @@ const (
 	// algorithm chosen. For instance, if used with `TOKEN_BUCKET` it will immediately expire the
 	// cache value. For `LEAKY_BUCKET` it sets the `Remaining` to `Limit`.
 	Behavior_RESET_REMAINING Behavior = 8
-	// Enables rate limits to be pushed to other regions. Currently this is only implemented when using
-	// 'member-list' peer discovery. Also requires GUBER_DATA_CENTER to be set to different values on at
-	// least 2 instances of Gubernator.
+	// Reserved for multi-region forwarding. Forwarding rate limits to other regions is not implemented,
+	// and setting this behavior has no effect.
 	Behavior_MULTI_REGION Behavior = 16
 	// A GetRateLimits call drains the remaining counter on first over limit
 	// event. Then, successive GetRateLimits calls will return zero remaining
@@ -705,7 +704,7 @@ type HealthCheckResp struct {
 	// These are the peers this instance directly coordinates rate limits with.
 	LocalPeers []*PeerHealthResp `protobuf:"bytes,5,rep,name=local_peers,json=localPeers,proto3" json:"local_peers,omitempty"`
 	// region_peers lists all peers in remote datacenters (RegionPicker).
-	// These peers receive forwarded rate limit requests for GLOBAL behavior.
+	// Rate limits are not forwarded to these peers, multi-region forwarding is not implemented.
 	// Empty when not using multi-datacenter peer discovery.
 	RegionPeers []*PeerHealthResp `protobuf:"bytes,6,rep,name=region_peers,json=regionPeers,proto3" json:"region_peers,omitempty"`
 }

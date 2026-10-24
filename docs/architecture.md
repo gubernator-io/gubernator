@@ -26,10 +26,31 @@ to a single Gubernator peer tremendously.
 
 To ensure each peer in the cluster accurately calculates the correct hash for a
 rate limit key, the list of peers in the cluster must be distributed to each
-peer in the cluster in a timely and consistent manner. Currently Gubernator
-supports using etcd or the Kubernetes EndpointSlice API to discover gubernator
-peers. EndpointSlice resources are automatically created and managed by Kubernetes
+peer in the cluster in a timely and consistent manner. Gubernator
+discovers peers through memberlist gossip (the default), etcd, the Kubernetes
+EndpointSlice API, or round-robin DNS. With Kubernetes, EndpointSlice resources are automatically created and managed by Kubernetes
 when a Service exists that selects the gubernator pods.
+
+## Workers
+Inside a node, `WorkerPool` ([workers.go](../workers.go)) hashes each rate limit
+key to one of N workers (`GUBER_WORKER_COUNT`, default the number of CPUs). Each
+worker owns its slice of the node's cache and handles requests one at a time
+from a channel, so the cache needs no mutex. The node's share of the cluster's
+rate limits is sharded again across its workers.
+
+## Cluster Changes
+When peer discovery reports a new peer list, `SetPeers()`
+([gubernator.go](../gubernator.go)) builds a new hash ring and swaps it in, so
+some keys now belong to a different owner. A forwarded call that is cancelled
+or times out while the caller is still waiting is retried against the key's
+current owner, up to five times. After a ring change that owner may be the node
+itself.
+
+## Library
+Gubernator can be embedded in a Go service. The service becomes a full member of
+the cluster, with the same hash ring and cache as a stand alone server, and can
+layer its own business rules on top. See
+[Gubernator as a library](../README.md#gubernator-as-a-library).
 
 ## Gubernator Operation
 When a client or service makes a request to Gubernator, the rate limit config
@@ -65,6 +86,10 @@ sent asynchronously to the owning peer where the hits will be totaled and
 update each peer in the cluster with the current status of the rate limit, such
 that peer internal caches routinely get updated with the most current rate
 limit status from the owner.
+
+In a multi-datacenter deployment, "each peer in the cluster" below means each
+peer in the owner's own datacenter. The owner broadcasts only to its local
+peers, and peers in other datacenters do not receive the update.
 
 #### Side effects of global behavior
 Since Hits are batched and forwarded to the owning peer asynchronously, the

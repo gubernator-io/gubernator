@@ -27,6 +27,8 @@ Gubernator is a distributed, high performance, cloud native and stateless rate-l
   high throughput environments. (See GLOBAL behavior [architecture.md](docs/architecture.md))
 * Gubernator is the english pronunciation of governor in Russian, also it sounds cool.
 
+## Design
+
 ### Stateless configuration
 Gubernator is stateless in that it doesn’t require disk space to operate. No
 configuration or cache data is ever synced to disk. This is because every
@@ -34,7 +36,41 @@ request to gubernator includes the config for the rate limit. At first you
 might think this an unnecessary overhead to each request. However, In reality a
 rate limit config is made up of only 4, 64bit integers.
 
-### Quick Start
+### Sharded across the cluster
+Each rate limit lives on one owning node, chosen by consistent hashing on its
+`name` and `unique_key`, so every node holds only its share of the rate limits.
+A node that receives a request for a key it doesn't own forwards it to the
+owner. `GLOBAL` requests are the exception, see
+[architecture.md](docs/architecture.md#global-behavior).
+
+### More on the design
+[architecture.md](docs/architecture.md) covers the rest.
+
+* **Batching.** Requests a node forwards to the same peer within 500
+  microseconds go out as one call.
+* **GLOBAL.** For limits that every request touches, any node answers from its
+  own cache and the owner reconciles asynchronously, trading consistency for
+  scale.
+* **Workers.** Inside a node, keys are sharded again across workers that each
+  own their cache slice, so the cache needs no mutex.
+* **Cluster changes.** Peer discovery rebuilds the hash ring when nodes join or
+  leave, and forwarded calls retry against the new owner.
+* **Library.** Embed Gubernator in a Go service and join the cluster as a full
+  member.
+
+### Planned
+These are designed and not part of the current release.
+
+* **Lock-free cache (v3.0).** The `v3.0` branch makes
+  [Otter](https://github.com/maypok86/otter) the default cache. Otter is a
+  lock-free S3-FIFO design, the next step away from synchronization on the hot
+  path ([PR #15](https://github.com/gubernator-io/gubernator/pull/15), background in
+  [Synchronization is bad for scale](https://wippler.dev/posts/synchronization-is-bad-for-scale)).
+* **Multi-region forwarding.** The `MULTI_REGION` behavior in
+  [`gubernator.proto`](gubernator.proto) and the `RegionPicker` are the start of
+  pushing rate limits between regions. Forwarding is not implemented today.
+
+## Quick Start
 ```bash
 # Download the docker-compose file
 $ curl -O https://raw.githubusercontent.com/gubernator-io/gubernator/master/docker-compose.yaml
@@ -321,9 +357,9 @@ Example response:
 ```
 
 ### Deployment
-NOTE: Gubernator uses `etcd`, Kubernetes EndpointSlice API, or round-robin DNS to discover peers and
-establish a cluster. If you don't have either, the docker-compose method is the
-simplest way to try gubernator out.
+NOTE: Gubernator discovers peers with memberlist gossip (the default), `etcd`, the Kubernetes
+EndpointSlice API, or round-robin DNS. The docker-compose method is the simplest way to try
+gubernator out.
 
 
 ##### Docker with existing etcd cluster
@@ -374,11 +410,12 @@ GUBER_DNS_FQDN=gubernator.default.svc.cluster.local.
 **Single datacenter** — leave `GUBER_DATA_CENTER` unset. All peers resolved from any FQDN are
 treated as local.
 
-**Multi-datacenter** — DNS peer discovery uses FQDNs as datacenter names, which is different
-from etcd and member-list. With etcd/member-list, `GUBER_DATA_CENTER` is arbitrary metadata
-each peer advertises (e.g., `"us-east-1"`). With DNS there is no metadata exchange, so the
-FQDN a peer's IP was resolved from becomes its datacenter name. `GUBER_DATA_CENTER` must be
-set to the exact FQDN of the local cluster:
+**Multi-datacenter** (planned) — cross-datacenter forwarding is not implemented yet, see
+[Planned](#planned). DNS peer discovery already sorts peers into datacenters, but nothing forwards
+across datacenters yet. Unlike etcd and member-list, where
+`GUBER_DATA_CENTER` is arbitrary metadata each peer advertises (e.g., `"us-east-1"`), DNS carries
+no metadata, so the FQDN a peer's IP was resolved from becomes its datacenter name.
+`GUBER_DATA_CENTER` must be set to the exact FQDN of the local cluster:
 
 ```bash
 # On instances in the EKS cluster:
@@ -390,12 +427,8 @@ GUBER_DATA_CENTER=gubernator.svc.gke-cluster.
 GUBER_DNS_FQDN=gubernator.svc.eks-cluster.,gubernator.svc.gke-cluster.,gubernator.svc.aks-cluster.
 ```
 
-Peers resolved from the local FQDN are routed to the LocalPicker; peers from other FQDNs are
-routed to the RegionPicker for cross-datacenter forwarding.
-
-Note: `GUBER_DATA_CENTER` must be the exact FQDN of the local cluster, not a short logical
-name like `"eks"`. Because DNS carries no metadata beyond IP addresses, the FQDN is the only
-identifier both the DNS pool and peer routing share.
+Peers resolved from the local FQDN go to the local picker. Peers from other FQDNs go to the
+`RegionPicker`, which holds them but does not yet forward to them.
 
 ##### TLS
 Gubernator supports TLS for both HTTP and GRPC connections. You can see an example with
