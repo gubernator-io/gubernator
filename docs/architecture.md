@@ -31,6 +31,27 @@ discovers peers through memberlist gossip (the default), etcd, the Kubernetes
 EndpointSlice API, or round-robin DNS. With Kubernetes, EndpointSlice resources are automatically created and managed by Kubernetes
 when a Service exists that selects the gubernator pods.
 
+## Workers
+Inside a node, `WorkerPool` ([workers.go](../workers.go)) hashes each rate limit
+key to one of N workers (`GUBER_WORKER_COUNT`, default the number of CPUs). Each
+worker owns its slice of the node's cache and handles requests one at a time
+from a channel, so the cache needs no mutex. The node's share of the cluster's
+rate limits is sharded again across its workers.
+
+## Cluster Changes
+When peer discovery reports a new peer list, `SetPeers()`
+([gubernator.go](../gubernator.go)) builds a new hash ring and swaps it in, so
+some keys now belong to a different owner. A forwarded call that is cancelled
+or times out while the caller is still waiting is retried against the key's
+current owner, up to five times. After a ring change that owner may be the node
+itself.
+
+## Library
+Gubernator can be embedded in a Go service. The service becomes a full member of
+the cluster, with the same hash ring and cache as a stand alone server, and can
+layer its own business rules on top. See
+[Gubernator as a library](../README.md#gubernator-as-a-library).
+
 ## Gubernator Operation
 When a client or service makes a request to Gubernator, the rate limit config
 is provided with each request by the client. The rate limit configuration is

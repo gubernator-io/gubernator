@@ -43,6 +43,21 @@ A node that receives a request for a key it doesn't own forwards it to the
 owner. `GLOBAL` requests are the exception, see
 [architecture.md](docs/architecture.md#global-behavior).
 
+### More on the design
+[architecture.md](docs/architecture.md) covers the rest.
+
+* **Batching.** Requests a node forwards to the same peer within 500
+  microseconds go out as one call.
+* **GLOBAL.** For limits that every request touches, any node answers from its
+  own cache and the owner reconciles asynchronously, trading consistency for
+  scale.
+* **Workers.** Inside a node, keys are sharded again across workers that each
+  own their cache slice, so the cache needs no mutex.
+* **Cluster changes.** Peer discovery rebuilds the hash ring when nodes join or
+  leave, and forwarded calls retry against the new owner.
+* **Library.** Embed Gubernator in a Go service and join the cluster as a full
+  member.
+
 ### Planned
 These are designed and not part of the current release.
 
