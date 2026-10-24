@@ -87,6 +87,10 @@ update each peer in the cluster with the current status of the rate limit, such
 that peer internal caches routinely get updated with the most current rate
 limit status from the owner.
 
+In a multi-datacenter deployment, "each peer in the cluster" below means each
+peer in the owner's own datacenter. The owner broadcasts only to its local
+peers, and peers in other datacenters do not receive the update.
+
 #### Side effects of global behavior
 Since Hits are batched and forwarded to the owning peer asynchronously, the
 immediate response to the client will not include the most accurate remaining
