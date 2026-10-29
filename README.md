@@ -245,7 +245,7 @@ Once an over limit occurs in the "After" step, successive processes will detect
 the over limit state in the "Before" step.
 
 ## Gubernator as a library
-Importing the module requires Go 1.26 or newer.
+Importing the module requires Go 1.26.10 or newer.
 
 If you are using golang, you can use Gubernator as a library. This is useful if
 you wish to implement a rate limit service with your own company specific model

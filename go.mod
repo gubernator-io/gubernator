@@ -1,6 +1,6 @@
 module github.com/gubernator-io/gubernator/v2
 
-go 1.26.0
+go 1.26.10
 
 require (
 	github.com/OneOfOne/xxhash v1.2.8
