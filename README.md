@@ -256,7 +256,7 @@ that request.
 | `UNDER_LIMIT` | `0`           | Yes, unless `hits` is 0 | Act now. |
 | `SCHEDULED`   | `>= 1`        | Yes             | Sleep `retry_after` milliseconds, then act. Do not call Gubernator again. |
 | `OVER_LIMIT`  | `>= 1`        | No              | Give up now. The value is the wait that would have been needed. |
-| `NEVER_FITS`  | `0`           | No              | Give up. `hits` exceed `burst`, so no wait helps. |
+| `NEVER_FITS`  | `0`           | No              | Give up. `hits` exceed `burst`, or `limit` or `duration` is not positive, so no wait helps. |
 
 `retry_after` is a relative number of milliseconds, measured from when the owning
 peer answered. `SCHEDULED` and `NEVER_FITS` are only sent to a request with
@@ -312,6 +312,13 @@ default: // OVER_LIMIT or NEVER_FITS
   `remaining` 0, because admitting it would spend a slot already promised. `remaining` is
   never negative. `RESET_REMAINING` still resets the bucket, and is counted in
   `gubernator_scheduled_debt_reset_count`.
+* **A refund on a key in debt is dropped.** A plain request with negative `hits` on a key in
+  debt answers `UNDER_LIMIT` with `remaining` 0 and changes nothing, because paying the debt
+  back would hand a booked slot to a later caller. The refund is not applied.
+* **A forward error can leave a booking behind.** A `max_wait` request is never retried. If the
+  owner books it and the reply is lost on the way back, the caller gets an `error` and the slot
+  stays booked until it passes, so later callers wait behind it. Treat that `error` as a
+  failed call, not as proof that nothing was charged.
 * **Detect an old server.** An owner that predates `max_wait` ignores it. It answers
   `OVER_LIMIT` with `retry_after` 0, which a current owner never sends to a request with
   `max_wait`.

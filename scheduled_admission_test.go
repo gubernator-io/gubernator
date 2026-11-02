@@ -376,6 +376,92 @@ func TestScheduledAdmissionBurstRaiseAfterDebtRepaid(t *testing.T) {
 	assert.Equal(t, plain.Remaining, repaid.Remaining)
 }
 
+func TestScheduledAdmissionHugeWaitIsRefused(t *testing.T) {
+	defer clock.Freeze(clock.Now()).Unfreeze()
+	client, err := guber.DialV1Server(cluster.PeerAt(0).GRPCAddress, nil)
+	require.NoError(t, err)
+	req := func(maxWait int64) *guber.RateLimitReq {
+		return &guber.RateLimitReq{
+			Name: "TestScheduledAdmissionHugeWaitIsRefused", UniqueKey: "account:1",
+			Algorithm: guber.Algorithm_LEAKY_BUCKET, Duration: 1e15, Limit: 1,
+			Burst: 10000000, Hits: 10000000, MaxWait: maxWait,
+		}
+	}
+
+	// Refilling 10 million tokens at one per 1e15ms takes about 1e22ms, more than an int64 holds.
+	assert.Equal(t, guber.Status_UNDER_LIMIT, sendOne(t, client, req(60000)).Status)
+	resp := sendOne(t, client, req(60000))
+	assert.Equal(t, guber.Status_OVER_LIMIT, resp.Status)
+	assert.Greater(t, resp.RetryAfter, int64(300000))
+}
+
+func TestScheduledAdmissionNonPositiveRateNeverFits(t *testing.T) {
+	defer clock.Freeze(clock.Now()).Unfreeze()
+	client, err := guber.DialV1Server(cluster.PeerAt(0).GRPCAddress, nil)
+	require.NoError(t, err)
+
+	for _, test := range []struct {
+		name     string
+		limit    int64
+		duration int64
+		final    guber.Status
+	}{
+		{name: "NegativeLimit", limit: -1, duration: 60000, final: guber.Status_NEVER_FITS},
+		// The bucket is already expired when created, so every request finds a new one.
+		{name: "NegativeDuration", limit: 5, duration: -60000, final: guber.Status_UNDER_LIMIT},
+		{name: "ZeroDuration", limit: 5, duration: 0, final: guber.Status_NEVER_FITS},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			var resp *guber.RateLimitResp
+			for range 3 {
+				resp = sendOne(t, client, &guber.RateLimitReq{
+					Name: "TestScheduledAdmissionNonPositiveRateNeverFits" + test.name, UniqueKey: "account:1",
+					Algorithm: guber.Algorithm_LEAKY_BUCKET, Duration: test.duration, Limit: test.limit,
+					Burst: 5, Hits: 5, MaxWait: 60000,
+				})
+				assert.NotEqual(t, guber.Status_SCHEDULED, resp.Status)
+			}
+			assert.Equal(t, test.final, resp.Status)
+			assert.Equal(t, int64(0), resp.RetryAfter)
+		})
+	}
+}
+
+func TestScheduledAdmissionConcurrentCallersGetDistinctSlots(t *testing.T) {
+	defer clock.Freeze(clock.Now()).Unfreeze()
+	const callers = 20
+	// Each datacenter has its own hash ring and so its own owner, so stay within one.
+	var peers []guber.PeerInfo
+	for _, peer := range cluster.GetPeers() {
+		if peer.DataCenter == cluster.DataCenterNone {
+			peers = append(peers, peer)
+		}
+	}
+	waits := make([]int64, callers)
+	var group sync.WaitGroup
+	for i := range callers {
+		group.Add(1)
+		go func() {
+			defer group.Done()
+			// Callers enter through different peers, so most requests are forwarded to the owner.
+			client, err := guber.DialV1Server(peers[i%len(peers)].GRPCAddress, nil)
+			if !assert.NoError(t, err) {
+				return
+			}
+			req := leaky10PerMinute("TestScheduledAdmissionConcurrentCallersGetDistinctSlots", "account:1", 1, 120000)
+			req.Burst = 1
+			waits[i] = sendOne(t, client, req).RetryAfter
+		}()
+	}
+	group.Wait()
+
+	// One caller is admitted now and the others hold consecutive slots, none shared.
+	sort.Slice(waits, func(a, b int) bool { return waits[a] < waits[b] })
+	for i, wait := range waits {
+		assert.Equal(t, int64(i)*rate10PerMinute, wait)
+	}
+}
+
 func TestScheduledAdmissionRepaidDebtIsNotDebt(t *testing.T) {
 	defer clock.Freeze(clock.Now()).Unfreeze()
 	client, err := guber.DialV1Server(cluster.PeerAt(0).GRPCAddress, nil)
@@ -636,27 +722,39 @@ func TestScheduledAdmissionSpacing(t *testing.T) {
 	}
 }
 
+// behaviorPeerServer records the behavior flags of each request it is sent.
+type behaviorPeerServer struct {
+	guber.UnimplementedPeersV1Server
+	mu        sync.Mutex
+	behaviors []guber.Behavior
+}
+
+func (s *behaviorPeerServer) GetPeerRateLimits(_ context.Context, r *guber.GetPeerRateLimitsReq) (*guber.GetPeerRateLimitsResp, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	resp := &guber.GetPeerRateLimitsResp{}
+	for _, req := range r.Requests {
+		s.behaviors = append(s.behaviors, req.Behavior)
+		resp.RateLimits = append(resp.RateLimits, &guber.RateLimitResp{Remaining: 77})
+	}
+	return resp, nil
+}
+
 func TestScheduledAdmissionForwardedWithoutBatching(t *testing.T) {
-	owner := &countingPeerServer{}
-	d, ownerPeer := spawnWithFakeOwner(t, owner, guber.BehaviorConfig{
-		BatchWait:    time.Second,
-		BatchTimeout: 3 * time.Second,
-	})
+	owner := &behaviorPeerServer{}
+	d, ownerPeer := spawnWithFakeOwner(t, owner, guber.BehaviorConfig{})
 	key := keyOwnedBy(t, d, ownerPeer, "TestScheduledAdmissionForwardedWithoutBatching")
 	client := d.MustClient()
 
-	// A scheduling request does not wait out the 1s batch window.
-	started := time.Now()
-	resp := sendOne(t, client, leaky10PerMinute("TestScheduledAdmissionForwardedWithoutBatching", key, 1, 60000))
-	assert.Equal(t, int64(77), resp.Remaining)
-	assert.Less(t, time.Since(started), 800*time.Millisecond)
-	assert.Equal(t, int64(1), owner.rpcs.Load())
+	sendOne(t, client, leaky10PerMinute("TestScheduledAdmissionForwardedWithoutBatching", key, 1, 60000))
+	sendOne(t, client, leaky10PerMinute("TestScheduledAdmissionForwardedWithoutBatching", key, 1, 0))
 
-	// A plain request on the same peer does.
-	started = time.Now()
-	resp = sendOne(t, client, leaky10PerMinute("TestScheduledAdmissionForwardedWithoutBatching", key, 1, 0))
-	assert.Equal(t, int64(77), resp.Remaining)
-	assert.GreaterOrEqual(t, time.Since(started), time.Second)
+	// Only the scheduling request asks the owner to skip the batch queue.
+	owner.mu.Lock()
+	defer owner.mu.Unlock()
+	require.Len(t, owner.behaviors, 2)
+	assert.True(t, guber.HasBehavior(owner.behaviors[0], guber.Behavior_NO_BATCHING))
+	assert.False(t, guber.HasBehavior(owner.behaviors[1], guber.Behavior_NO_BATCHING))
 }
 
 // stalledPeerServer accepts requests and never answers within the forwarding peer's timeout.

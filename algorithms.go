@@ -480,7 +480,25 @@ func creditedLeak(b *LeakyBucketItem, now int64, rate float64) float64 {
 
 // fullAt is when b's balance is back at burst, in epoch milliseconds.
 func fullAt(b *LeakyBucketItem, rate float64) int64 {
-	return int64(math.Ceil(float64(b.UpdatedAt) + (float64(b.Burst)-b.Remaining)*rate))
+	return millis(math.Ceil(float64(b.UpdatedAt) + (float64(b.Burst)-b.Remaining)*rate))
+}
+
+// millis converts to int64, saturating where Go leaves the conversion of an out-of-range float
+// implementation-defined (amd64 gives MinInt64, arm64 saturates).
+func millis(f float64) int64 {
+	switch {
+	case f >= math.MaxInt64:
+		return math.MaxInt64
+	case f <= math.MinInt64:
+		return math.MinInt64
+	}
+	return int64(f)
+}
+
+// unusableRate is a rate no wait can be computed from: a limit or duration that is zero or
+// negative, which makes the rate infinite, NaN or negative.
+func unusableRate(rate float64) bool {
+	return !(rate > 0) || math.IsInf(rate, 0)
 }
 
 // spendableTokens is the balance as a response's remaining: whole tokens, never negative.
@@ -499,8 +517,7 @@ func extendDebtExpiry(c Cache, item *CacheItem, b *LeakyBucketItem, now, duratio
 func scheduleHits(c Cache, item *CacheItem, b *LeakyBucketItem, r *RateLimitReq, reqState RateLimitReqState,
 	rl *RateLimitResp, now, duration int64, rate float64, wasInDebt bool) *RateLimitResp {
 
-	// A limit of 0 makes the rate infinite, so no wait ever admits the hits.
-	if r.Hits > b.Burst || math.IsInf(rate, 0) || math.IsNaN(rate) {
+	if r.Hits > b.Burst || unusableRate(rate) {
 		if reqState.IsOwner {
 			metricOverLimitCounter.Add(1)
 		}
@@ -520,7 +537,7 @@ func scheduleHits(c Cache, item *CacheItem, b *LeakyBucketItem, r *RateLimitReq,
 
 	// UpdatedAt lies ahead of now only when an earlier plain request on a key not in debt carried a future created_at.
 	// The 1e-6 keeps float error from rounding an exact wait such as 6000 up to 6001.
-	wait := max(1, int64(math.Ceil(float64(max(b.UpdatedAt, now)-now)+(float64(r.Hits)-b.Remaining)*rate-1e-6)))
+	wait := max(1, millis(math.Ceil(float64(max(b.UpdatedAt, now)-now)+(float64(r.Hits)-b.Remaining)*rate-1e-6)))
 	ceiling := reqState.WaitCeiling.Milliseconds()
 	if wait > min(r.MaxWait, ceiling) {
 		if reqState.IsOwner {
