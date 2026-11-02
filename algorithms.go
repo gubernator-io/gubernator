@@ -365,10 +365,11 @@ func leakyBucket(ctx context.Context, s Store, c Cache, r *RateLimitReq, reqStat
 		}
 
 		// Update burst, limit and duration if they changed. A raised burst fills the
-		// bucket only when it holds no debt; debt is never forgiven by a burst change.
+		// bucket only when it holds no debt once the elapsed leak is credited; a debt
+		// still owed is never forgiven by a burst change.
 		burstChanged := b.Burst != r.Burst
 		if burstChanged {
-			if b.Remaining >= 0 && r.Burst > int64(b.Remaining) {
+			if snapToZero(b.Remaining+creditedLeak(b, createdAt, rate)) >= 0 && r.Burst > int64(b.Remaining) {
 				b.Remaining = float64(r.Burst)
 			}
 			b.Burst = r.Burst

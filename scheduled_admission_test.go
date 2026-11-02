@@ -346,6 +346,36 @@ func TestScheduledAdmissionStoreSeesExtendedExpiry(t *testing.T) {
 	assert.GreaterOrEqual(t, store.expires[name+"_"+key], start+132000)
 }
 
+func TestScheduledAdmissionBurstRaiseAfterDebtRepaid(t *testing.T) {
+	defer clock.Freeze(clock.Now()).Unfreeze()
+	client, err := guber.DialV1Server(cluster.PeerAt(0).GRPCAddress, nil)
+	require.NoError(t, err)
+	const name = "TestScheduledAdmissionBurstRaiseAfterDebtRepaid"
+	req := func(key string, hits, maxWait int64) *guber.RateLimitReq {
+		return &guber.RateLimitReq{
+			Name: name, UniqueKey: key, Algorithm: guber.Algorithm_LEAKY_BUCKET,
+			Duration: 10000, Limit: 14, Burst: 14, Hits: hits, MaxWait: maxWait,
+		}
+	}
+
+	// A key that never held debt and sits at zero fills to a raised burst.
+	sendOne(t, client, req("plain", 14, 0))
+	raised := req("plain", 0, 0)
+	raised.Burst = 20
+	plain := sendOne(t, client, raised)
+
+	// A key whose debt leaked away by the time of the request is treated the same.
+	sendOne(t, client, req("repaid", 14, 0))
+	sendOne(t, client, req("repaid", 7, 100000))
+	clock.Advance(5000 * time.Millisecond)
+	raised = req("repaid", 0, 0)
+	raised.Burst = 20
+	repaid := sendOne(t, client, raised)
+
+	assert.Equal(t, int64(20), plain.Remaining)
+	assert.Equal(t, plain.Remaining, repaid.Remaining)
+}
+
 func TestScheduledAdmissionRepaidDebtIsNotDebt(t *testing.T) {
 	defer clock.Freeze(clock.Now()).Unfreeze()
 	client, err := guber.DialV1Server(cluster.PeerAt(0).GRPCAddress, nil)
