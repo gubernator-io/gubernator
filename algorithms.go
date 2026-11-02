@@ -384,10 +384,6 @@ func leakyBucket(ctx context.Context, s Store, c Cache, r *RateLimitReq, reqStat
 		if r.Hits != 0 && !wasInDebt {
 			c.UpdateExpiration(r.HashKey(), createdAt+duration)
 		}
-		if wasInDebt && burstChanged {
-			// A new burst moves the moment the balance is back at burst, whatever the outcome.
-			defer extendDebtExpiry(c, item, b, createdAt, duration, rate)
-		}
 
 		// Credit elapsed time as fractional tokens on every request. Advancing
 		// UpdatedAt only after a whole token leaked drops or double counts the
@@ -416,6 +412,11 @@ func leakyBucket(ctx context.Context, s Store, c Cache, r *RateLimitReq, reqStat
 			defer func() {
 				s.OnChange(ctx, r, item)
 			}()
+		}
+		if wasInDebt && burstChanged {
+			// Deferred after OnChange so it runs first and the Store sees the extended expiry.
+			// A new burst moves the moment the balance is back at burst, whatever the outcome.
+			defer extendDebtExpiry(c, item, b, createdAt, duration, rate)
 		}
 
 		// Client is only interested in retrieving the current status

@@ -7,6 +7,7 @@ import (
 	"os"
 	"sort"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -166,6 +167,8 @@ func TestScheduledAdmissionConfigFromEnv(t *testing.T) {
 		require.NoError(t, os.Unsetenv(name))
 		t.Cleanup(func() { _ = os.Setenv(name, value) })
 	}
+	// The env file sets the variable on the process, so register it to be unset again.
+	t.Setenv("GUBER_SCHEDULE_MAX_WAIT", "")
 	conf, err := guber.SetupDaemonConfig(logrus.StandardLogger(), strings.NewReader("GUBER_SCHEDULE_MAX_WAIT=90s"))
 	require.NoError(t, err)
 	assert.Equal(t, 90*time.Second, conf.Behaviors.ScheduleMaxWait)
@@ -301,6 +304,46 @@ func TestScheduledAdmissionBurstChangeKeepsDebtCached(t *testing.T) {
 
 	clock.Advance(131999 * time.Millisecond)
 	assert.Equal(t, int64(19), sendOne(t, client, bigger).Remaining)
+}
+
+// expiryStore records the expiry each item had when the Store was told about the change.
+type expiryStore struct {
+	mu      sync.Mutex
+	expires map[string]int64
+}
+
+func (s *expiryStore) OnChange(_ context.Context, _ *guber.RateLimitReq, item *guber.CacheItem) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.expires[item.Key] = item.ExpireAt
+}
+
+func (s *expiryStore) Get(context.Context, *guber.RateLimitReq) (*guber.CacheItem, bool) {
+	return nil, false
+}
+
+func (s *expiryStore) Remove(context.Context, string) {}
+
+func TestScheduledAdmissionStoreSeesExtendedExpiry(t *testing.T) {
+	defer clock.Freeze(clock.Now()).Unfreeze()
+	store := &expiryStore{expires: map[string]int64{}}
+	d := spawnSingleDaemonWithStore(t, store)
+	client := d.MustClient()
+	const name, key = "TestScheduledAdmissionStoreSeesExtendedExpiry", "account:1"
+	start := clock.Now().UnixMilli()
+
+	sendOne(t, client, leaky10PerMinute(name, key, 10, 0))
+	for range 2 {
+		sendOne(t, client, leaky10PerMinute(name, key, 1, 60000))
+	}
+	bigger := leaky10PerMinute(name, key, 0, 0)
+	bigger.Burst = 20
+	sendOne(t, client, bigger)
+
+	// A restart reloads the key from the Store, so the Store needs the 132000ms expiry, not the old one.
+	store.mu.Lock()
+	defer store.mu.Unlock()
+	assert.GreaterOrEqual(t, store.expires[name+"_"+key], start+132000)
 }
 
 func TestScheduledAdmissionRepaidDebtIsNotDebt(t *testing.T) {
@@ -601,6 +644,8 @@ func (s *stalledPeerServer) GetPeerRateLimits(ctx context.Context, _ *guber.GetP
 	return nil, status.Error(codes.Unavailable, "stalled")
 }
 
+// The retry guard in asyncRequest cannot be reached from the surface, since a request with max_wait
+// is sent unbatched and no error from that path matches the retry condition. This pins the outcome.
 func TestScheduledAdmissionForwardFailureIsNotRetried(t *testing.T) {
 	owner := &stalledPeerServer{}
 	d, ownerPeer := spawnWithFakeOwner(t, owner, guber.BehaviorConfig{BatchTimeout: 200 * time.Millisecond})
@@ -613,16 +658,24 @@ func TestScheduledAdmissionForwardFailureIsNotRetried(t *testing.T) {
 
 func spawnSingleDaemon(t *testing.T, behaviors guber.BehaviorConfig) *guber.Daemon {
 	t.Helper()
+	return spawnSingleDaemonWith(t, guber.DaemonConfig{Behaviors: behaviors})
+}
+
+func spawnSingleDaemonWithStore(t *testing.T, store guber.Store) *guber.Daemon {
+	t.Helper()
+	return spawnSingleDaemonWith(t, guber.DaemonConfig{Store: store})
+}
+
+func spawnSingleDaemonWith(t *testing.T, conf guber.DaemonConfig) *guber.Daemon {
+	t.Helper()
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
-	d, err := guber.SpawnDaemon(ctx, guber.DaemonConfig{
-		Logger:            logrus.NewEntry(logrus.New()),
-		InstanceID:        "single",
-		GRPCListenAddress: "127.0.0.1:0",
-		HTTPListenAddress: "127.0.0.1:0",
-		AdvertiseAddress:  "127.0.0.1:0",
-		Behaviors:         behaviors,
-	})
+	conf.Logger = logrus.NewEntry(logrus.New())
+	conf.InstanceID = "single"
+	conf.GRPCListenAddress = "127.0.0.1:0"
+	conf.HTTPListenAddress = "127.0.0.1:0"
+	conf.AdvertiseAddress = "127.0.0.1:0"
+	d, err := guber.SpawnDaemon(ctx, conf)
 	require.NoError(t, err)
 	t.Cleanup(func() { d.Close() })
 	d.PeerInfo = guber.PeerInfo{
