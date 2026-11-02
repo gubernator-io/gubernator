@@ -1121,6 +1121,18 @@ func TestLeakyBucketContinuousLeak(t *testing.T) {
 			},
 		},
 		{
+			// The leak since the last request counts before the burst shift, so
+			// the zero floor cannot swallow part of the decrease.
+			Name:     "BurstDecreaseWithElapsedTime",
+			Limit:    10,
+			Duration: guber.Second * 10,
+			Burst:    5,
+			Steps: []step{
+				{Key: "a", Hits: 5, Remaining: 0, Status: under, Sleep: clock.Second},
+				{Key: "a", Hits: 0, Burst: 3, Remaining: 0, Status: under},
+			},
+		},
+		{
 			// RESET_REMAINING refills to the new burst even when burst drops.
 			Name:     "ResetRemainingWithLowerBurst",
 			Limit:    10,
