@@ -2673,9 +2673,9 @@ func TestGlobalBehavior(t *testing.T) {
 				gprlCounters := getPeerCounters(t, cluster.GetDaemons(), "gubernator_grpc_request_duration_count{method=\"/pb.gubernator.PeersV1/GetPeerRateLimits\"}")
 
 				// When
-				for i := int64(0); i < testCase.Hits; i++ {
-					sendHit(t, owner, makeReq(name, key, 1), guber.Status_UNDER_LIMIT, 999-i)
-				}
+				sendHitsInOneCall(t, owner, testCase.Hits, func() *guber.RateLimitReq {
+					return makeReq(name, key, 1)
+				})
 
 				// Then
 				// Expect a single global broadcast to all non-owner peers.
@@ -2791,9 +2791,9 @@ func TestGlobalBehavior(t *testing.T) {
 				gprlCounters := getPeerCounters(t, cluster.GetDaemons(), "gubernator_grpc_request_duration_count{method=\"/pb.gubernator.PeersV1/GetPeerRateLimits\"}")
 
 				// When
-				for i := int64(0); i < testCase.Hits; i++ {
-					sendHit(t, peers[0], makeReq(name, key, 1), guber.Status_UNDER_LIMIT, 999-i)
-				}
+				sendHitsInOneCall(t, peers[0], testCase.Hits, func() *guber.RateLimitReq {
+					return makeReq(name, key, 1)
+				})
 
 				// Then
 				// Check for global hits update from non-owner to owner peer.
@@ -3307,6 +3307,28 @@ func getPeerCounters(t *testing.T, peers []*guber.Daemon, name string) map[strin
 		counters[peer.InstanceID] = getMetricValue(t, peer, name)
 	}
 	return counters
+}
+
+// sendHitsInOneCall queues every hit within a single GetRateLimits call so
+// they land in one GlobalSyncWait window. Separate calls can straddle the
+// window under CPU load and produce two syncs and broadcasts.
+func sendHitsInOneCall(t *testing.T, d *guber.Daemon, hits int64, newReq func() *guber.RateLimitReq) {
+	t.Logf("Sending %d hits to peer %s", hits, d.InstanceID)
+	reqs := make([]*guber.RateLimitReq, hits)
+	for i := range reqs {
+		reqs[i] = newReq()
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second*10)
+	defer cancel()
+	resp, err := d.MustClient().GetRateLimits(ctx, &guber.GetRateLimitsReq{Requests: reqs})
+	require.NoError(t, err)
+	require.Len(t, resp.Responses, len(reqs))
+	for i, item := range resp.Responses {
+		assert.Equal(t, "", item.Error)
+		assert.Equal(t, reqs[i].Limit, item.Limit)
+		assert.Equal(t, reqs[i].Limit-int64(i)-1, item.Remaining)
+		assert.Equal(t, guber.Status_UNDER_LIMIT, item.Status)
+	}
 }
 
 func sendHit(t *testing.T, d *guber.Daemon, req *guber.RateLimitReq, expectStatus guber.Status, expectRemaining int64) {
