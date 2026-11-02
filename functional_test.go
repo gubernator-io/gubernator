@@ -2789,11 +2789,14 @@ func TestGlobalBehavior(t *testing.T) {
 
 	t.Run("Hits on non-owner peer", func(t *testing.T) {
 		testCases := []struct {
-			Name string
-			Hits int64
+			Name     string
+			Hits     int64
+			Separate bool
 		}{
 			{Name: "Single hit", Hits: 1},
 			{Name: "Multiple htis", Hits: 10},
+			// Covers runAsyncHits merging hits that arrive over separate RPCs.
+			{Name: "Multiple hits in separate calls", Hits: 10, Separate: true},
 		}
 
 		for _, testCase := range testCases {
@@ -2814,9 +2817,15 @@ func TestGlobalBehavior(t *testing.T) {
 				gprlCounters := getPeerCounters(t, cluster.GetDaemons(), "gubernator_grpc_request_duration_count{method=\"/pb.gubernator.PeersV1/GetPeerRateLimits\"}")
 
 				// When
-				sendHitsInOneCall(t, peers[0], testCase.Hits, func() *guber.RateLimitReq {
-					return makeReq(name, key, 1)
-				})
+				if testCase.Separate {
+					for i := int64(0); i < testCase.Hits; i++ {
+						sendHit(t, peers[0], makeReq(name, key, 1), guber.Status_UNDER_LIMIT, limit-1-i)
+					}
+				} else {
+					sendHitsInOneCall(t, peers[0], testCase.Hits, func() *guber.RateLimitReq {
+						return makeReq(name, key, 1)
+					})
+				}
 
 				// Then
 				// Check for global hits update from non-owner to owner peer.
