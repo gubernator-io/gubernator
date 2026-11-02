@@ -40,8 +40,10 @@ import (
 
 const (
 	maxBatchSize = 1000
-	Healthy      = "healthy"
-	UnHealthy    = "unhealthy"
+
+	defaultScheduleMaxWait = 5 * time.Minute
+	Healthy                = "healthy"
+	UnHealthy              = "unhealthy"
 )
 
 type V1Instance struct {
@@ -57,6 +59,8 @@ type V1Instance struct {
 
 type RateLimitReqState struct {
 	IsOwner bool
+	// WaitCeiling is the server's cap on a booked wait, set by the worker that runs the request.
+	WaitCeiling time.Duration
 }
 
 var (
@@ -76,6 +80,18 @@ var (
 	metricOverLimitCounter = prometheus.NewCounter(prometheus.CounterOpts{
 		Name: "gubernator_over_limit_counter",
 		Help: "The number of rate limit checks that are over the limit.",
+	})
+	metricScheduledCount = prometheus.NewCounter(prometheus.CounterOpts{
+		Name: "gubernator_scheduled_count",
+		Help: "The number of requests answered SCHEDULED, whose hits were booked into the future.",
+	})
+	metricScheduledCeilingRefusedCount = prometheus.NewCounter(prometheus.CounterOpts{
+		Name: "gubernator_scheduled_ceiling_refused_count",
+		Help: "The number of requests refused because the wait exceeded GUBER_SCHEDULE_MAX_WAIT though it fit the request's max_wait.",
+	})
+	metricScheduledDebtResetCount = prometheus.NewCounter(prometheus.CounterOpts{
+		Name: "gubernator_scheduled_debt_reset_count",
+		Help: "The number of times booked debt was forgiven by a documented reset such as RESET_REMAINING.",
 	})
 	metricConcurrentChecks = prometheus.NewGauge(prometheus.GaugeOpts{
 		Name: "gubernator_concurrent_checks_counter",
@@ -240,6 +256,12 @@ func (s *V1Instance) GetRateLimits(ctx context.Context, r *GetRateLimitsReq) (_ 
 			SetBehavior(&req.Behavior, Behavior_GLOBAL, true)
 		}
 
+		if msg := validateMaxWait(req); msg != "" {
+			metricCheckErrorCounter.WithLabelValues("Invalid request").Inc()
+			resp.Responses[i] = &RateLimitResp{Error: msg}
+			continue
+		}
+
 		peer, err = s.GetPeer(ctx, key)
 		if err != nil {
 			countError(err, "Error in GetPeer")
@@ -362,9 +384,20 @@ func (s *V1Instance) asyncRequest(ctx context.Context, req *AsyncReq) {
 		// attempt (and any batch that queues it) has its own Metadata map; retries reuse
 		// req.Req, and GetPeerRateLimit mutates Metadata in place via TraceContext.Inject,
 		// which races when an earlier attempt's batch is still in flight (ENG-192).
+		forward := proto.Clone(req.Req).(*RateLimitReq)
+		if forward.MaxWait > 0 {
+			// Skips the batch queue's delay and its retries; see the retry guard below.
+			SetBehavior(&forward.Behavior, Behavior_NO_BATCHING, true)
+		}
 		var r *RateLimitResp
-		r, err = req.Peer.GetPeerRateLimit(ctx, proto.Clone(req.Req).(*RateLimitReq))
+		r, err = req.Peer.GetPeerRateLimit(ctx, forward)
 		if err != nil {
+			if forward.MaxWait > 0 {
+				// A retry could book the same request twice, so a failure is final.
+				err = fmt.Errorf("while fetching rate limit '%s' from peer: %w", req.Key, err)
+				resp.Resp = &RateLimitResp{Error: err.Error()}
+				break
+			}
 			if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
 				// The caller's context is done, so a retry cannot succeed and the
 				// failure says nothing about the peer.
@@ -662,6 +695,31 @@ func (s *V1Instance) LiveCheck(_ context.Context, _ *LiveCheckReq) (health *Live
 	return &LiveCheckResp{}, nil
 }
 
+// validateMaxWait returns the per-request error for a max_wait that is negative or combined with
+// something scheduled admission does not support, or "" when the request is fine. When several
+// problems apply the first case below wins, and the negative check comes first.
+func validateMaxWait(r *RateLimitReq) string {
+	switch {
+	case r.MaxWait < 0:
+		return "field 'max_wait' cannot be negative"
+	case r.MaxWait == 0:
+		return ""
+	case r.Algorithm != Algorithm_LEAKY_BUCKET:
+		return "max_wait is only supported by LEAKY_BUCKET"
+	case HasBehavior(r.Behavior, Behavior_GLOBAL):
+		return "max_wait cannot be combined with GLOBAL"
+	case HasBehavior(r.Behavior, Behavior_DURATION_IS_GREGORIAN):
+		return "max_wait cannot be combined with DURATION_IS_GREGORIAN"
+	case HasBehavior(r.Behavior, Behavior_DRAIN_OVER_LIMIT):
+		return "max_wait cannot be combined with DRAIN_OVER_LIMIT"
+	case HasBehavior(r.Behavior, Behavior_RESET_REMAINING):
+		return "max_wait cannot be combined with RESET_REMAINING"
+	case r.Hits < 0:
+		return "max_wait cannot be combined with negative hits"
+	}
+	return ""
+}
+
 func (s *V1Instance) getLocalRateLimit(ctx context.Context, r *RateLimitReq, reqState RateLimitReqState) (_ *RateLimitResp, err error) {
 	ctx = tracing.StartNamedScope(ctx, "V1Instance.getLocalRateLimit", trace.WithAttributes(
 		attribute.String("ratelimit.key", r.UniqueKey),
@@ -672,6 +730,12 @@ func (s *V1Instance) getLocalRateLimit(ctx context.Context, r *RateLimitReq, req
 	))
 	defer func() { tracing.EndScope(ctx, err) }()
 	defer prometheus.NewTimer(metricFuncTimeDuration.WithLabelValues("V1Instance.getLocalRateLimit")).ObserveDuration()
+
+	// An older peer may forward a max_wait request it did not validate.
+	if msg := validateMaxWait(r); msg != "" {
+		metricCheckErrorCounter.WithLabelValues("Invalid request").Inc()
+		return &RateLimitResp{Error: msg}, nil
+	}
 
 	resp, err := s.workerPool.GetRateLimit(ctx, r, reqState)
 	if err != nil {
@@ -837,6 +901,9 @@ func (s *V1Instance) Describe(ch chan<- *prometheus.Desc) {
 	metricFuncTimeDuration.Describe(ch)
 	metricGetRateLimitCounter.Describe(ch)
 	metricOverLimitCounter.Describe(ch)
+	metricScheduledCount.Describe(ch)
+	metricScheduledCeilingRefusedCount.Describe(ch)
+	metricScheduledDebtResetCount.Describe(ch)
 	metricWorkerQueue.Describe(ch)
 	metricUpdatePeerGlobalsCounter.Describe(ch)
 	s.global.metricBroadcastDuration.Describe(ch)
@@ -858,6 +925,9 @@ func (s *V1Instance) Collect(ch chan<- prometheus.Metric) {
 	metricFuncTimeDuration.Collect(ch)
 	metricGetRateLimitCounter.Collect(ch)
 	metricOverLimitCounter.Collect(ch)
+	metricScheduledCount.Collect(ch)
+	metricScheduledCeilingRefusedCount.Collect(ch)
+	metricScheduledDebtResetCount.Collect(ch)
 	metricWorkerQueue.Collect(ch)
 	metricUpdatePeerGlobalsCounter.Collect(ch)
 	s.global.metricBroadcastDuration.Collect(ch)

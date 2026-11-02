@@ -25,7 +25,10 @@ Finally, configure a Prometheus job to scrape the server's `/metrics` URI.
 | `gubernator_getratelimit_counter`      | Counter | The count of getLocalRateLimit() calls.  Label \"calltype\" may be \"local\" for calls handled by the same peer, \"forward\" for calls forwarded to another peer, or \"global\" for global rate limits. |
 | `gubernator_grpc_request_counts`       | Counter | The count of gRPC requests. |
 | `gubernator_grpc_request_duration`     | Summary | The timings of gRPC requests in seconds. |
-| `gubernator_over_limit_counter`        | Counter | The number of rate limit checks that are over the limit. |
+| `gubernator_over_limit_counter`        | Counter | The number of rate limit checks that are over the limit, including `NEVER_FITS` and the `OVER_LIMIT` of a `max_wait` request. |
+| `gubernator_scheduled_ceiling_refused_count` | Counter | The number of `max_wait` requests refused because the wait exceeded `GUBER_SCHEDULE_MAX_WAIT` though it fit the request's own `max_wait`. |
+| `gubernator_scheduled_count`           | Counter | The number of requests answered `SCHEDULED`. Not counted as over limit. |
+| `gubernator_scheduled_debt_reset_count` | Counter | The number of times booked debt was forgiven by a `RESET_REMAINING` request. |
 | `gubernator_worker_queue_length`       | Gauge   | The count of requests queued up in WorkerPool. |
 
 ### `gubernator_check_error_counter` labels

@@ -67,6 +67,10 @@ type BehaviorConfig struct {
 
 	// Number of concurrent requests that will be made to peers. Defaults to 100
 	GlobalPeerRequestsConcurrency int
+
+	// ScheduleMaxWait is the longest wait the server books for a request that sets max_wait.
+	// Defaults to 5 minutes; negative values are rejected.
+	ScheduleMaxWait time.Duration
 }
 
 // Config for a gubernator instance
@@ -144,6 +148,11 @@ func (c *Config) SetDefaults() error {
 	setter.SetDefault(&c.Behaviors.GlobalSyncWait, time.Millisecond*100)
 
 	setter.SetDefault(&c.Behaviors.GlobalPeerRequestsConcurrency, 100)
+
+	if c.Behaviors.ScheduleMaxWait < 0 {
+		return errors.New("Behaviors.ScheduleMaxWait cannot be negative")
+	}
+	setter.SetDefault(&c.Behaviors.ScheduleMaxWait, defaultScheduleMaxWait)
 
 	setter.SetDefault(&c.LocalPicker, NewReplicatedConsistentHash(nil, defaultReplicas))
 	setter.SetDefault(&c.RegionPicker, NewRegionPicker(nil))
@@ -385,6 +394,7 @@ func SetupDaemonConfig(logger *logrus.Logger, configFile io.Reader) (DaemonConfi
 	setter.SetDefault(&conf.Behaviors.GlobalBatchLimit, getEnvInteger(log, "GUBER_GLOBAL_BATCH_LIMIT"))
 	setter.SetDefault(&conf.Behaviors.GlobalSyncWait, getEnvDuration(log, "GUBER_GLOBAL_SYNC_WAIT"))
 	setter.SetDefault(&conf.Behaviors.ForceGlobal, getEnvBool(log, "GUBER_FORCE_GLOBAL"))
+	setter.SetDefault(&conf.Behaviors.ScheduleMaxWait, getEnvDuration(log, "GUBER_SCHEDULE_MAX_WAIT"))
 
 	// TLS Config
 	if anyHasPrefix("GUBER_TLS_", os.Environ()) {

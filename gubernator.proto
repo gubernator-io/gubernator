@@ -125,7 +125,7 @@ enum Behavior {
   // If this flag is set causes the rate limit to reset any accrued hits stored in the cache, and will
   // ignore any `Hit` values provided in the current request. The effect this has is dependent on
   // algorithm chosen. For instance, if used with `TOKEN_BUCKET` it will immediately expire the
-  // cache value. For `LEAKY_BUCKET` it sets the `Remaining` to `Limit`.
+  // cache value. For `LEAKY_BUCKET` it sets the `Remaining` to `Burst`.
   RESET_REMAINING = 8;
 
   // Reserved for multi-region forwarding. Forwarding rate limits to other regions is not implemented,
@@ -186,11 +186,26 @@ message RateLimitReq {
   // gubernator will set the created time when it receives the rate limit
   // request.
   optional int64 created_at = 10;
+
+  // The longest this caller will wait for its hits, in milliseconds. 0 (the default)
+  // keeps today's behavior. A positive value opts this request into scheduled admission
+  // (LEAKY_BUCKET only): if the hits cannot be admitted now but can be within
+  // min(max_wait, the server's GUBER_SCHEDULE_MAX_WAIT), the server charges them now and
+  // answers SCHEDULED with retry_after; the caller sleeps retry_after, then acts, without
+  // calling again. Otherwise it answers OVER_LIMIT and charges nothing. Negative is an
+  // error. Do not set this from an RPC timeout; it is the caller's deadline for acting.
+  int64 max_wait = 11;
 }
 
 enum Status {
   UNDER_LIMIT = 0;
   OVER_LIMIT = 1;
+  // Sent only to requests with max_wait > 0. The request's hits exceed the bucket's
+  // burst, so no wait will admit it. Nothing was charged.
+  NEVER_FITS = 2;
+  // Sent only to requests with max_wait > 0. The hits were charged now; the caller may
+  // act after retry_after milliseconds and must not ask again for this request.
+  SCHEDULED = 3;
 }
 
 message RateLimitResp {
@@ -206,6 +221,12 @@ message RateLimitResp {
   string error = 5;
   // This is additional metadata that a client might find useful. (IE: Additional headers, coordinator ownership, etc..)
   map<string, string> metadata = 6;
+  // Milliseconds, relative to when the owner answered. Not a timestamp like reset_time,
+  // and not seconds like the HTTP Retry-After header. Non-zero only for requests with
+  // max_wait > 0: on SCHEDULED it is when to act; on OVER_LIMIT it is the wait that
+  // would have been needed. Always >= 1 in those two cases, 0 otherwise, never negative.
+  // Check `error` first.
+  int64 retry_after = 7;
 }
 
 message HealthCheckReq {}

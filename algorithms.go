@@ -330,20 +330,11 @@ func leakyBucket(ctx context.Context, s Store, c Cache, r *RateLimitReq, reqStat
 			return leakyBucketNewItem(ctx, s, c, r, reqState)
 		}
 
-		if HasBehavior(r.Behavior, Behavior_RESET_REMAINING) {
-			b.Remaining = float64(r.Burst)
+		// A key in debt and any max_wait request are timed by the owner's clock, so a
+		// client-stamped created_at cannot move a booking.
+		if r.MaxWait > 0 || b.Remaining < 0 {
+			createdAt = epochMillis(clock.Now())
 		}
-
-		// Update burst, limit and duration if they changed
-		if b.Burst != r.Burst {
-			if r.Burst > int64(b.Remaining) {
-				b.Remaining = float64(r.Burst)
-			}
-			b.Burst = r.Burst
-		}
-
-		b.Limit = r.Limit
-		b.Duration = r.Duration
 
 		duration := r.Duration
 		rate := float64(duration) / float64(r.Limit)
@@ -366,29 +357,57 @@ func leakyBucket(ctx context.Context, s Store, c Cache, r *RateLimitReq, reqStat
 			duration = expire - (n.UnixNano() / 1000000)
 		}
 
-		if r.Hits != 0 {
+		if HasBehavior(r.Behavior, Behavior_RESET_REMAINING) {
+			if snapToZero(b.Remaining+creditedLeak(b, createdAt, rate)) < 0 {
+				metricScheduledDebtResetCount.Add(1)
+			}
+			b.Remaining = float64(r.Burst)
+		}
+
+		// Update burst, limit and duration if they changed. A raised burst fills the
+		// bucket only when it holds no debt; debt is never forgiven by a burst change.
+		burstChanged := b.Burst != r.Burst
+		if burstChanged {
+			if b.Remaining >= 0 && r.Burst > int64(b.Remaining) {
+				b.Remaining = float64(r.Burst)
+			}
+			b.Burst = r.Burst
+		}
+
+		b.Limit = r.Limit
+		b.Duration = r.Duration
+
+		// wasInDebt is the balance before this request's leak is credited, so it can be true
+		// for a request that finds the debt already paid. Expiry of such a key is owned by
+		// extendDebtExpiry, which only lengthens it, so today's now+duration update is skipped.
+		wasInDebt := b.Remaining < 0
+		if r.Hits != 0 && !wasInDebt {
 			c.UpdateExpiration(r.HashKey(), createdAt+duration)
+		}
+		if wasInDebt && burstChanged {
+			// A new burst moves the moment the balance is back at burst, whatever the outcome.
+			defer extendDebtExpiry(c, item, b, createdAt, duration, rate)
 		}
 
 		// Credit elapsed time as fractional tokens on every request. Advancing
 		// UpdatedAt only after a whole token leaked drops or double counts the
 		// fraction, and clamping through int64 lets 3.0x pass burst 3.
 		if createdAt > b.UpdatedAt {
-			// A NaN rate (Limit and Duration both 0) must not poison the stored balance.
-			if leak := float64(createdAt-b.UpdatedAt) / rate; !math.IsNaN(leak) {
-				b.Remaining += leak
-			}
+			b.Remaining += creditedLeak(b, createdAt, rate)
 			b.UpdatedAt = createdAt
 		}
 		// Outside the credit branch so a burst lowered on a request with no
 		// elapsed time still clamps.
-		b.Remaining = math.Min(float64(b.Burst), b.Remaining)
+		b.Remaining = snapToZero(math.Min(float64(b.Burst), b.Remaining))
 
 		rl := &RateLimitResp{
 			Limit:     b.Limit,
-			Remaining: wholeTokens(b.Remaining),
+			Remaining: spendableTokens(b.Remaining),
 			Status:    Status_UNDER_LIMIT,
 			ResetTime: createdAt + (b.Limit-wholeTokens(b.Remaining))*int64(rate),
+		}
+		if b.Remaining < 0 {
+			rl.ResetTime = fullAt(b, rate)
 		}
 
 		// TODO: Feature missing: check for Duration change between item/request.
@@ -399,6 +418,21 @@ func leakyBucket(ctx context.Context, s Store, c Cache, r *RateLimitReq, reqStat
 			}()
 		}
 
+		// Client is only interested in retrieving the current status
+		if r.Hits == 0 {
+			return rl, nil
+		}
+
+		if r.MaxWait > 0 {
+			return scheduleHits(c, item, b, r, reqState, rl, createdAt, duration, rate, wasInDebt), nil
+		}
+
+		// Negative hits refund tokens, but never pay off booked debt.
+		if r.Hits < 0 && b.Remaining < 0 {
+			extendDebtExpiry(c, item, b, createdAt, duration, rate)
+			return rl, nil
+		}
+
 		// If requested is more than available, then return over the limit
 		// without updating the bucket, unless `DRAIN_OVER_LIMIT` is set.
 		if r.Hits > wholeTokens(b.Remaining) {
@@ -407,28 +441,117 @@ func leakyBucket(ctx context.Context, s Store, c Cache, r *RateLimitReq, reqStat
 			}
 			rl.Status = Status_OVER_LIMIT
 
-			// DRAIN_OVER_LIMIT behavior drains the remaining counter.
+			// DRAIN_OVER_LIMIT behavior drains the remaining counter, but never
+			// raises debt to zero.
 			if HasBehavior(r.Behavior, Behavior_DRAIN_OVER_LIMIT) {
-				b.Remaining = 0
+				b.Remaining = math.Min(b.Remaining, 0)
 				rl.Remaining = 0
 			}
 
 			return rl, nil
 		}
 
-		// Client is only interested in retrieving the current status
-		if r.Hits == 0 {
-			return rl, nil
-		}
-
 		// Negative hits refund tokens, which must not lift the balance above burst.
-		b.Remaining = math.Min(float64(b.Burst), b.Remaining-float64(r.Hits))
+		b.Remaining = snapToZero(math.Min(float64(b.Burst), b.Remaining-float64(r.Hits)))
 		rl.Remaining = wholeTokens(b.Remaining)
 		rl.ResetTime = createdAt + (rl.Limit-rl.Remaining)*int64(rate)
+		if wasInDebt {
+			extendDebtExpiry(c, item, b, createdAt, duration, rate)
+		}
 		return rl, nil
 	}
 
 	return leakyBucketNewItem(ctx, s, c, r, reqState)
+}
+
+// creditedLeak is the tokens that leaked into b between its last credit and now. A NaN
+// rate (Limit and Duration both 0) must not poison the stored balance.
+func creditedLeak(b *LeakyBucketItem, now int64, rate float64) float64 {
+	if now <= b.UpdatedAt {
+		return 0
+	}
+	if leak := float64(now-b.UpdatedAt) / rate; !math.IsNaN(leak) {
+		return leak
+	}
+	return 0
+}
+
+// fullAt is when b's balance is back at burst, in epoch milliseconds.
+func fullAt(b *LeakyBucketItem, rate float64) int64 {
+	return int64(math.Ceil(float64(b.UpdatedAt) + (float64(b.Burst)-b.Remaining)*rate))
+}
+
+// spendableTokens is the balance as a response's remaining: whole tokens, never negative.
+func spendableTokens(balance float64) int64 {
+	return max(0, wholeTokens(balance))
+}
+
+// extendDebtExpiry keeps a key in debt cached until its balance is back at burst.
+// Expiring earlier would hand the next caller a full bucket and forget the bookings.
+func extendDebtExpiry(c Cache, item *CacheItem, b *LeakyBucketItem, now, duration int64, rate float64) {
+	c.UpdateExpiration(item.Key, max(item.ExpireAt, now+duration, fullAt(b, rate)))
+}
+
+// scheduleHits answers a max_wait request for a positive number of hits: it admits them,
+// books them as debt when they fit within the wait allowed, or refuses and charges nothing.
+func scheduleHits(c Cache, item *CacheItem, b *LeakyBucketItem, r *RateLimitReq, reqState RateLimitReqState,
+	rl *RateLimitResp, now, duration int64, rate float64, wasInDebt bool) *RateLimitResp {
+
+	// A limit of 0 makes the rate infinite, so no wait ever admits the hits.
+	if r.Hits > b.Burst || math.IsInf(rate, 0) || math.IsNaN(rate) {
+		if reqState.IsOwner {
+			metricOverLimitCounter.Add(1)
+		}
+		rl.Status = Status_NEVER_FITS
+		return rl
+	}
+
+	if r.Hits <= wholeTokens(b.Remaining) {
+		b.Remaining = snapToZero(b.Remaining - float64(r.Hits))
+		rl.Remaining = spendableTokens(b.Remaining)
+		rl.ResetTime = now + (rl.Limit-rl.Remaining)*int64(rate)
+		if wasInDebt {
+			extendDebtExpiry(c, item, b, now, duration, rate)
+		}
+		return rl
+	}
+
+	// UpdatedAt lies ahead of now only when an earlier plain request on a key not in debt carried a future created_at.
+	// The 1e-6 keeps float error from rounding an exact wait such as 6000 up to 6001.
+	wait := max(1, int64(math.Ceil(float64(max(b.UpdatedAt, now)-now)+(float64(r.Hits)-b.Remaining)*rate-1e-6)))
+	ceiling := reqState.WaitCeiling.Milliseconds()
+	if wait > min(r.MaxWait, ceiling) {
+		if reqState.IsOwner {
+			metricOverLimitCounter.Add(1)
+			if wait > ceiling && wait <= r.MaxWait {
+				metricScheduledCeilingRefusedCount.Add(1)
+			}
+		}
+		rl.Status = Status_OVER_LIMIT
+		rl.RetryAfter = wait
+		return rl
+	}
+
+	b.Remaining -= float64(r.Hits)
+	rl.Status = Status_SCHEDULED
+	rl.RetryAfter = wait
+	rl.Remaining = 0
+	rl.ResetTime = fullAt(b, rate)
+	if reqState.IsOwner {
+		metricScheduledCount.Add(1)
+	}
+	extendDebtExpiry(c, item, b, now, duration, rate)
+	return rl
+}
+
+// snapToZero absorbs float error, such as a balance of 2.9999999999 paying for 3 hits or a debt
+// that leak repays to -9e-16.
+// A balance below zero means debt everywhere else, so a bucket spent exactly to zero must not read as in debt.
+func snapToZero(balance float64) float64 {
+	if math.Abs(balance) < 1e-9 {
+		return 0
+	}
+	return balance
 }
 
 // wholeTokens converts a fractional balance to the tokens a caller can spend.
@@ -441,6 +564,9 @@ func wholeTokens(balance float64) int64 {
 // Called by leakyBucket() when adding a new item in the store.
 func leakyBucketNewItem(ctx context.Context, s Store, c Cache, r *RateLimitReq, reqState RateLimitReqState) (resp *RateLimitResp, err error) {
 	createdAt := *r.CreatedAt
+	if r.MaxWait > 0 {
+		createdAt = epochMillis(clock.Now())
+	}
 	duration := r.Duration
 	rate := float64(duration) / float64(r.Limit)
 	if HasBehavior(r.Behavior, Behavior_DURATION_IS_GREGORIAN) {
@@ -452,6 +578,19 @@ func leakyBucketNewItem(ctx context.Context, s Store, c Cache, r *RateLimitReq, 
 		// Set the initial duration as the remainder of time until
 		// the end of the gregorian interval.
 		duration = expire - (n.UnixNano() / 1000000)
+	}
+
+	// A request that can never fit creates no bucket, so the key stays full for the next caller.
+	if r.MaxWait > 0 && r.Hits > r.Burst {
+		if reqState.IsOwner {
+			metricOverLimitCounter.Add(1)
+		}
+		return &RateLimitResp{
+			Status:    Status_NEVER_FITS,
+			Limit:     r.Limit,
+			Remaining: r.Burst,
+			ResetTime: createdAt + (r.Limit-r.Burst)*int64(rate),
+		}, nil
 	}
 
 	// Create a new leaky bucket
