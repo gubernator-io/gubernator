@@ -28,6 +28,7 @@ import (
 	"os"
 	"runtime"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -2630,7 +2631,27 @@ func TestGetPeerRateLimits(t *testing.T) {
 
 func TestGlobalBehavior(t *testing.T) {
 	const limit = 1000
-	broadcastTimeout := 400 * time.Millisecond
+	// The default test window is 50ms, short enough that a scheduler stall
+	// under load splits one batch into two. The non-owner path waits for two
+	// windows in a row (sync to owner, then broadcast), so the timeout is
+	// four windows.
+	const syncWait = 500 * time.Millisecond
+	const broadcastTimeout = 4 * syncWait
+
+	cluster.Stop()
+	defer func() {
+		require.NoError(t, startGubernator())
+	}()
+	// Fresh ports, because the stopped cluster's listeners are not always
+	// released by the time StartWith binds.
+	peers := testPeers()
+	for i := range peers {
+		peers[i].GRPCAddress = shiftPort(peers[i].GRPCAddress, 1000)
+		peers[i].HTTPAddress = shiftPort(peers[i].HTTPAddress, 1000)
+	}
+	require.NoError(t, cluster.StartWith(peers, cluster.WithGlobalSyncWait(syncWait)))
+	require.NoError(t, connectClients())
+
 	createdAt := epochMillis(clock.Now())
 
 	makeReq := func(name, key string, hits int64) *guber.RateLimitReq {
@@ -3311,7 +3332,8 @@ func getPeerCounters(t *testing.T, peers []*guber.Daemon, name string) map[strin
 
 // sendHitsInOneCall queues every hit within a single GetRateLimits call so
 // they land in one GlobalSyncWait window. Separate calls can straddle the
-// window under CPU load and produce two syncs and broadcasts.
+// window under CPU load and produce two syncs and broadcasts. The window is
+// real time (Interval uses time.Sleep), so freezing the clock cannot pin it.
 func sendHitsInOneCall(t *testing.T, d *guber.Daemon, hits int64, newReq func() *guber.RateLimitReq) {
 	t.Logf("Sending %d hits to peer %s", hits, d.InstanceID)
 	reqs := make([]*guber.RateLimitReq, hits)
@@ -3323,10 +3345,12 @@ func sendHitsInOneCall(t *testing.T, d *guber.Daemon, hits int64, newReq func() 
 	resp, err := d.MustClient().GetRateLimits(ctx, &guber.GetRateLimitsReq{Requests: reqs})
 	require.NoError(t, err)
 	require.Len(t, resp.Responses, len(reqs))
+	var used int64
 	for i, item := range resp.Responses {
+		used += reqs[i].Hits
 		assert.Equal(t, "", item.Error)
 		assert.Equal(t, reqs[i].Limit, item.Limit)
-		assert.Equal(t, reqs[i].Limit-int64(i)-1, item.Remaining)
+		assert.Equal(t, reqs[i].Limit-used, item.Remaining)
 		assert.Equal(t, guber.Status_UNDER_LIMIT, item.Status)
 	}
 }
@@ -3355,8 +3379,8 @@ func epochMillis(t time.Time) int64 {
 	return t.UnixNano() / 1_000_000
 }
 
-func startGubernator() error {
-	err := cluster.StartWith([]guber.PeerInfo{
+func testPeers() []guber.PeerInfo {
+	return []guber.PeerInfo{
 		{GRPCAddress: "127.0.0.1:9990", HTTPAddress: "127.0.0.1:9980", DataCenter: cluster.DataCenterNone},
 		{GRPCAddress: "127.0.0.1:9991", HTTPAddress: "127.0.0.1:9981", DataCenter: cluster.DataCenterNone},
 		{GRPCAddress: "127.0.0.1:9992", HTTPAddress: "127.0.0.1:9982", DataCenter: cluster.DataCenterNone},
@@ -3369,16 +3393,27 @@ func startGubernator() error {
 		{GRPCAddress: "127.0.0.1:9891", HTTPAddress: "127.0.0.1:9881", DataCenter: cluster.DataCenterOne},
 		{GRPCAddress: "127.0.0.1:9892", HTTPAddress: "127.0.0.1:9882", DataCenter: cluster.DataCenterOne},
 		{GRPCAddress: "127.0.0.1:9893", HTTPAddress: "127.0.0.1:9883", DataCenter: cluster.DataCenterOne},
-	})
-	if err != nil {
+	}
+}
+
+func shiftPort(addr string, by int) string {
+	host, port, _ := strings.Cut(addr, ":")
+	n, _ := strconv.Atoi(port)
+	return fmt.Sprintf("%s:%d", host, n+by)
+}
+
+func startGubernator() error {
+	if err := cluster.StartWith(testPeers()); err != nil {
 		return errors.Wrap(err, "while starting cluster")
 	}
+	return connectClients()
+}
 
-	// Populate peer clients. Avoids data races when goroutines conflict trying
-	// to instantiate client singletons.
+// Populate peer clients. Avoids data races when goroutines conflict trying
+// to instantiate client singletons.
+func connectClients() error {
 	for _, peer := range cluster.GetDaemons() {
-		_, err = peer.Client()
-		if err != nil {
+		if _, err := peer.Client(); err != nil {
 			return errors.Wrap(err, "while connecting client")
 		}
 	}
