@@ -256,7 +256,7 @@ that request.
 | `UNDER_LIMIT` | `0`           | Yes, unless `hits` is 0 | Act now. |
 | `SCHEDULED`   | `>= 1`        | Yes             | Sleep `retry_after` milliseconds, then act. Do not call Gubernator again. |
 | `OVER_LIMIT`  | `>= 1`        | No              | Give up now. The value is the wait that would have been needed. |
-| `NEVER_FITS`  | `0`           | No              | Give up. `hits` exceed `burst`, or `limit` or `duration` is not positive, so no wait helps. |
+| `NEVER_FITS`  | `0`           | No              | Give up. `hits` exceed `burst`, or the key already exists and its `limit` or `duration` is not positive, so no wait helps. |
 
 `retry_after` is a relative number of milliseconds, measured from when the owning
 peer answered. `SCHEDULED` and `NEVER_FITS` are only sent to a request with

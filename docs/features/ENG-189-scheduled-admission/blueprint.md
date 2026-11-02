@@ -349,7 +349,7 @@ Applied to `docs/CONTEXT.md` by the first piece:
 * **Validation placement.** The combination checks run in `GetRateLimits` and again at the start of `getLocalRateLimit`, which every owner path (direct, retried, and `GetPeerRateLimits`) passes through, instead of inside the leaky bucket function.
 * **Wait rounding and zero snap.** The wait is `ceil(x − 1e-6)` so float error cannot turn an exact 6000 into 6001, and a balance within 1e-9 of zero is set to exactly zero after a deduction, so a spent bucket is never read as in debt. Both are added to step 5 and to the plain deduction.
 * **Plain negative hits on a key in debt** answer `UNDER_LIMIT` with `remaining` 0 and leave the balance alone; the design only said the debt is unchanged.
-* **`NEVER_FITS` for a rate that cannot be computed.** A `max_wait` request on a key whose `limit` or `duration` is zero or negative gets `NEVER_FITS`, like `hits > burst`, because no wait admits it. The design only named `hits > burst`. A wait too large for an int64 is saturated, so it is refused instead of wrapping to 1 ms on amd64.
+* **`NEVER_FITS` for a rate that cannot be computed.** A `max_wait` request that finds an existing bucket with a `limit` or `duration` that is zero or negative gets `NEVER_FITS`, like `hits > burst`, because no wait admits it. The first request on a new key is still admitted, as it is for a plain request. The design only named `hits > burst`. A wait too large for an int64 is saturated, so it is refused instead of wrapping to 1 ms on amd64.
 * **Items for later pieces.** The `limit`/`duration` rescale, the algorithm-switch count and criteria 15–16 are not built here.
 
 ## Decision Log
