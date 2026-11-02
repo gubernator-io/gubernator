@@ -2640,7 +2640,9 @@ func TestGlobalBehavior(t *testing.T) {
 
 	cluster.Stop()
 	defer func() {
+		cluster.Stop()
 		require.NoError(t, startGubernator())
+		require.Equal(t, len(testPeers()), cluster.NumOfDaemons())
 	}()
 	// Fresh ports, because the stopped cluster's listeners are not always
 	// released by the time StartWith binds.
