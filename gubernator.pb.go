@@ -367,7 +367,8 @@ type RateLimitReq struct {
 	Algorithm Algorithm `protobuf:"varint,6,opt,name=algorithm,proto3,enum=pb.gubernator.Algorithm" json:"algorithm,omitempty"`
 	// Behavior is a set of int32 flags that control the behavior of the rate limit in gubernator
 	Behavior Behavior `protobuf:"varint,7,opt,name=behavior,proto3,enum=pb.gubernator.Behavior" json:"behavior,omitempty"`
-	// Maximum burst size that the limit can accept.
+	// Maximum burst size that the limit can accept. For the leaky bucket, changing burst on an
+	// existing key adds or removes the difference from the remaining balance (never below zero).
 	Burst int64 `protobuf:"varint,8,opt,name=burst,proto3" json:"burst,omitempty"`
 	// This is metadata that is associated with this rate limit. Peer to Peer communication will use
 	// this to pass trace context to other peers. Might be useful for future clients to pass along

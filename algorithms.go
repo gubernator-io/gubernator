@@ -330,16 +330,17 @@ func leakyBucket(ctx context.Context, s Store, c Cache, r *RateLimitReq, reqStat
 			return leakyBucketNewItem(ctx, s, c, r, reqState)
 		}
 
-		if HasBehavior(r.Behavior, Behavior_RESET_REMAINING) {
-			b.Remaining = float64(r.Burst)
+		// Remaining is the unspent balance and Burst is the capacity, so a Burst
+		// change shifts the balance by the same amount. Refilling here would hand
+		// out a free burst.
+		if b.Burst != r.Burst {
+			b.Remaining = math.Max(0, b.Remaining+float64(r.Burst-b.Burst))
+			b.Burst = r.Burst
 		}
 
-		// Update burst, limit and duration if they changed
-		if b.Burst != r.Burst {
-			if r.Burst > int64(b.Remaining) {
-				b.Remaining = float64(r.Burst)
-			}
-			b.Burst = r.Burst
+		// After the Burst shift, so an explicit refill always lands on the new Burst.
+		if HasBehavior(r.Behavior, Behavior_RESET_REMAINING) {
+			b.Remaining = float64(r.Burst)
 		}
 
 		b.Limit = r.Limit
@@ -380,8 +381,7 @@ func leakyBucket(ctx context.Context, s Store, c Cache, r *RateLimitReq, reqStat
 			}
 			b.UpdatedAt = createdAt
 		}
-		// Outside the credit branch so a burst lowered on a request with no
-		// elapsed time still clamps.
+		// Clamp after the leak so credit never lifts Remaining above Burst.
 		b.Remaining = math.Min(float64(b.Burst), b.Remaining)
 
 		rl := &RateLimitResp{

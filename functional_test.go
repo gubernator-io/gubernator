@@ -889,6 +889,7 @@ func TestLeakyBucketContinuousLeak(t *testing.T) {
 		Key       string
 		Hits      int64
 		Burst     int64 // zero means the test's Burst
+		Limit     int64 // zero means the test's Limit
 		Behavior  guber.Behavior
 		Remaining int64
 		Status    guber.Status
@@ -1075,14 +1076,70 @@ func TestLeakyBucketContinuousLeak(t *testing.T) {
 			},
 		},
 		{
-			// Raising burst refills to the new burst.
-			Name:     "BurstIncrease",
+			// Raising burst by n adds n to remaining.
+			Name:     "BurstIncreaseByOne",
 			Limit:    10,
 			Duration: guber.Second * 10,
 			Burst:    5,
 			Steps: []step{
 				{Key: "a", Hits: 5, Remaining: 0, Status: under},
-				{Key: "a", Hits: 0, Burst: 8, Remaining: 8, Status: under},
+				{Key: "a", Hits: 0, Burst: 6, Remaining: 1, Status: under},
+			},
+		},
+		{
+			Name:     "BurstIncreaseByThree",
+			Limit:    10,
+			Duration: guber.Second * 10,
+			Burst:    5,
+			Steps: []step{
+				{Key: "a", Hits: 5, Remaining: 0, Status: under},
+				{Key: "a", Hits: 0, Burst: 8, Remaining: 3, Status: under, Sleep: 3 * clock.Second},
+				{Key: "a", Hits: 0, Burst: 8, Remaining: 6, Status: under},
+			},
+		},
+		{
+			// A Limit-only change moves Burst too, since Burst 0 means Limit.
+			Name:     "LimitOnlyIncrease",
+			Limit:    10,
+			Duration: guber.Second * 10,
+			Steps: []step{
+				{Key: "a", Hits: 8, Remaining: 2, Status: under},
+				{Key: "a", Hits: 0, Limit: 20, Remaining: 12, Status: under},
+			},
+		},
+		{
+			// Lowering burst subtracts the difference from the fractional balance.
+			Name:     "BurstDecreaseKeepsFraction",
+			Limit:    10,
+			Duration: guber.Second * 10,
+			Burst:    5,
+			Steps: []step{
+				{Key: "a", Hits: 5, Remaining: 0, Status: under, Sleep: 2500 * clock.Millisecond},
+				{Key: "a", Hits: 0, Remaining: 2, Status: under},
+				{Key: "a", Hits: 0, Burst: 3, Remaining: 0, Status: under, Sleep: 500 * clock.Millisecond},
+				{Key: "a", Hits: 0, Burst: 3, Remaining: 1, Status: under},
+			},
+		},
+		{
+			// RESET_REMAINING refills to the new burst even when burst drops.
+			Name:     "ResetRemainingWithLowerBurst",
+			Limit:    10,
+			Duration: guber.Second * 10,
+			Burst:    10,
+			Steps: []step{
+				{Key: "a", Hits: 1, Remaining: 9, Status: under},
+				{Key: "a", Hits: 0, Burst: 5, Behavior: guber.Behavior_RESET_REMAINING, Remaining: 5, Status: under},
+			},
+		},
+		{
+			// Remaining never goes below zero when burst drops by more than remaining.
+			Name:     "BurstDecreaseFloorsAtZero",
+			Limit:    10,
+			Duration: guber.Second * 10,
+			Burst:    5,
+			Steps: []step{
+				{Key: "a", Hits: 5, Remaining: 0, Status: under},
+				{Key: "a", Hits: 0, Burst: 3, Remaining: 0, Status: under},
 			},
 		},
 		{
@@ -1133,6 +1190,10 @@ func TestLeakyBucketContinuousLeak(t *testing.T) {
 				if s.Burst != 0 {
 					burst = s.Burst
 				}
+				limit := test.Limit
+				if s.Limit != 0 {
+					limit = s.Limit
+				}
 				resp, err := client.GetRateLimits(context.Background(), &guber.GetRateLimitsReq{
 					Requests: []*guber.RateLimitReq{{
 						Name:      name,
@@ -1140,7 +1201,7 @@ func TestLeakyBucketContinuousLeak(t *testing.T) {
 						Algorithm: guber.Algorithm_LEAKY_BUCKET,
 						Behavior:  s.Behavior,
 						Duration:  test.Duration,
-						Limit:     test.Limit,
+						Limit:     limit,
 						Burst:     burst,
 						Hits:      s.Hits,
 					}},
@@ -1149,7 +1210,11 @@ func TestLeakyBucketContinuousLeak(t *testing.T) {
 				require.Len(t, resp.Responses, 1)
 				assert.Equal(t, s.Status, resp.Responses[0].Status)
 				assert.Equal(t, s.Remaining, resp.Responses[0].Remaining)
-				assert.LessOrEqual(t, resp.Responses[0].Remaining, burst)
+				capacity := burst
+				if capacity == 0 {
+					capacity = limit
+				}
+				assert.LessOrEqual(t, resp.Responses[0].Remaining, capacity)
 				if s.ResetIn != 0 {
 					assert.Equal(t, clock.Now().UnixMilli()+s.ResetIn, resp.Responses[0].ResetTime)
 				}
@@ -2269,14 +2334,14 @@ func TestChangeLimit(t *testing.T) {
 			Name:      "Should subtract 1 from remaining for leaky bucket after limit change",
 			Algorithm: guber.Algorithm_LEAKY_BUCKET,
 			Status:    guber.Status_UNDER_LIMIT,
-			Remaining: 9,
+			Remaining: 8,
 			Limit:     10,
 		},
 		{
 			Name:      "Should subtract 1 from remaining for leaky bucket with new limit",
 			Algorithm: guber.Algorithm_LEAKY_BUCKET,
 			Status:    guber.Status_UNDER_LIMIT,
-			Remaining: 8,
+			Remaining: 7,
 			Limit:     10,
 		},
 	}
