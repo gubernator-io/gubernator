@@ -970,3 +970,75 @@ func TestScheduledAdmissionOwnerRejectsUnvalidatedRequests(t *testing.T) {
 		})
 	}
 }
+
+// startSmallCacheCluster replaces the shared test cluster with one peer that caches size rate limits.
+func startSmallCacheCluster(t *testing.T, size int) guber.V1Client {
+	t.Helper()
+	cluster.Stop()
+	t.Cleanup(func() {
+		cluster.Stop()
+		require.NoError(t, startGubernator())
+	})
+	require.NoError(t, cluster.StartWith([]guber.PeerInfo{
+		{GRPCAddress: "127.0.0.1:10000", HTTPAddress: "127.0.0.1:10001", DataCenter: cluster.DataCenterNone},
+	}, cluster.WithCacheSize(size)))
+	client, err := guber.DialV1Server(cluster.PeerAt(0).GRPCAddress, nil)
+	require.NoError(t, err)
+	return client
+}
+
+func TestScheduledDebtEvictionMetrics(t *testing.T) {
+	const (
+		metricEvictions = "gubernator_scheduled_debt_evictions_count"
+		metricLost      = "gubernator_scheduled_debt_lost_tokens"
+		name            = "TestScheduledDebtEvictionMetrics"
+	)
+	client := startSmallCacheCluster(t, 2)
+	defer clock.Freeze(clock.Now()).Unfreeze()
+	daemon := cluster.DaemonAt(0)
+	evictionsBefore := getMetricValue(t, daemon, metricEvictions)
+	lostBefore := getMetricValue(t, daemon, metricLost)
+
+	// Keys without debt are evicted without being counted.
+	sendOne(t, client, leaky10PerMinute(name, "plain1", 1, 0))
+	sendOne(t, client, leaky10PerMinute(name, "plain2", 1, 0))
+	sendOne(t, client, leaky10PerMinute(name, "plain3", 1, 0))
+	assert.Equal(t, float64(0), getMetricValue(t, daemon, metricEvictions)-evictionsBefore)
+	assert.Equal(t, float64(0), getMetricValue(t, daemon, metricLost)-lostBefore)
+
+	// Spend the bucket, then book 3 more hits as debt.
+	sendOne(t, client, leaky10PerMinute(name, "debt", 10, 0))
+	resp := sendOne(t, client, leaky10PerMinute(name, "debt", 3, 60000))
+	require.Equal(t, guber.Status_SCHEDULED, resp.Status)
+
+	// Two newer keys push the indebted key out of a cache that holds two.
+	sendOne(t, client, leaky10PerMinute(name, "newer1", 1, 0))
+	sendOne(t, client, leaky10PerMinute(name, "newer2", 1, 0))
+	require.Eventually(t, func() bool {
+		return getMetricValue(t, daemon, metricEvictions)-evictionsBefore == 1
+	}, 5*time.Second, 10*time.Millisecond)
+	assert.InDelta(t, 3, getMetricValue(t, daemon, metricLost)-lostBefore, 1e-6)
+
+	// The key restarts full, which is the over-send the metric warns about.
+	assert.Equal(t, int64(9), sendOne(t, client, leaky10PerMinute(name, "debt", 1, 0)).Remaining)
+}
+
+func TestScheduledDebtEvictionIgnoresRepaidDebt(t *testing.T) {
+	const (
+		metricEvictions = "gubernator_scheduled_debt_evictions_count"
+		name            = "TestScheduledDebtEvictionIgnoresRepaidDebt"
+	)
+	client := startSmallCacheCluster(t, 1)
+	defer clock.Freeze(clock.Now()).Unfreeze()
+	daemon := cluster.DaemonAt(0)
+	evictionsBefore := getMetricValue(t, daemon, metricEvictions)
+
+	sendOne(t, client, leaky10PerMinute(name, "repaid", 10, 0))
+	resp := sendOne(t, client, leaky10PerMinute(name, "repaid", 1, 60000))
+	require.Equal(t, guber.Status_SCHEDULED, resp.Status)
+	clock.Advance(time.Minute)
+
+	// The debt has leaked away by the time the key is evicted.
+	sendOne(t, client, leaky10PerMinute(name, "other", 1, 0))
+	assert.Equal(t, float64(0), getMetricValue(t, daemon, metricEvictions)-evictionsBefore)
+}
