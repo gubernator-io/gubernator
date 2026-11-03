@@ -251,6 +251,92 @@ until after the process.
 Once an over limit occurs in the "After" step, successive processes will detect
 the over limit state in the "Before" step.
 
+## Scheduled Admission (`max_wait`)
+A service that paces its calls to a third party's quota, with several processes
+sharing one rate limit and a deadline on every call, can set `max_wait` on a
+`LEAKY_BUCKET` request. `max_wait` is the longest, in milliseconds, the caller is
+willing to wait. The caller gets one answer in one call and never asks again for
+that request.
+
+| `status`      | `retry_after` | Bucket charged? | Caller does |
+| ------------- | ------------- | --------------- | ----------- |
+| `UNDER_LIMIT` | `0`           | Yes, unless `hits` is 0 | Act now. |
+| `SCHEDULED`   | `>= 1`        | Yes             | Sleep `retry_after` milliseconds, then act. Do not call Gubernator again. |
+| `OVER_LIMIT`  | `>= 1`        | No              | Give up now. The value is the wait that would have been needed. |
+| `NEVER_FITS`  | `0`           | No              | Give up. `hits` exceed `burst`, or the key already exists and its `limit` or `duration` is not positive, so no wait helps. |
+
+`retry_after` is a relative number of milliseconds, measured from when the owning
+peer answered. `SCHEDULED` and `NEVER_FITS` are only sent to a request with
+`max_wait > 0`, so existing clients, which read every status other than
+`OVER_LIMIT` as allowed, never see them.
+
+Ten requests per minute (6000ms per token), `burst` 10 and `max_wait` 120000, with
+31 requests at once, gives requests 1 to 10 `UNDER_LIMIT`, request 11 `SCHEDULED`
+with `retry_after` 6000, request 12 12000, and so on up to request 30 at 120000.
+Request 31 gets `OVER_LIMIT` with `retry_after` 126000 and is not charged.
+
+`max_wait` combines only with `LEAKY_BUCKET`. `TOKEN_BUCKET`, `GLOBAL` (including
+`GUBER_FORCE_GLOBAL`), `DURATION_IS_GREGORIAN`, `DRAIN_OVER_LIMIT`,
+`RESET_REMAINING`, negative `hits` and a negative `max_wait` come back as a
+per-request `error`. Check `error` first and ignore every other field when it is set.
+
+`GUBER_SCHEDULE_MAX_WAIT` (default `5m`) caps the wait the server will book, whatever
+`max_wait` says. When the ceiling refuses a request, `retry_after` is at or below the caller's
+own `max_wait`, while a refusal for the caller's own deadline returns a larger one. Retrying
+at once with the same deadline is refused again; the wait only shrinks as the existing
+bookings pass.
+
+### Pacing outbound calls
+```go
+resp := getRateLimit(ctx, &gubernator.RateLimitReq{
+    Name: "vendor_api", UniqueKey: "shared", Algorithm: gubernator.Algorithm_LEAKY_BUCKET,
+    Limit: 9, Duration: gubernator.Minute, Burst: 1, Hits: 1,
+    MaxWait: deadline.Milliseconds(), // the caller's deadline for acting, not an RPC timeout
+})
+switch {
+case resp.Error != "":
+    // Fix the request or fail the call.
+case resp.Status == gubernator.Status_UNDER_LIMIT:
+    callVendor()
+case resp.Status == gubernator.Status_SCHEDULED:
+    time.Sleep(time.Duration(resp.RetryAfter) * time.Millisecond)
+    callVendor()
+default: // OVER_LIMIT or NEVER_FITS
+    failFast()
+}
+```
+
+* **Leave headroom.** Gubernator promises that calls on a key conform to the configured
+  leaky bucket if every caller acts at its granted time. It promises nothing about the
+  third party. Set the limit about 10% below the real quota, more at high rates or when
+  callers wake up late, and use `burst` 1 when the third party counts calls in fixed
+  windows. A leaky bucket with `burst` equal to `limit` allows a full burst and then one
+  call per `rate`, which is 19 calls inside one 60 second window for a 10 per minute quota.
+* **State loss forgets bookings.** A restart without a `Store`, an LRU cache eviction, or a
+  hash ring change that moves the key gives it a full bucket again. Callers can then
+  over-send by up to `GUBER_SCHEDULE_MAX_WAIT` worth of quota plus one burst, once per loss.
+* **A plain request on a key in debt is refused.** While scheduled traffic holds a key in
+  debt (its balance is below zero), a request without `max_wait` gets `OVER_LIMIT` with
+  `remaining` 0, because admitting it would spend a slot already promised. `remaining` is
+  never negative. `RESET_REMAINING` still resets the bucket, and is counted in
+  `gubernator_scheduled_debt_reset_count`.
+* **A refund on a key in debt is dropped.** A plain request with negative `hits` on a key in
+  debt answers `UNDER_LIMIT` with `remaining` 0 and changes nothing, because paying the debt
+  back would hand a booked slot to a later caller. The refund is not applied.
+* **A forward error can leave a booking behind.** A `max_wait` request is never retried. If the
+  owner books it and the reply is lost on the way back, the caller gets an `error` and the slot
+  stays booked until it passes, so later callers wait behind it. Treat that `error` as a
+  failed call, not as proof that nothing was charged.
+* **Detect an old server.** An owner that predates `max_wait` ignores it. It answers
+  `OVER_LIMIT` with `retry_after` 0, which a current owner never sends to a request with
+  `max_wait`.
+* **Upgrade every peer first.** An older forwarding peer batches and retries requests,
+  which can book one request several times. Set `max_wait` only after every peer runs
+  this version.
+* **JSON gateway.** `max_wait` and `retry_after` are `int64`, so the HTTP API writes them as
+  strings (`"max_wait": "120000"`, `"retry_after": "6000"`) and accepts either form on input.
+  Every rate limit in a `GetRateLimits` response now includes `"retry_after": "0"`.
+
 ## Gubernator as a library
 Importing the module requires Go 1.26.10 or newer.
 
@@ -357,7 +443,8 @@ Example response:
       "error": "",
       "metadata": {
         "owner": "gubernator:1051"
-      }
+      },
+      "retry_after": "0"
     }
   ]
 }
@@ -453,6 +540,8 @@ Gubernator is configured via environment variables with an optional `--config` f
 which takes a file of key/values and places them into the local environment before startup.
 
 See the `example.conf` for all available config options and their descriptions.
+`GUBER_SCHEDULE_MAX_WAIT` (default `5m`) sets the longest wait the server books for a
+request that sets `max_wait`.
 
 ### Architecture
 See [architecture.md](docs/architecture.md) for a full description of the architecture and the inner 

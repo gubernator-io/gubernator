@@ -312,6 +312,7 @@ func (worker *Worker) handleGetRateLimit(ctx context.Context, req *RateLimitReq,
 		}
 
 	case Algorithm_LEAKY_BUCKET:
+		reqState.WaitCeiling = worker.conf.Behaviors.ScheduleMaxWait
 		rlResponse, err = leakyBucket(ctx, worker.conf.Store, cache, req, reqState)
 		if err != nil {
 			msg := "Error in leakyBucket"
