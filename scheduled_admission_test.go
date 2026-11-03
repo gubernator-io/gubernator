@@ -1223,3 +1223,21 @@ func TestScheduledAdmissionStoredNegativeConfigKeepsGrantedSlots(t *testing.T) {
 	assert.Equal(t, guber.Status_SCHEDULED, resp.Status)
 	assert.Equal(t, int64(15000), resp.RetryAfter)
 }
+
+func TestScheduledAdmissionZeroLimitKeepsBurstOfDebt(t *testing.T) {
+	defer clock.Freeze(clock.Now()).Unfreeze()
+	client, err := guber.DialV1Server(cluster.PeerAt(0).GRPCAddress, nil)
+	require.NoError(t, err)
+	const name, key = "TestScheduledAdmissionZeroLimitKeepsBurstOfDebt", "account:1"
+
+	bookDebt(t, client, name, key, 2)
+
+	// A limit of 0 with no burst arrives with burst 0, which must not replace the burst of a key in debt.
+	zero := leaky10PerMinute(name, key, 0, 0)
+	zero.Limit, zero.Burst = 0, 0
+	sendOne(t, client, zero)
+
+	// 30s leaks 5 tokens, so the balance is 3. Swapping the burst 0 for 10 would add 10 and fill the bucket.
+	clock.Advance(30 * time.Second)
+	assert.Equal(t, int64(3), sendOne(t, client, leaky10PerMinute(name, key, 0, 0)).Remaining)
+}
