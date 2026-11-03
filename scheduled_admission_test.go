@@ -1140,3 +1140,22 @@ func TestScheduledAdmissionResetAdoptsGregorianConfig(t *testing.T) {
 	assert.Equal(t, int64(20), resp.Limit)
 	assert.Equal(t, int64(20), resp.Remaining)
 }
+
+func TestScheduledAdmissionResetUsesGregorianRate(t *testing.T) {
+	defer clock.Freeze(clock.Now()).Unfreeze()
+	client, err := guber.DialV1Server(cluster.PeerAt(0).GRPCAddress, nil)
+	require.NoError(t, err)
+	const name, key = "TestScheduledAdmissionResetUsesGregorianRate", "account:1"
+
+	bookDebt(t, client, name, key, 2)
+
+	// The reset forgives the debt, so reset_time follows the Gregorian rate of 20 per hour
+	// (180s per token) and not the 6s per token the debt was booked at.
+	resp := sendOne(t, client, &guber.RateLimitReq{
+		Name: name, UniqueKey: key, Algorithm: guber.Algorithm_LEAKY_BUCKET,
+		Duration: guber.GregorianHours, Limit: 20, Burst: 20, Hits: 1,
+		Behavior: guber.Behavior_DURATION_IS_GREGORIAN | guber.Behavior_RESET_REMAINING,
+	})
+	assert.Equal(t, int64(19), resp.Remaining)
+	assert.GreaterOrEqual(t, resp.ResetTime-clock.Now().UnixMilli(), int64(100_000))
+}

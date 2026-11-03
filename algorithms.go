@@ -370,6 +370,7 @@ func leakyBucket(ctx context.Context, s Store, c Cache, r *RateLimitReq, reqStat
 			// Update the duration to be the end of the gregorian interval
 			duration = expire - (n.UnixNano() / 1000000)
 		}
+		requestRate := rate
 		if keepStored {
 			rate = storedRate
 		}
@@ -424,6 +425,7 @@ func leakyBucket(ctx context.Context, s Store, c Cache, r *RateLimitReq, reqStat
 		if !keepStored || b.Remaining >= 0 {
 			b.Limit = r.Limit
 			b.Duration = r.Duration
+			rate = requestRate
 		}
 
 		rl := &RateLimitResp{
