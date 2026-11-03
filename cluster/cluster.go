@@ -225,3 +225,17 @@ func (o *eventChannelOption) Apply(cfg *gubernator.DaemonConfig) {
 func WithEventChannel(eventChannel chan<- gubernator.HitEvent) option {
 	return &eventChannelOption{eventChannel: eventChannel}
 }
+
+type globalSyncWaitOption struct {
+	wait clock.Duration
+}
+
+func (o *globalSyncWaitOption) Apply(cfg *gubernator.DaemonConfig) {
+	cfg.Behaviors.GlobalSyncWait = o.wait
+}
+
+// WithGlobalSyncWait sets how long each daemon queues global hits and
+// broadcasts before sending them.
+func WithGlobalSyncWait(wait clock.Duration) option {
+	return &globalSyncWaitOption{wait: wait}
+}
