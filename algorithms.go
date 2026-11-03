@@ -346,11 +346,12 @@ func leakyBucket(ctx context.Context, s Store, c Cache, r *RateLimitReq, reqStat
 		// Debt is booked at the stored rate. A changed limit or duration rescales it to the new
 		// rate so the debt clears at the same moment and no granted slot is freed or pushed out.
 		// A Gregorian rate follows the calendar and an unusable one cannot be credited, so such a
-		// request leaves the stored config alone while the key is in debt. Limit and duration are
-		// checked one by one, because two negatives make a positive rate.
+		// request leaves the stored config alone while the key is in debt. A request's limit and
+		// duration are checked one by one, because two negatives make a positive rate. The stored
+		// quotient is the rate the debt was booked at, whatever the signs.
 		gregorian := HasBehavior(r.Behavior, Behavior_DURATION_IS_GREGORIAN)
 		storedRate := float64(b.Duration) / float64(b.Limit)
-		storedUsable := b.Limit > 0 && b.Duration > 0 && !unusableRate(storedRate)
+		storedUsable := !unusableRate(storedRate)
 		requestUsable := r.Limit > 0 && r.Duration > 0 && !unusableRate(rate)
 		configChanged := b.Limit != r.Limit || b.Duration != r.Duration
 		keepStored := (gregorian || !requestUsable) && b.Remaining < 0 && storedUsable

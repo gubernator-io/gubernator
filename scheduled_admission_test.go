@@ -1197,3 +1197,29 @@ func TestScheduledAdmissionNegativeConfigKeepsDebt(t *testing.T) {
 		})
 	}
 }
+
+func TestScheduledAdmissionStoredNegativeConfigKeepsGrantedSlots(t *testing.T) {
+	defer clock.Freeze(clock.Now()).Unfreeze()
+	client, err := guber.DialV1Server(cluster.PeerAt(0).GRPCAddress, nil)
+	require.NoError(t, err)
+	const name, key = "TestScheduledAdmissionStoredNegativeConfigKeepsGrantedSlots", "account:1"
+
+	// A key that is not in debt adopts two negatives, which book at their positive quotient, 6000ms per token.
+	stored := func(hits, maxWait int64) *guber.RateLimitReq {
+		req := leaky10PerMinute(name, key, hits, maxWait)
+		req.Limit, req.Duration = -10, -guber.Minute
+		return req
+	}
+	sendOne(t, client, leaky10PerMinute(name, key, 10, 0))
+	sendOne(t, client, stored(0, 0))
+	for range 2 {
+		require.Equal(t, guber.Status_SCHEDULED, sendOne(t, client, stored(1, 120000)).Status)
+	}
+
+	// A valid request at twice the rate must rescale that debt, as it does for any other stored rate.
+	raise := leaky10PerMinute(name, key, 1, 120000)
+	raise.Limit = 20
+	resp := sendOne(t, client, raise)
+	assert.Equal(t, guber.Status_SCHEDULED, resp.Status)
+	assert.Equal(t, int64(15000), resp.RetryAfter)
+}
