@@ -320,6 +320,11 @@ default: // OVER_LIMIT or NEVER_FITS
   `remaining` 0, because admitting it would spend a slot already promised. `remaining` is
   never negative. `RESET_REMAINING` still resets the bucket, and is counted in
   `gubernator_scheduled_debt_reset_count`.
+* **Changing `limit` or `duration` keeps booked slots.** On a key in debt, the debt is
+  rescaled by old rate over new rate, so it clears at the same moment and every granted slot
+  keeps its time. Raising the limit does not let new callers jump ahead of slots already
+  promised. Switching the key to `TOKEN_BUCKET` forgives the debt, as the `algorithm`
+  field documents, and is counted in `gubernator_scheduled_debt_reset_count`.
 * **A refund on a key in debt is dropped.** A plain request with negative `hits` on a key in
   debt answers `UNDER_LIMIT` with `remaining` 0 and changes nothing, because paying the debt
   back would hand a booked slot to a later caller. The refund is not applied.

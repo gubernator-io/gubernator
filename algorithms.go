@@ -80,6 +80,10 @@ func tokenBucket(ctx context.Context, s Store, c Cache, r *RateLimitReq, reqStat
 
 	if ok {
 		// Item found in cache or store.
+		// Both removals below are documented resets, so booked debt on a leaky item is forgiven and counted.
+		if lb, leaky := item.Value.(*LeakyBucketItem); leaky && debtAt(lb, epochMillis(clock.Now())) {
+			metricScheduledDebtResetCount.Add(1)
+		}
 		if HasBehavior(r.Behavior, Behavior_RESET_REMAINING) {
 			c.Remove(hashKey)
 
@@ -336,13 +340,20 @@ func leakyBucket(ctx context.Context, s Store, c Cache, r *RateLimitReq, reqStat
 			createdAt = epochMillis(clock.Now())
 		}
 
-		b.Limit = r.Limit
-		b.Duration = r.Duration
-
 		duration := r.Duration
 		rate := float64(duration) / float64(r.Limit)
 
-		if HasBehavior(r.Behavior, Behavior_DURATION_IS_GREGORIAN) {
+		// Debt is booked at the stored rate. A changed limit or duration rescales it to the new
+		// rate so the debt clears at the same moment and no granted slot is freed or pushed out.
+		// A Gregorian rate follows the calendar and an unusable one cannot be credited, so such a
+		// request leaves the stored config alone while the key is in debt.
+		gregorian := HasBehavior(r.Behavior, Behavior_DURATION_IS_GREGORIAN)
+		storedRate := float64(b.Duration) / float64(b.Limit)
+		configChanged := b.Limit != r.Limit || b.Duration != r.Duration
+		keepStored := (gregorian || unusableRate(rate)) && b.Remaining < 0 && !unusableRate(storedRate)
+		rescale := !gregorian && b.Remaining < 0 && configChanged && !unusableRate(storedRate) && !unusableRate(rate)
+
+		if gregorian {
 			d, err := GregorianDuration(clock.Now(), r.Duration)
 			if err != nil {
 				return nil, err
@@ -359,6 +370,9 @@ func leakyBucket(ctx context.Context, s Store, c Cache, r *RateLimitReq, reqStat
 			// Update the duration to be the end of the gregorian interval
 			duration = expire - (n.UnixNano() / 1000000)
 		}
+		if keepStored {
+			rate = storedRate
+		}
 
 		// wasInDebt is the balance before this request's leak is credited, so it can be true
 		// for a request that finds the debt already paid. Expiry of such a key is owned by
@@ -372,9 +386,16 @@ func leakyBucket(ctx context.Context, s Store, c Cache, r *RateLimitReq, reqStat
 		// Credit elapsed time as fractional tokens on every request. Advancing
 		// UpdatedAt only after a whole token leaked drops or double counts the
 		// fraction, and clamping through int64 lets 3.0x pass burst 3.
+		creditRate := rate
+		if rescale {
+			creditRate = storedRate
+		}
 		if createdAt > b.UpdatedAt {
-			b.Remaining += creditedLeak(b, createdAt, rate)
+			b.Remaining += creditedLeak(b, createdAt, creditRate)
 			b.UpdatedAt = createdAt
+		}
+		if rescale && snapToZero(b.Remaining) < 0 {
+			b.Remaining *= storedRate / rate
 		}
 
 		// Remaining is the unspent balance and Burst is the capacity, so a Burst change
@@ -399,6 +420,12 @@ func leakyBucket(ctx context.Context, s Store, c Cache, r *RateLimitReq, reqStat
 		// Clamp after the leak so credit never lifts Remaining above Burst.
 		b.Remaining = snapToZero(math.Min(float64(b.Burst), b.Remaining))
 
+		// Decided on the final balance, so a request that repays or resets the debt adopts its config.
+		if !keepStored || b.Remaining >= 0 {
+			b.Limit = r.Limit
+			b.Duration = r.Duration
+		}
+
 		rl := &RateLimitResp{
 			Limit:     b.Limit,
 			Remaining: spendableTokens(b.Remaining),
@@ -416,9 +443,9 @@ func leakyBucket(ctx context.Context, s Store, c Cache, r *RateLimitReq, reqStat
 				s.OnChange(ctx, r, item)
 			}()
 		}
-		if wasInDebt && burstChanged {
+		if wasInDebt && (burstChanged || configChanged) && !unusableRate(rate) {
 			// Deferred after OnChange so it runs first and the Store sees the extended expiry.
-			// A new burst moves the moment the balance is back at burst, whatever the outcome.
+			// A new burst, limit or duration moves the moment the balance is back at burst, whatever the outcome.
 			defer extendDebtExpiry(c, item, b, createdAt, duration, rate)
 		}
 
@@ -478,6 +505,15 @@ func creditedLeak(b *LeakyBucketItem, now int64, rate float64) float64 {
 		return leak
 	}
 	return 0
+}
+
+// debtAt reports whether b's balance, credited to now, is still below zero.
+func debtAt(b *LeakyBucketItem, now int64) bool {
+	balance := b.Remaining
+	if rate := float64(b.Duration) / float64(b.Limit); !unusableRate(rate) {
+		balance += creditedLeak(b, now, rate)
+	}
+	return snapToZero(balance) < 0
 }
 
 // fullAt is when b's balance is back at burst, in epoch milliseconds.
