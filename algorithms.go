@@ -346,12 +346,20 @@ func leakyBucket(ctx context.Context, s Store, c Cache, r *RateLimitReq, reqStat
 		// Debt is booked at the stored rate. A changed limit or duration rescales it to the new
 		// rate so the debt clears at the same moment and no granted slot is freed or pushed out.
 		// A Gregorian rate follows the calendar and an unusable one cannot be credited, so such a
-		// request leaves the stored config alone while the key is in debt.
+		// request leaves the stored config alone while the key is in debt. Limit and duration are
+		// checked one by one, because two negatives make a positive rate.
 		gregorian := HasBehavior(r.Behavior, Behavior_DURATION_IS_GREGORIAN)
 		storedRate := float64(b.Duration) / float64(b.Limit)
+		storedUsable := b.Limit > 0 && b.Duration > 0 && !unusableRate(storedRate)
+		requestUsable := r.Limit > 0 && r.Duration > 0 && !unusableRate(rate)
 		configChanged := b.Limit != r.Limit || b.Duration != r.Duration
-		keepStored := (gregorian || unusableRate(rate)) && b.Remaining < 0 && !unusableRate(storedRate)
-		rescale := !gregorian && b.Remaining < 0 && configChanged && !unusableRate(storedRate) && !unusableRate(rate)
+		keepStored := (gregorian || !requestUsable) && b.Remaining < 0 && storedUsable
+		rescale := !gregorian && requestUsable && b.Remaining < 0 && configChanged && storedUsable
+		// A negative burst would deepen the debt through the clamp below, so a key in debt keeps its own.
+		burst := r.Burst
+		if burst < 0 && b.Remaining < 0 {
+			burst = b.Burst
+		}
 
 		if gregorian {
 			d, err := GregorianDuration(clock.Now(), r.Duration)
@@ -379,7 +387,7 @@ func leakyBucket(ctx context.Context, s Store, c Cache, r *RateLimitReq, reqStat
 		// for a request that finds the debt already paid. Expiry of such a key is owned by
 		// extendDebtExpiry, which only lengthens it, so today's now+duration update is skipped.
 		wasInDebt := b.Remaining < 0 && !HasBehavior(r.Behavior, Behavior_RESET_REMAINING)
-		burstChanged := b.Burst != r.Burst
+		burstChanged := b.Burst != burst
 		if r.Hits != 0 && !wasInDebt {
 			c.UpdateExpiration(r.HashKey(), createdAt+duration)
 		}
@@ -405,9 +413,9 @@ func leakyBucket(ctx context.Context, s Store, c Cache, r *RateLimitReq, reqStat
 		// A debt still owed is left alone, since a burst change must not forgive it.
 		if burstChanged {
 			if snapToZero(b.Remaining) >= 0 {
-				b.Remaining = math.Max(0, b.Remaining+float64(r.Burst-b.Burst))
+				b.Remaining = math.Max(0, b.Remaining+float64(burst-b.Burst))
 			}
-			b.Burst = r.Burst
+			b.Burst = burst
 		}
 
 		// After the Burst shift, so an explicit refill always lands on the new Burst.
@@ -415,7 +423,7 @@ func leakyBucket(ctx context.Context, s Store, c Cache, r *RateLimitReq, reqStat
 			if snapToZero(b.Remaining) < 0 {
 				metricScheduledDebtResetCount.Add(1)
 			}
-			b.Remaining = float64(r.Burst)
+			b.Remaining = float64(burst)
 		}
 
 		// Clamp after the leak so credit never lifts Remaining above Burst.

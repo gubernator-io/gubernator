@@ -1159,3 +1159,41 @@ func TestScheduledAdmissionResetUsesGregorianRate(t *testing.T) {
 	assert.Equal(t, int64(19), resp.Remaining)
 	assert.GreaterOrEqual(t, resp.ResetTime-clock.Now().UnixMilli(), int64(100_000))
 }
+
+func TestScheduledAdmissionNegativeConfigKeepsDebt(t *testing.T) {
+	defer clock.Freeze(clock.Now()).Unfreeze()
+	client, err := guber.DialV1Server(cluster.PeerAt(0).GRPCAddress, nil)
+	require.NoError(t, err)
+	const name = "TestScheduledAdmissionNegativeConfigKeepsDebt"
+
+	for _, test := range []struct {
+		name, key string
+		limit     int64
+		duration  int64
+		burst     int64
+		bookBad   bool
+	}{
+		// With burst omitted, a negative limit makes the burst negative, which would deepen the debt.
+		{name: "negativeLimit", key: "limit", limit: -10, duration: guber.Minute},
+		// Two negatives make a positive rate, which would rescale the debt by a factor of 60000.
+		{name: "negativeLimitAndDuration", key: "both", limit: -10, duration: -1, burst: 10, bookBad: true},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			bookDebt(t, client, name, test.key, 2)
+
+			bad := leaky10PerMinute(name, test.key, 0, 0)
+			bad.Limit, bad.Duration, bad.Burst = test.limit, test.duration, test.burst
+			sendOne(t, client, bad)
+
+			// The debt of 2 tokens is untouched, so the next booking waits 3 tokens, 18000ms. A
+			// restored config would rescale the debt back, so book with the bad one to see it.
+			next := leaky10PerMinute(name, test.key, 1, 120000)
+			if test.bookBad {
+				next.Limit, next.Duration, next.Burst = test.limit, test.duration, test.burst
+			}
+			resp := sendOne(t, client, next)
+			assert.Equal(t, guber.Status_SCHEDULED, resp.Status)
+			assert.Equal(t, int64(18000), resp.RetryAfter)
+		})
+	}
+}
