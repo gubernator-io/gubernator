@@ -36,7 +36,7 @@ A leaky bucket is a queue of time. Each admitted hit pushes the bucket's "next f
 `SCHEDULED` and `NEVER_FITS` are only ever sent to a request with `max_wait > 0`. Three more cases reach such a caller:
 
 * `error` **is set.** Ignore every other field. Check `error` first.
-* `OVER_LIMIT` **with** `retry_after` **≤ the caller's own** `max_wait`**.** The server's ceiling refused it, not the caller's deadline. Retrying with the same deadline will be refused again.
+* `OVER_LIMIT` **with** `retry_after` **≤ the caller's own** `max_wait`**.** The server's ceiling refused it, not the caller's deadline. An immediate retry with the same deadline is refused again, since the wait only shrinks as existing bookings pass.
 * `OVER_LIMIT` **with** `retry_after` **0.** The owner predates this feature and ignored `max_wait`.
 
 Worked example, 10/min (`rate` 6000 ms), burst 10, `max_wait` 120000, 31 requests at t=0: requests 1–10 get `UNDER_LIMIT`; request 11 gets `SCHEDULED` 6000; request *k* gets `SCHEDULED` (k−10)×6000, up to request 30 at 120000; request 31 gets `OVER_LIMIT` 126000 and is not charged.
@@ -49,7 +49,7 @@ Worked example, 10/min (`rate` 6000 ms), burst 10, `max_wait` 120000, 31 request
 
 Gubernator promises nothing about the third party. A caller pacing a strict quota sets its limit below the real one (about 10% headroom, more at high rates or with high wake-up jitter), and uses `burst` 1 when the third party counts calls in fixed windows. A leaky bucket with `burst` = `limit` allows a full burst then one per `rate`: 19 calls inside one 60 s window for a 10/min limit.
 
-**The opt-in is per request; the effect is per key.** While scheduled traffic holds a key in debt, a plain request on that key is refused like any over-limit request. That is correct: admitting it would spend a slot already promised.
+**The opt-in is per request; the effect is per key.** While scheduled traffic holds a key in debt, a plain request with `hits > 0` on that key is refused like any over-limit request. That is correct: admitting it would spend a slot already promised.
 
 ## Wire Contract
 
@@ -93,7 +93,7 @@ message RateLimitResp {
 ```
 
 * **Remaining.** `remaining` is never negative. On a key in debt every caller, opted in or not, reads 0.
-* **Reset time.** On a key in debt `reset_time` is computed from the real (negative) balance, so it lies further out than `now + duration`. It still means "when the bucket is full again".
+* **Reset time.** On a key in debt `reset_time` is computed from the real (negative) balance. It still means "when the bucket is full again", which is not `now + duration`. With `burst` equal to `limit` it lies beyond it, and with a smaller `burst` it can lie before it. Cache expiry is separate and never earlier than that moment.
 * **Go.** `retry_after` and `max_wait` are plain `int64` milliseconds: `time.Duration(resp.RetryAfter) * time.Millisecond`.
 * **HTTP.** The JSON gateway writes every `int64` as a string and accepts either form on input: `"max_wait": "120000"`, `"retry_after": "6000"`. It marshals with `EmitUnpopulated`, so every HTTP response gains `"retry_after": "0"`. That key is additive.
 * **Errors.** Per-request problems come back in `RateLimitResp.error`, as validation errors do today:
@@ -119,8 +119,8 @@ When several rows match, the first row in table order wins, after the `max_wait 
 ### State Invariants
 
 1. **A request with** `max_wait = 0` **never receives** `SCHEDULED` **or** `NEVER_FITS`**, and its** `retry_after` **is 0.** On a key not in debt its response is today's (after ENG-208). Violation is prevented by testing `max_wait > 0` before any new branch.
-2. **Debt is bounded by the ceiling.** A leaky balance is never below `−ceiling / rate` tokens. A booking happens only when its wait, `(hits − balance) × rate`, is at most the ceiling, so the balance after it is at least `−ceiling / rate`. Leak only raises the balance. A `limit` or `duration` change on a key in debt rescales the balance by old rate over new rate, so the moment the debt clears, and this bound, are unchanged.
-3. **A refusal never changes the balance.** `OVER_LIMIT` and `NEVER_FITS` to a request with `max_wait` leave the bucket as they found it, apart from adopting a changed `limit`, `duration` or `burst`, which never moves the moment the debt clears.
+2. **Debt is bounded by the ceiling.** A leaky balance is never below `−ceiling / rate` tokens. A booking happens only when its wait, `(hits − balance) × rate`, is at most the ceiling, so the balance after it is at least `−ceiling / rate`. Leak only raises the balance. Once `config-change-in-debt` ships, a `limit` or `duration` change on a key in debt rescales the balance by old rate over new rate, so the moment the debt clears, and this bound, are unchanged.
+3. **A refusal never charges the request.** `OVER_LIMIT` and `NEVER_FITS` to a request with `max_wait` deduct nothing and add no booking. The bucket still credits the leak of elapsed time and adopts a changed `limit`, `duration` or `burst`. A changed `burst` never moves the moment the debt clears. A changed `limit` or `duration` moves it until `config-change-in-debt` rescales the balance.
 4. **Slots follow processing order.** A booking processed later never gets an earlier slot than one processed before it on the same key. Each booking lowers the balance, so the next slot (`now + wait`) is later by at least that booking's `hits × rate`.
 5. **Spacing.** With no state loss and every caller acting at its slot, calls on a key never exceed `burst` at once nor arrive faster than one per `rate`, within 1 ms of rounding.
 6. **An item in debt outlives its debt.** While a bucket's balance is below zero, its cache expiry is never earlier than the moment the balance would be back at `burst`. Otherwise it would expire while in debt and return as a full bucket.

@@ -66,7 +66,7 @@ counted.
 - A caller can tell a ceiling refusal from a deadline refusal with no extra field.
 - Post-loss over-send is one ceiling of quota on every key, whatever the limit's notation. Operators
   lower the ceiling to shrink it, and raise it for callers with longer deadlines.
-- `remaining` keeps its meaning for every client. A key in debt reads 0, and its `reset_time` moves past
+- `remaining` keeps its meaning for every client. A key in debt reads 0, and its `reset_time` is when the bucket is full again, which can lie past
   `now + duration`.
 - A plain `RESET_REMAINING`, or an algorithm change, releases outstanding bookings the way a state
   loss does. A request with `max_wait` cannot send either.

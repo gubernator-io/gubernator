@@ -281,9 +281,10 @@ Request 31 gets `OVER_LIMIT` with `retry_after` 126000 and is not charged.
 per-request `error`. Check `error` first and ignore every other field when it is set.
 
 `GUBER_SCHEDULE_MAX_WAIT` (default `5m`) caps the wait the server will book, whatever
-`max_wait` says. When it refuses a request, `retry_after` is at or below the caller's
-own `max_wait`. Retrying at once with the same deadline is refused again; the wait only shrinks
-as the existing bookings pass.
+`max_wait` says. When the ceiling refuses a request, `retry_after` is at or below the caller's
+own `max_wait`, while a refusal for the caller's own deadline returns a larger one. Retrying
+at once with the same deadline is refused again; the wait only shrinks as the existing
+bookings pass.
 
 ### Pacing outbound calls
 ```go
@@ -334,7 +335,7 @@ default: // OVER_LIMIT or NEVER_FITS
   this version.
 * **JSON gateway.** `max_wait` and `retry_after` are `int64`, so the HTTP API writes them as
   strings (`"max_wait": "120000"`, `"retry_after": "6000"`) and accepts either form on input.
-  Every HTTP response now includes `"retry_after": "0"`.
+  Every rate limit in a `GetRateLimits` response now includes `"retry_after": "0"`.
 
 ## Gubernator as a library
 Importing the module requires Go 1.26.10 or newer.
@@ -442,7 +443,8 @@ Example response:
       "error": "",
       "metadata": {
         "owner": "gubernator:1051"
-      }
+      },
+      "retry_after": "0"
     }
   ]
 }
