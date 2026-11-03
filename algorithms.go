@@ -336,6 +336,9 @@ func leakyBucket(ctx context.Context, s Store, c Cache, r *RateLimitReq, reqStat
 			createdAt = epochMillis(clock.Now())
 		}
 
+		b.Limit = r.Limit
+		b.Duration = r.Duration
+
 		duration := r.Duration
 		rate := float64(duration) / float64(r.Limit)
 
@@ -357,31 +360,11 @@ func leakyBucket(ctx context.Context, s Store, c Cache, r *RateLimitReq, reqStat
 			duration = expire - (n.UnixNano() / 1000000)
 		}
 
-		if HasBehavior(r.Behavior, Behavior_RESET_REMAINING) {
-			if snapToZero(b.Remaining+creditedLeak(b, createdAt, rate)) < 0 {
-				metricScheduledDebtResetCount.Add(1)
-			}
-			b.Remaining = float64(r.Burst)
-		}
-
-		// Update burst, limit and duration if they changed. A raised burst fills the
-		// bucket only when it holds no debt once the elapsed leak is credited; a debt
-		// still owed is never forgiven by a burst change.
-		burstChanged := b.Burst != r.Burst
-		if burstChanged {
-			if snapToZero(b.Remaining+creditedLeak(b, createdAt, rate)) >= 0 && r.Burst > int64(b.Remaining) {
-				b.Remaining = float64(r.Burst)
-			}
-			b.Burst = r.Burst
-		}
-
-		b.Limit = r.Limit
-		b.Duration = r.Duration
-
 		// wasInDebt is the balance before this request's leak is credited, so it can be true
 		// for a request that finds the debt already paid. Expiry of such a key is owned by
 		// extendDebtExpiry, which only lengthens it, so today's now+duration update is skipped.
-		wasInDebt := b.Remaining < 0
+		wasInDebt := b.Remaining < 0 && !HasBehavior(r.Behavior, Behavior_RESET_REMAINING)
+		burstChanged := b.Burst != r.Burst
 		if r.Hits != 0 && !wasInDebt {
 			c.UpdateExpiration(r.HashKey(), createdAt+duration)
 		}
@@ -393,8 +376,27 @@ func leakyBucket(ctx context.Context, s Store, c Cache, r *RateLimitReq, reqStat
 			b.Remaining += creditedLeak(b, createdAt, rate)
 			b.UpdatedAt = createdAt
 		}
-		// Outside the credit branch so a burst lowered on a request with no
-		// elapsed time still clamps.
+
+		// Remaining is the unspent balance and Burst is the capacity, so a Burst change
+		// shifts the balance by the same amount. It runs after the leak credit so the
+		// floor at zero cannot swallow part of a decrease that the credit then refills.
+		// A debt still owed is left alone, since a burst change must not forgive it.
+		if burstChanged {
+			if snapToZero(b.Remaining) >= 0 {
+				b.Remaining = math.Max(0, b.Remaining+float64(r.Burst-b.Burst))
+			}
+			b.Burst = r.Burst
+		}
+
+		// After the Burst shift, so an explicit refill always lands on the new Burst.
+		if HasBehavior(r.Behavior, Behavior_RESET_REMAINING) {
+			if snapToZero(b.Remaining) < 0 {
+				metricScheduledDebtResetCount.Add(1)
+			}
+			b.Remaining = float64(r.Burst)
+		}
+
+		// Clamp after the leak so credit never lifts Remaining above Burst.
 		b.Remaining = snapToZero(math.Min(float64(b.Burst), b.Remaining))
 
 		rl := &RateLimitResp{

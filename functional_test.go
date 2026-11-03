@@ -28,6 +28,7 @@ import (
 	"os"
 	"runtime"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -889,6 +890,7 @@ func TestLeakyBucketContinuousLeak(t *testing.T) {
 		Key       string
 		Hits      int64
 		Burst     int64 // zero means the test's Burst
+		Limit     int64 // zero means the test's Limit
 		Behavior  guber.Behavior
 		Remaining int64
 		Status    guber.Status
@@ -1075,14 +1077,82 @@ func TestLeakyBucketContinuousLeak(t *testing.T) {
 			},
 		},
 		{
-			// Raising burst refills to the new burst.
-			Name:     "BurstIncrease",
+			// Raising burst by n adds n to remaining.
+			Name:     "BurstIncreaseByOne",
 			Limit:    10,
 			Duration: guber.Second * 10,
 			Burst:    5,
 			Steps: []step{
 				{Key: "a", Hits: 5, Remaining: 0, Status: under},
-				{Key: "a", Hits: 0, Burst: 8, Remaining: 8, Status: under},
+				{Key: "a", Hits: 0, Burst: 6, Remaining: 1, Status: under},
+			},
+		},
+		{
+			Name:     "BurstIncreaseByThree",
+			Limit:    10,
+			Duration: guber.Second * 10,
+			Burst:    5,
+			Steps: []step{
+				{Key: "a", Hits: 5, Remaining: 0, Status: under},
+				{Key: "a", Hits: 0, Burst: 8, Remaining: 3, Status: under, Sleep: 3 * clock.Second},
+				{Key: "a", Hits: 0, Burst: 8, Remaining: 6, Status: under},
+			},
+		},
+		{
+			// A Limit-only change moves Burst too, since Burst 0 means Limit.
+			Name:     "LimitOnlyIncrease",
+			Limit:    10,
+			Duration: guber.Second * 10,
+			Steps: []step{
+				{Key: "a", Hits: 8, Remaining: 2, Status: under},
+				{Key: "a", Hits: 0, Limit: 20, Remaining: 12, Status: under},
+			},
+		},
+		{
+			// Lowering burst subtracts the difference from the fractional balance.
+			Name:     "BurstDecreaseKeepsFraction",
+			Limit:    10,
+			Duration: guber.Second * 10,
+			Burst:    5,
+			Steps: []step{
+				{Key: "a", Hits: 5, Remaining: 0, Status: under, Sleep: 2500 * clock.Millisecond},
+				{Key: "a", Hits: 0, Remaining: 2, Status: under},
+				{Key: "a", Hits: 0, Burst: 3, Remaining: 0, Status: under, Sleep: 500 * clock.Millisecond},
+				{Key: "a", Hits: 0, Burst: 3, Remaining: 1, Status: under},
+			},
+		},
+		{
+			// The leak since the last request counts before the burst shift, so
+			// the zero floor cannot swallow part of the decrease.
+			Name:     "BurstDecreaseWithElapsedTime",
+			Limit:    10,
+			Duration: guber.Second * 10,
+			Burst:    5,
+			Steps: []step{
+				{Key: "a", Hits: 5, Remaining: 0, Status: under, Sleep: clock.Second},
+				{Key: "a", Hits: 0, Burst: 3, Remaining: 0, Status: under},
+			},
+		},
+		{
+			// RESET_REMAINING refills to the new burst even when burst drops.
+			Name:     "ResetRemainingWithLowerBurst",
+			Limit:    10,
+			Duration: guber.Second * 10,
+			Burst:    10,
+			Steps: []step{
+				{Key: "a", Hits: 1, Remaining: 9, Status: under},
+				{Key: "a", Hits: 0, Burst: 5, Behavior: guber.Behavior_RESET_REMAINING, Remaining: 5, Status: under},
+			},
+		},
+		{
+			// Remaining never goes below zero when burst drops by more than remaining.
+			Name:     "BurstDecreaseFloorsAtZero",
+			Limit:    10,
+			Duration: guber.Second * 10,
+			Burst:    5,
+			Steps: []step{
+				{Key: "a", Hits: 5, Remaining: 0, Status: under},
+				{Key: "a", Hits: 0, Burst: 3, Remaining: 0, Status: under},
 			},
 		},
 		{
@@ -1133,6 +1203,10 @@ func TestLeakyBucketContinuousLeak(t *testing.T) {
 				if s.Burst != 0 {
 					burst = s.Burst
 				}
+				limit := test.Limit
+				if s.Limit != 0 {
+					limit = s.Limit
+				}
 				resp, err := client.GetRateLimits(context.Background(), &guber.GetRateLimitsReq{
 					Requests: []*guber.RateLimitReq{{
 						Name:      name,
@@ -1140,7 +1214,7 @@ func TestLeakyBucketContinuousLeak(t *testing.T) {
 						Algorithm: guber.Algorithm_LEAKY_BUCKET,
 						Behavior:  s.Behavior,
 						Duration:  test.Duration,
-						Limit:     test.Limit,
+						Limit:     limit,
 						Burst:     burst,
 						Hits:      s.Hits,
 					}},
@@ -1149,7 +1223,11 @@ func TestLeakyBucketContinuousLeak(t *testing.T) {
 				require.Len(t, resp.Responses, 1)
 				assert.Equal(t, s.Status, resp.Responses[0].Status)
 				assert.Equal(t, s.Remaining, resp.Responses[0].Remaining)
-				assert.LessOrEqual(t, resp.Responses[0].Remaining, burst)
+				capacity := burst
+				if capacity == 0 {
+					capacity = limit
+				}
+				assert.LessOrEqual(t, resp.Responses[0].Remaining, capacity)
 				if s.ResetIn != 0 {
 					assert.Equal(t, clock.Now().UnixMilli()+s.ResetIn, resp.Responses[0].ResetTime)
 				}
@@ -2269,14 +2347,14 @@ func TestChangeLimit(t *testing.T) {
 			Name:      "Should subtract 1 from remaining for leaky bucket after limit change",
 			Algorithm: guber.Algorithm_LEAKY_BUCKET,
 			Status:    guber.Status_UNDER_LIMIT,
-			Remaining: 9,
+			Remaining: 8,
 			Limit:     10,
 		},
 		{
 			Name:      "Should subtract 1 from remaining for leaky bucket with new limit",
 			Algorithm: guber.Algorithm_LEAKY_BUCKET,
 			Status:    guber.Status_UNDER_LIMIT,
-			Remaining: 8,
+			Remaining: 7,
 			Limit:     10,
 		},
 	}
@@ -2630,7 +2708,29 @@ func TestGetPeerRateLimits(t *testing.T) {
 
 func TestGlobalBehavior(t *testing.T) {
 	const limit = 1000
-	broadcastTimeout := 400 * time.Millisecond
+	// The default test window is 50ms, short enough that a scheduler stall
+	// under load splits one batch into two. The non-owner path waits for two
+	// windows in a row (sync to owner, then broadcast), so the timeout is
+	// four windows.
+	const syncWait = 500 * time.Millisecond
+	const broadcastTimeout = 4 * syncWait
+
+	cluster.Stop()
+	defer func() {
+		cluster.Stop()
+		require.NoError(t, startGubernator())
+		require.Equal(t, len(testPeers()), cluster.NumOfDaemons())
+	}()
+	// Fresh ports, because the stopped cluster's listeners are not always
+	// released by the time StartWith binds.
+	peers := testPeers()
+	for i := range peers {
+		peers[i].GRPCAddress = shiftPort(peers[i].GRPCAddress, 1000)
+		peers[i].HTTPAddress = shiftPort(peers[i].HTTPAddress, 1000)
+	}
+	require.NoError(t, cluster.StartWith(peers, cluster.WithGlobalSyncWait(syncWait)))
+	require.NoError(t, connectClients())
+
 	createdAt := epochMillis(clock.Now())
 
 	makeReq := func(name, key string, hits int64) *guber.RateLimitReq {
@@ -2673,9 +2773,9 @@ func TestGlobalBehavior(t *testing.T) {
 				gprlCounters := getPeerCounters(t, cluster.GetDaemons(), "gubernator_grpc_request_duration_count{method=\"/pb.gubernator.PeersV1/GetPeerRateLimits\"}")
 
 				// When
-				for i := int64(0); i < testCase.Hits; i++ {
-					sendHit(t, owner, makeReq(name, key, 1), guber.Status_UNDER_LIMIT, 999-i)
-				}
+				sendHitsInOneCall(t, owner, testCase.Hits, func() *guber.RateLimitReq {
+					return makeReq(name, key, 1)
+				})
 
 				// Then
 				// Expect a single global broadcast to all non-owner peers.
@@ -2766,11 +2866,14 @@ func TestGlobalBehavior(t *testing.T) {
 
 	t.Run("Hits on non-owner peer", func(t *testing.T) {
 		testCases := []struct {
-			Name string
-			Hits int64
+			Name     string
+			Hits     int64
+			Separate bool
 		}{
 			{Name: "Single hit", Hits: 1},
 			{Name: "Multiple htis", Hits: 10},
+			// Covers runAsyncHits merging hits that arrive over separate RPCs.
+			{Name: "Multiple hits in separate calls", Hits: 10, Separate: true},
 		}
 
 		for _, testCase := range testCases {
@@ -2791,8 +2894,14 @@ func TestGlobalBehavior(t *testing.T) {
 				gprlCounters := getPeerCounters(t, cluster.GetDaemons(), "gubernator_grpc_request_duration_count{method=\"/pb.gubernator.PeersV1/GetPeerRateLimits\"}")
 
 				// When
-				for i := int64(0); i < testCase.Hits; i++ {
-					sendHit(t, peers[0], makeReq(name, key, 1), guber.Status_UNDER_LIMIT, 999-i)
+				if testCase.Separate {
+					for i := int64(0); i < testCase.Hits; i++ {
+						sendHit(t, peers[0], makeReq(name, key, 1), guber.Status_UNDER_LIMIT, limit-1-i)
+					}
+				} else {
+					sendHitsInOneCall(t, peers[0], testCase.Hits, func() *guber.RateLimitReq {
+						return makeReq(name, key, 1)
+					})
 				}
 
 				// Then
@@ -3309,6 +3418,31 @@ func getPeerCounters(t *testing.T, peers []*guber.Daemon, name string) map[strin
 	return counters
 }
 
+// sendHitsInOneCall queues every hit within a single GetRateLimits call so
+// they land in one GlobalSyncWait window. Separate calls can straddle the
+// window under CPU load and produce two syncs and broadcasts. The window is
+// real time (Interval uses time.Sleep), so freezing the clock cannot pin it.
+func sendHitsInOneCall(t *testing.T, d *guber.Daemon, hits int64, newReq func() *guber.RateLimitReq) {
+	t.Logf("Sending %d hits to peer %s", hits, d.InstanceID)
+	reqs := make([]*guber.RateLimitReq, hits)
+	for i := range reqs {
+		reqs[i] = newReq()
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second*10)
+	defer cancel()
+	resp, err := d.MustClient().GetRateLimits(ctx, &guber.GetRateLimitsReq{Requests: reqs})
+	require.NoError(t, err)
+	require.Len(t, resp.Responses, len(reqs))
+	var used int64
+	for i, item := range resp.Responses {
+		used += reqs[i].Hits
+		assert.Equal(t, "", item.Error)
+		assert.Equal(t, reqs[i].Limit, item.Limit)
+		assert.Equal(t, reqs[i].Limit-used, item.Remaining)
+		assert.Equal(t, guber.Status_UNDER_LIMIT, item.Status)
+	}
+}
+
 func sendHit(t *testing.T, d *guber.Daemon, req *guber.RateLimitReq, expectStatus guber.Status, expectRemaining int64) {
 	if req.Hits != 0 {
 		t.Logf("Sending %d hits to peer %s", req.Hits, d.InstanceID)
@@ -3333,8 +3467,8 @@ func epochMillis(t time.Time) int64 {
 	return t.UnixNano() / 1_000_000
 }
 
-func startGubernator() error {
-	err := cluster.StartWith([]guber.PeerInfo{
+func testPeers() []guber.PeerInfo {
+	return []guber.PeerInfo{
 		{GRPCAddress: "127.0.0.1:9990", HTTPAddress: "127.0.0.1:9980", DataCenter: cluster.DataCenterNone},
 		{GRPCAddress: "127.0.0.1:9991", HTTPAddress: "127.0.0.1:9981", DataCenter: cluster.DataCenterNone},
 		{GRPCAddress: "127.0.0.1:9992", HTTPAddress: "127.0.0.1:9982", DataCenter: cluster.DataCenterNone},
@@ -3347,16 +3481,27 @@ func startGubernator() error {
 		{GRPCAddress: "127.0.0.1:9891", HTTPAddress: "127.0.0.1:9881", DataCenter: cluster.DataCenterOne},
 		{GRPCAddress: "127.0.0.1:9892", HTTPAddress: "127.0.0.1:9882", DataCenter: cluster.DataCenterOne},
 		{GRPCAddress: "127.0.0.1:9893", HTTPAddress: "127.0.0.1:9883", DataCenter: cluster.DataCenterOne},
-	})
-	if err != nil {
+	}
+}
+
+func shiftPort(addr string, by int) string {
+	host, port, _ := strings.Cut(addr, ":")
+	n, _ := strconv.Atoi(port)
+	return fmt.Sprintf("%s:%d", host, n+by)
+}
+
+func startGubernator() error {
+	if err := cluster.StartWith(testPeers()); err != nil {
 		return errors.Wrap(err, "while starting cluster")
 	}
+	return connectClients()
+}
 
-	// Populate peer clients. Avoids data races when goroutines conflict trying
-	// to instantiate client singletons.
+// Populate peer clients. Avoids data races when goroutines conflict trying
+// to instantiate client singletons.
+func connectClients() error {
 	for _, peer := range cluster.GetDaemons() {
-		_, err = peer.Client()
-		if err != nil {
+		if _, err := peer.Client(); err != nil {
 			return errors.Wrap(err, "while connecting client")
 		}
 	}

@@ -164,6 +164,13 @@ Gubernator currently supports 2 rate limit algorithms.
    the bucket leaks allowing traffic to continue without the need to wait for
    the configured rate limit duration to reset the bucket to zero.
 
+   Changing `burst` on an existing leaky bucket moves `remaining` by the
+   difference (`remaining += new_burst - old_burst`), never below zero. A `burst`
+   of 0 means `limit`, so changing `limit` alone has the same effect. Raising
+   `burst` from 5 to 8 with nothing remaining leaves 3, not a full bucket.
+   Lowering it from 5 to 3 with 2.5 remaining leaves 0.5, which the API reports
+   as 0. Use `RESET_REMAINING` to refill.
+
 ### Performance
 In our production environment, for every request to our API we send 2 rate
 limit requests to gubernator for rate limit evaluation, one to rate the HTTP

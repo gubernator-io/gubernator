@@ -358,7 +358,7 @@ func TestScheduledAdmissionBurstRaiseAfterDebtRepaid(t *testing.T) {
 		}
 	}
 
-	// A key that never held debt and sits at zero fills to a raised burst.
+	// A key that never held debt and sits at zero gains the 6 tokens of a burst raised from 14 to 20.
 	sendOne(t, client, req("plain", 14, 0))
 	raised := req("plain", 0, 0)
 	raised.Burst = 20
@@ -372,7 +372,7 @@ func TestScheduledAdmissionBurstRaiseAfterDebtRepaid(t *testing.T) {
 	raised.Burst = 20
 	repaid := sendOne(t, client, raised)
 
-	assert.Equal(t, int64(20), plain.Remaining)
+	assert.Equal(t, int64(6), plain.Remaining)
 	assert.Equal(t, plain.Remaining, repaid.Remaining)
 }
 
