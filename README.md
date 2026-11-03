@@ -315,8 +315,9 @@ default: // OVER_LIMIT or NEVER_FITS
 * **State loss forgets bookings.** A restart without a `Store`, an LRU cache eviction, or a
   hash ring change that moves the key gives it a full bucket again. Callers can then
   over-send by up to `GUBER_SCHEDULE_MAX_WAIT` worth of quota plus one burst, once per loss.
-  A non-zero `gubernator_scheduled_debt_evictions_count` means eviction is dropping bookings;
-  `gubernator_scheduled_debt_lost_tokens` is how much, so raise `GUBER_CACHE_SIZE`.
+  A non-zero `gubernator_scheduled_debt_evictions_count` means eviction is dropping bookings
+  from the cache, and `gubernator_scheduled_debt_lost_tokens` is how much. They are lost for
+  good unless a `Store` still holds the bucket, so raise `GUBER_CACHE_SIZE`.
 * **A plain request on a key in debt is refused.** While scheduled traffic holds a key in
   debt (its balance is below zero), a request without `max_wait` gets `OVER_LIMIT` with
   `remaining` 0, because admitting it would spend a slot already promised. `remaining` is

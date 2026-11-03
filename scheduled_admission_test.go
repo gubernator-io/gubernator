@@ -1042,3 +1042,51 @@ func TestScheduledDebtEvictionIgnoresRepaidDebt(t *testing.T) {
 	sendOne(t, client, leaky10PerMinute(name, "other", 1, 0))
 	assert.Equal(t, float64(0), getMetricValue(t, daemon, metricEvictions)-evictionsBefore)
 }
+
+func TestScheduledDebtEvictionCountsPartiallyRepaidDebt(t *testing.T) {
+	const (
+		metricLost = "gubernator_scheduled_debt_lost_tokens"
+		name       = "TestScheduledDebtEvictionCountsPartiallyRepaidDebt"
+	)
+	client := startSmallCacheCluster(t, 2)
+	defer clock.Freeze(clock.Now()).Unfreeze()
+	lostBefore := getMetricValue(t, cluster.DaemonAt(0), metricLost)
+
+	// 3 tokens of debt at 10 per minute, then 12s leaks 2 of them back.
+	sendOne(t, client, leaky10PerMinute(name, "debt", 10, 0))
+	resp := sendOne(t, client, leaky10PerMinute(name, "debt", 3, 60000))
+	require.Equal(t, guber.Status_SCHEDULED, resp.Status)
+	clock.Advance(12 * time.Second)
+
+	sendOne(t, client, leaky10PerMinute(name, "newer1", 1, 0))
+	sendOne(t, client, leaky10PerMinute(name, "newer2", 1, 0))
+	require.Eventually(t, func() bool {
+		return getMetricValue(t, cluster.DaemonAt(0), metricLost)-lostBefore > 0
+	}, 5*time.Second, 10*time.Millisecond)
+	assert.InDelta(t, 1, getMetricValue(t, cluster.DaemonAt(0), metricLost)-lostBefore, 1e-6)
+}
+
+func TestScheduledDebtEvictionCountsDebtAfterZeroLimitRequest(t *testing.T) {
+	const (
+		metricEvictions = "gubernator_scheduled_debt_evictions_count"
+		name            = "TestScheduledDebtEvictionCountsDebtAfterZeroLimitRequest"
+	)
+	client := startSmallCacheCluster(t, 2)
+	defer clock.Freeze(clock.Now()).Unfreeze()
+	evictionsBefore := getMetricValue(t, cluster.DaemonAt(0), metricEvictions)
+
+	sendOne(t, client, leaky10PerMinute(name, "debt", 10, 0))
+	resp := sendOne(t, client, leaky10PerMinute(name, "debt", 3, 60000))
+	require.Equal(t, guber.Status_SCHEDULED, resp.Status)
+
+	// A plain status query that replaces the stored limit with 0.
+	zero := leaky10PerMinute(name, "debt", 0, 0)
+	zero.Limit = 0
+	sendOne(t, client, zero)
+
+	sendOne(t, client, leaky10PerMinute(name, "newer1", 1, 0))
+	sendOne(t, client, leaky10PerMinute(name, "newer2", 1, 0))
+	require.Eventually(t, func() bool {
+		return getMetricValue(t, cluster.DaemonAt(0), metricEvictions)-evictionsBefore == 1
+	}, 5*time.Second, 10*time.Millisecond)
+}

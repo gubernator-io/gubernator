@@ -28,8 +28,8 @@ Finally, configure a Prometheus job to scrape the server's `/metrics` URI.
 | `gubernator_over_limit_counter`        | Counter | The number of rate limit checks that are over the limit, including `NEVER_FITS` and the `OVER_LIMIT` of a `max_wait` request. |
 | `gubernator_scheduled_ceiling_refused_count` | Counter | The number of `max_wait` requests refused because the wait exceeded `GUBER_SCHEDULE_MAX_WAIT` though it fit the request's own `max_wait`. |
 | `gubernator_scheduled_count`           | Counter | The number of requests answered `SCHEDULED`. Not counted as over limit. |
-| `gubernator_scheduled_debt_evictions_count` | Counter | The number of built-in LRU cache evictions of a leaky bucket that still held booked debt. A non-zero value means the cache (`GUBER_CACHE_SIZE`) is too small and is leaking quota. |
-| `gubernator_scheduled_debt_lost_tokens` | Counter | The tokens of booked debt those evictions dropped. |
+| `gubernator_scheduled_debt_evictions_count` | Counter | The number of built-in LRU cache evictions of a leaky bucket that still held booked debt. A non-zero value means the cache (`GUBER_CACHE_SIZE`) is too small. Without a `Store` that holds the bucket, the debt is forgotten and the key restarts full. |
+| `gubernator_scheduled_debt_lost_tokens` | Counter | The tokens of booked debt those evictions dropped from the cache. |
 | `gubernator_scheduled_debt_reset_count` | Counter | The number of times booked debt was forgiven by a `RESET_REMAINING` request. |
 | `gubernator_worker_queue_length`       | Gauge   | The count of requests queued up in WorkerPool. |
 

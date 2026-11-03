@@ -166,11 +166,14 @@ func (c *LRUCache) removeOldest() {
 // repaid itself is no longer owed.
 func evictedDebt(item *CacheItem) float64 {
 	b, ok := item.Value.(*LeakyBucketItem)
-	if !ok || b.Limit <= 0 || b.Duration <= 0 {
+	if !ok {
 		return 0
 	}
-	rate := float64(b.Duration) / float64(b.Limit)
-	balance := b.Remaining + creditedLeak(b, MillisecondNow(), rate)
+	balance := b.Remaining
+	// A limit or duration of 0 stops the leak, so the debt stays as booked.
+	if rate := float64(b.Duration) / float64(b.Limit); rate > 0 {
+		balance += creditedLeak(b, MillisecondNow(), rate)
+	}
 	return max(0, -snapToZero(balance))
 }
 
