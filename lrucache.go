@@ -170,10 +170,7 @@ func evictedDebt(item *CacheItem) float64 {
 		return 0
 	}
 	rate := float64(b.Duration) / float64(b.Limit)
-	balance := b.Remaining
-	if elapsed := MillisecondNow() - b.UpdatedAt; elapsed > 0 {
-		balance += float64(elapsed) / rate
-	}
+	balance := b.Remaining + creditedLeak(b, MillisecondNow(), rate)
 	return max(0, -snapToZero(balance))
 }
 
