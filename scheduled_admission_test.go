@@ -1241,3 +1241,19 @@ func TestScheduledAdmissionZeroLimitKeepsBurstOfDebt(t *testing.T) {
 	clock.Advance(30 * time.Second)
 	assert.Equal(t, int64(3), sendOne(t, client, leaky10PerMinute(name, key, 0, 0)).Remaining)
 }
+
+func TestScheduledAdmissionZeroLimitAfterDebtLeakedUsesZeroBurst(t *testing.T) {
+	defer clock.Freeze(clock.Now()).Unfreeze()
+	client, err := guber.DialV1Server(cluster.PeerAt(0).GRPCAddress, nil)
+	require.NoError(t, err)
+	const name, key = "TestScheduledAdmissionZeroLimitAfterDebtLeakedUsesZeroBurst", "account:1"
+
+	bookDebt(t, client, name, key, 2)
+
+	// 30s leaks 5 tokens, so the debt of 2 is repaid before this request arrives and the key
+	// no longer owns a burst of 10 to spend under a limit of 0.
+	clock.Advance(30 * time.Second)
+	zero := leaky10PerMinute(name, key, 1, 0)
+	zero.Limit, zero.Burst = 0, 0
+	assert.Equal(t, guber.Status_OVER_LIMIT, sendOne(t, client, zero).Status)
+}

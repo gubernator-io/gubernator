@@ -357,9 +357,10 @@ func leakyBucket(ctx context.Context, s Store, c Cache, r *RateLimitReq, reqStat
 		keepStored := (gregorian || !requestUsable) && b.Remaining < 0 && storedUsable
 		rescale := !gregorian && requestUsable && b.Remaining < 0 && configChanged && storedUsable
 		// A burst of zero or less, which a limit of zero or less produces when burst is omitted, would
-		// deepen the debt through the clamp below or refill it later, so a key in debt keeps its own.
+		// deepen the debt through the clamp below or refill it later, so a key still in debt after
+		// this request's leak is credited keeps its own.
 		burst := r.Burst
-		if burst <= 0 && b.Remaining < 0 {
+		if burst <= 0 && debtAt(b, createdAt) {
 			burst = b.Burst
 		}
 
