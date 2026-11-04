@@ -1257,3 +1257,18 @@ func TestScheduledAdmissionZeroLimitAfterDebtLeakedUsesZeroBurst(t *testing.T) {
 	zero.Limit, zero.Burst = 0, 0
 	assert.Equal(t, guber.Status_OVER_LIMIT, sendOne(t, client, zero).Status)
 }
+
+func TestScheduledAdmissionResetWithZeroBurstFillsToZero(t *testing.T) {
+	defer clock.Freeze(clock.Now()).Unfreeze()
+	client, err := guber.DialV1Server(cluster.PeerAt(0).GRPCAddress, nil)
+	require.NoError(t, err)
+	const name, key = "TestScheduledAdmissionResetWithZeroBurstFillsToZero", "account:1"
+
+	bookDebt(t, client, name, key, 2)
+
+	// A reset forgives the debt and fills the bucket to the requested burst, which is 0 here.
+	reset := leaky10PerMinute(name, key, 1, 0)
+	reset.Limit, reset.Burst = 0, 0
+	reset.Behavior = guber.Behavior_RESET_REMAINING
+	assert.Equal(t, guber.Status_OVER_LIMIT, sendOne(t, client, reset).Status)
+}
