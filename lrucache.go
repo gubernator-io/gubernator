@@ -57,6 +57,14 @@ var metricCacheUnexpiredEvictions = prometheus.NewCounter(prometheus.CounterOpts
 	Name: "gubernator_unexpired_evictions_count",
 	Help: "Count the number of cache items which were evicted while unexpired.",
 })
+var metricScheduledDebtEvictions = prometheus.NewCounter(prometheus.CounterOpts{
+	Name: "gubernator_scheduled_debt_evictions_count",
+	Help: "The number of cache evictions of a leaky bucket that still held booked debt.",
+})
+var metricScheduledDebtLostTokens = prometheus.NewCounter(prometheus.CounterOpts{
+	Name: "gubernator_scheduled_debt_lost_tokens",
+	Help: "The tokens of booked debt dropped by cache evictions.",
+})
 
 // NewLRUCache creates a new Cache with a maximum size.
 func NewLRUCache(maxSize int) *LRUCache {
@@ -144,8 +152,29 @@ func (c *LRUCache) removeOldest() {
 			metricCacheUnexpiredEvictions.Add(1)
 		}
 
+		if lost := evictedDebt(entry); lost > 0 {
+			metricScheduledDebtEvictions.Add(1)
+			metricScheduledDebtLostTokens.Add(lost)
+		}
+
 		c.removeElement(ele)
 	}
+}
+
+// evictedDebt is the tokens of booked debt an evicted item takes with it, zero when it holds none.
+// The stored balance is credited with the leak since UpdatedAt, because debt that has partly
+// repaid itself is no longer owed.
+func evictedDebt(item *CacheItem) float64 {
+	b, ok := item.Value.(*LeakyBucketItem)
+	if !ok {
+		return 0
+	}
+	balance := b.Remaining
+	// A limit or duration of 0 stops the leak, so the debt stays as booked.
+	if rate := float64(b.Duration) / float64(b.Limit); rate > 0 {
+		balance += creditedLeak(b, MillisecondNow(), rate)
+	}
+	return max(0, -snapToZero(balance))
 }
 
 func (c *LRUCache) removeElement(e *list.Element) {
@@ -193,6 +222,8 @@ func (collector *LRUCacheCollector) Describe(ch chan<- *prometheus.Desc) {
 	metricCacheSize.Describe(ch)
 	metricCacheAccess.Describe(ch)
 	metricCacheUnexpiredEvictions.Describe(ch)
+	metricScheduledDebtEvictions.Describe(ch)
+	metricScheduledDebtLostTokens.Describe(ch)
 }
 
 // Collect fetches metric counts and gauges from the cache
@@ -201,6 +232,8 @@ func (collector *LRUCacheCollector) Collect(ch chan<- prometheus.Metric) {
 	metricCacheSize.Collect(ch)
 	metricCacheAccess.Collect(ch)
 	metricCacheUnexpiredEvictions.Collect(ch)
+	metricScheduledDebtEvictions.Collect(ch)
+	metricScheduledDebtLostTokens.Collect(ch)
 }
 
 func (collector *LRUCacheCollector) getSize() float64 {
