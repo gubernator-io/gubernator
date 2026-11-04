@@ -239,3 +239,19 @@ func (o *globalSyncWaitOption) Apply(cfg *gubernator.DaemonConfig) {
 func WithGlobalSyncWait(wait clock.Duration) option {
 	return &globalSyncWaitOption{wait: wait}
 }
+
+type cacheSizeOption struct {
+	size int
+}
+
+func (o *cacheSizeOption) Apply(cfg *gubernator.DaemonConfig) {
+	cfg.CacheSize = o.size
+	// Each worker gets CacheSize/Workers items, so one worker keeps the limit exact
+	// and stops a small size from rounding down to the 50,000 default.
+	cfg.Workers = 1
+}
+
+// WithCacheSize sets how many rate limits each daemon caches, so tests can force eviction.
+func WithCacheSize(size int) option {
+	return &cacheSizeOption{size: size}
+}
