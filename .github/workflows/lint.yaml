@@ -33,4 +33,5 @@ jobs:
         with:
           version: ${{ env.GOLANGCI_LINT_VERSION }}
           skip-cache: true # cache/restore is done by actions/setup-go@v3 step
+          verify: false # the schema check downloads from golangci-lint.run, whose timeouts failed unrelated PRs
           args: -v
