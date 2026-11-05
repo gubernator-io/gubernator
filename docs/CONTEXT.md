@@ -18,10 +18,10 @@ Terms with a specific meaning in this codebase. Keep entries short; link the fea
 - **plain request** — a request without `max_wait`. It never books and never receives `SCHEDULED` or `NEVER_FITS`.
 - **max_wait** — the longest a request will wait for its hits, in milliseconds. Setting it opts the request into scheduled admission.
 - **booking** — charging a request's hits now, though they cannot be admitted now, and answering `SCHEDULED` with the wait. The caller acts after the wait and does not call again.
-- **debt** — a balance below zero, made by bookings. It is the queue of booked slots and pays itself off by leak. A `limit` or `duration` change rescales it by old rate over new rate, so it clears at the same moment (built by the config-change-in-debt piece).
+- **debt** — a balance below zero, made by bookings. It is the queue of booked slots and pays itself off by leak. A `limit` or `duration` change rescales it by old rate over new rate, so it clears at the same moment.
 - **wait ceiling** — the server's limit on any request's wait, `GUBER_SCHEDULE_MAX_WAIT`. A request is booked only when its wait is at most `min(max_wait, ceiling)`.
 - **retry_after** — milliseconds from the owner's answer: when to act on `SCHEDULED`, or the wait that would have been needed on `OVER_LIMIT`. Zero on every other response and for plain requests.
 - **SCHEDULED** — the status of a booked request.
 - **NEVER_FITS** — the status for a request with `max_wait` whose `hits` exceed `burst`, or that finds an existing bucket whose `limit` or `duration` is not positive. Nothing is charged.
 - **state loss** — a key's bucket disappearing from its owner (restart without a Store, LRU eviction, hash-ring change). The next request finds a full bucket and the key's bookings are forgotten.
-- **documented reset** — a plain request that forgives a key's debt by a documented contract: `RESET_REMAINING`, or a change of `algorithm`. Counted in `gubernator_scheduled_debt_reset_count` (the algorithm-change count is built by the config-change-in-debt piece). Not a state loss, which is involuntary.
+- **documented reset** — a plain request that forgives a key's debt by a documented contract: `RESET_REMAINING`, or a change of `algorithm`. Counted in `gubernator_scheduled_debt_reset_count`. Not a state loss, which is involuntary.

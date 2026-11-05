@@ -119,8 +119,8 @@ When several rows match, the first row in table order wins, after the `max_wait 
 ### State Invariants
 
 1. **A request with** `max_wait = 0` **never receives** `SCHEDULED` **or** `NEVER_FITS`**, and its** `retry_after` **is 0.** On a key not in debt its response is today's (after ENG-208). Violation is prevented by testing `max_wait > 0` before any new branch.
-2. **Debt is bounded by the ceiling.** A leaky balance is never below `−ceiling / rate` tokens. A booking happens only when its wait, `(hits − balance) × rate`, is at most the ceiling, so the balance after it is at least `−ceiling / rate`. Leak only raises the balance. Once `config-change-in-debt` ships, a `limit` or `duration` change on a key in debt rescales the balance by old rate over new rate, so the moment the debt clears, and this bound, are unchanged.
-3. **A refusal never charges the request.** `OVER_LIMIT` and `NEVER_FITS` to a request with `max_wait` deduct nothing and add no booking. The bucket still credits the leak of elapsed time and adopts a changed `limit`, `duration` or `burst`. A changed `burst` never moves the moment the debt clears. A changed `limit` or `duration` moves it until `config-change-in-debt` rescales the balance.
+2. **Debt is bounded by the ceiling.** A leaky balance is never below `−ceiling / rate` tokens. A booking happens only when its wait, `(hits − balance) × rate`, is at most the ceiling, so the balance after it is at least `−ceiling / rate`. Leak only raises the balance. A `limit` or `duration` change on a key in debt rescales the balance by old rate over new rate, so the moment the debt clears, and this bound, are unchanged.
+3. **A refusal never charges the request.** `OVER_LIMIT` and `NEVER_FITS` to a request with `max_wait` deduct nothing and add no booking. The bucket still credits the leak of elapsed time and adopts a changed `limit`, `duration` or `burst`. A changed `burst` never moves the moment the debt clears. A changed `limit` or `duration` rescales the balance by old rate over new rate, so it does not move it either.
 4. **Slots follow processing order.** A booking processed later never gets an earlier slot than one processed before it on the same key. Each booking lowers the balance, so the next slot (`now + wait`) is later by at least that booking's `hits × rate`.
 5. **Spacing.** With no state loss and every caller acting at its slot, calls on a key never exceed `burst` at once nor arrive faster than one per `rate`, within 1 ms of rounding.
 6. **An item in debt outlives its debt.** While a bucket's balance is below zero, its cache expiry is never earlier than the moment the balance would be back at `burst`. Otherwise it would expire while in debt and return as a full bucket.
@@ -155,7 +155,7 @@ When several rows match, the first row in table order wins, after the `max_wait 
 15. A `limit` change on a key in debt keeps the moment the debt clears. After a raise, the next booking's slot is after the last slot already granted. After a cut, the next booking still respects the ceiling. A refused plain request that lowers the limit still extends expiry, so a status query 1 ms before the new `full_at` does not see a fresh bucket.
 16. A `TOKEN_BUCKET` request on a key in debt replaces the item and increments `gubernator_scheduled_debt_reset_count`; on a key whose debt has fully leaked it does not increment it.
 
-Criteria 1–14 are built by the first piece. Criteria 15–16 belong to the `config-change-in-debt` piece.
+Criteria 1–14 were built by the first piece. Criteria 15–16 were built by the `config-change-in-debt` piece.
 
 ## Success Metrics
 
@@ -350,7 +350,7 @@ Applied to `docs/CONTEXT.md` by the first piece:
 * **Wait rounding and zero snap.** The wait is `ceil(x − 1e-6)` so float error cannot turn an exact 6000 into 6001, and a balance within 1e-9 of zero is set to exactly zero after a deduction, so a spent bucket is never read as in debt. Both are added to step 5 and to the plain deduction.
 * **Plain negative hits on a key in debt** answer `UNDER_LIMIT` with `remaining` 0 and leave the balance alone; the design only said the debt is unchanged.
 * **`NEVER_FITS` for a rate that cannot be computed.** A `max_wait` request that finds an existing bucket with a `limit` or `duration` that is zero or negative gets `NEVER_FITS`, like `hits > burst`, because no wait admits it. The first request on a new key is still admitted, as it is for a plain request. The design only named `hits > burst`. A wait too large for an int64 is saturated, so it is refused instead of wrapping to 1 ms on amd64.
-* **Items for later pieces.** The `limit`/`duration` rescale, the algorithm-switch count and criteria 15–16 are not built here.
+* **Items for later pieces.** Built later by `config-change-in-debt`, ENG-355: the `limit`/`duration` rescale, the algorithm-switch count and criteria 15–16.
 
 ## Decision Log
 

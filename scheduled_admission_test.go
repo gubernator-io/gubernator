@@ -971,6 +971,308 @@ func TestScheduledAdmissionOwnerRejectsUnvalidatedRequests(t *testing.T) {
 	}
 }
 
+// bookDebt drains the key and books extra hits so its balance sits extra tokens below zero.
+func bookDebt(t *testing.T, client guber.V1Client, name, key string, extra int) {
+	t.Helper()
+	sendOne(t, client, leaky10PerMinute(name, key, 10, 0))
+	for range extra {
+		require.Equal(t, guber.Status_SCHEDULED, sendOne(t, client, leaky10PerMinute(name, key, 1, 120000)).Status)
+	}
+}
+
+func TestScheduledAdmissionLimitRaiseKeepsGrantedSlots(t *testing.T) {
+	defer clock.Freeze(clock.Now()).Unfreeze()
+	client, err := guber.DialV1Server(cluster.PeerAt(0).GRPCAddress, nil)
+	require.NoError(t, err)
+	const name = "TestScheduledAdmissionLimitRaiseKeepsGrantedSlots"
+
+	// Slots at 6000ms and 12000ms are granted. Doubling the limit halves the rate to 3000ms.
+	// Without a rescale the next booking would land at 9000ms, ahead of the slot at 12000ms.
+	for _, key := range []string{"scheduling", "plain"} {
+		bookDebt(t, client, name, key, 2)
+
+		raise := leaky10PerMinute(name, key, 1, 120000)
+		raise.Limit = 20
+		if key == "plain" {
+			raise.MaxWait = 0
+			resp := sendOne(t, client, raise)
+			assert.Equal(t, guber.Status_OVER_LIMIT, resp.Status)
+			raise.MaxWait = 120000
+		}
+		resp := sendOne(t, client, raise)
+		assert.Equal(t, guber.Status_SCHEDULED, resp.Status)
+		assert.Equal(t, int64(15000), resp.RetryAfter)
+	}
+}
+
+func TestScheduledAdmissionLimitCutRespectsCeiling(t *testing.T) {
+	d := spawnSingleDaemon(t, guber.BehaviorConfig{ScheduleMaxWait: 24 * time.Second})
+	client := d.MustClient()
+	defer clock.Freeze(clock.Now()).Unfreeze()
+	const name, key = "TestScheduledAdmissionLimitCutRespectsCeiling", "account:1"
+
+	bookDebt(t, client, name, key, 2)
+
+	// Halving the limit doubles the rate to 12000ms. The debt still clears at 12000ms, so one
+	// booking fits the 24s ceiling and the next, at 36000ms, does not.
+	cut := leaky10PerMinute(name, key, 1, 120000)
+	cut.Limit = 5
+	resp := sendOne(t, client, cut)
+	assert.Equal(t, guber.Status_SCHEDULED, resp.Status)
+	assert.Equal(t, int64(24000), resp.RetryAfter)
+	resp = sendOne(t, client, cut)
+	assert.Equal(t, guber.Status_OVER_LIMIT, resp.Status)
+	assert.Equal(t, int64(36000), resp.RetryAfter)
+}
+
+func TestScheduledAdmissionDurationChangeKeepsGrantedSlots(t *testing.T) {
+	defer clock.Freeze(clock.Now()).Unfreeze()
+	client, err := guber.DialV1Server(cluster.PeerAt(0).GRPCAddress, nil)
+	require.NoError(t, err)
+	const name, key = "TestScheduledAdmissionDurationChangeKeepsGrantedSlots", "account:1"
+
+	bookDebt(t, client, name, key, 2)
+
+	// Half the duration is twice the rate: 3000ms per token.
+	shorter := leaky10PerMinute(name, key, 1, 120000)
+	shorter.Duration = guber.Minute / 2
+	resp := sendOne(t, client, shorter)
+	assert.Equal(t, guber.Status_SCHEDULED, resp.Status)
+	assert.Equal(t, int64(15000), resp.RetryAfter)
+}
+
+func TestScheduledAdmissionRefusedLimitCutExtendsExpiry(t *testing.T) {
+	defer clock.Freeze(clock.Now()).Unfreeze()
+	client, err := guber.DialV1Server(cluster.PeerAt(0).GRPCAddress, nil)
+	require.NoError(t, err)
+	const name, key = "TestScheduledAdmissionRefusedLimitCutExtendsExpiry", "account:1"
+
+	bookDebt(t, client, name, key, 5)
+
+	// The cut stretches the refill to burst from 90000ms to 150000ms. A refused plain request
+	// must extend the expiry to match, or the key comes back as a fresh bucket.
+	cut := leaky10PerMinute(name, key, 1, 0)
+	cut.Limit = 5
+	assert.Equal(t, guber.Status_OVER_LIMIT, sendOne(t, client, cut).Status)
+
+	clock.Advance(149999 * time.Millisecond)
+	cut.Hits = 0
+	assert.Equal(t, int64(9), sendOne(t, client, cut).Remaining)
+}
+
+func TestScheduledAdmissionAlgorithmSwitchForgivesDebt(t *testing.T) {
+	defer clock.Freeze(clock.Now()).Unfreeze()
+	client, err := guber.DialV1Server(cluster.PeerAt(0).GRPCAddress, nil)
+	require.NoError(t, err)
+	const name = "TestScheduledAdmissionAlgorithmSwitchForgivesDebt"
+	resetBefore := getMetricValue(t, cluster.DaemonAt(0), metricReset)
+
+	token := func(key string) *guber.RateLimitReq {
+		return &guber.RateLimitReq{
+			Name: name, UniqueKey: key, Algorithm: guber.Algorithm_TOKEN_BUCKET,
+			Duration: guber.Minute, Limit: 10, Hits: 1,
+		}
+	}
+
+	// Debt of 2 tokens is forgiven by the switch and counted.
+	bookDebt(t, client, name, "inDebt", 2)
+	resp := sendOne(t, client, token("inDebt"))
+	assert.Equal(t, guber.Status_UNDER_LIMIT, resp.Status)
+	assert.Equal(t, int64(9), resp.Remaining)
+	assert.Equal(t, float64(1), getMetricValue(t, cluster.DaemonAt(0), metricReset)-resetBefore)
+
+	// 20s later the 2 tokens of debt have leaked away, so the switch forgives nothing.
+	bookDebt(t, client, name, "repaid", 2)
+	clock.Advance(20 * time.Second)
+	sendOne(t, client, token("repaid"))
+	assert.Equal(t, float64(1), getMetricValue(t, cluster.DaemonAt(0), metricReset)-resetBefore)
+}
+
+func TestScheduledAdmissionResetOnSwitchForgivesDebt(t *testing.T) {
+	defer clock.Freeze(clock.Now()).Unfreeze()
+	client, err := guber.DialV1Server(cluster.PeerAt(0).GRPCAddress, nil)
+	require.NoError(t, err)
+	const name, key = "TestScheduledAdmissionResetOnSwitchForgivesDebt", "account:1"
+	resetBefore := getMetricValue(t, cluster.DaemonAt(0), metricReset)
+
+	bookDebt(t, client, name, key, 2)
+	sendOne(t, client, &guber.RateLimitReq{
+		Name: name, UniqueKey: key, Algorithm: guber.Algorithm_TOKEN_BUCKET,
+		Duration: guber.Minute, Limit: 10, Hits: 1, Behavior: guber.Behavior_RESET_REMAINING,
+	})
+	assert.Equal(t, float64(1), getMetricValue(t, cluster.DaemonAt(0), metricReset)-resetBefore)
+}
+
+func TestScheduledAdmissionUnusableLimitKeepsDebt(t *testing.T) {
+	defer clock.Freeze(clock.Now()).Unfreeze()
+	client, err := guber.DialV1Server(cluster.PeerAt(0).GRPCAddress, nil)
+	require.NoError(t, err)
+	const name, key = "TestScheduledAdmissionUnusableLimitKeepsDebt", "account:1"
+
+	bookDebt(t, client, name, key, 2)
+	clock.Advance(6 * time.Second)
+
+	// A limit of 0 has no rate to credit, so it must not drop the 6s of leak or the stored config.
+	broken := leaky10PerMinute(name, key, 0, 0)
+	broken.Limit = 0
+	sendOne(t, client, broken)
+
+	resp := sendOne(t, client, leaky10PerMinute(name, key, 1, 120000))
+	assert.Equal(t, guber.Status_SCHEDULED, resp.Status)
+	assert.Equal(t, int64(12000), resp.RetryAfter)
+}
+
+func TestScheduledAdmissionResetAdoptsGregorianConfig(t *testing.T) {
+	defer clock.Freeze(clock.Now()).Unfreeze()
+	client, err := guber.DialV1Server(cluster.PeerAt(0).GRPCAddress, nil)
+	require.NoError(t, err)
+	const name, key = "TestScheduledAdmissionResetAdoptsGregorianConfig", "account:1"
+
+	bookDebt(t, client, name, key, 2)
+
+	// A Gregorian request leaves the stored config alone only while the debt stands. This one
+	// forgives the debt, so the key takes the request's limit.
+	resp := sendOne(t, client, &guber.RateLimitReq{
+		Name: name, UniqueKey: key, Algorithm: guber.Algorithm_LEAKY_BUCKET,
+		Duration: guber.GregorianHours, Limit: 20, Burst: 20,
+		Behavior: guber.Behavior_DURATION_IS_GREGORIAN | guber.Behavior_RESET_REMAINING,
+	})
+	assert.Equal(t, int64(20), resp.Limit)
+	assert.Equal(t, int64(20), resp.Remaining)
+}
+
+func TestScheduledAdmissionResetUsesGregorianRate(t *testing.T) {
+	defer clock.Freeze(clock.Now()).Unfreeze()
+	client, err := guber.DialV1Server(cluster.PeerAt(0).GRPCAddress, nil)
+	require.NoError(t, err)
+	const name, key = "TestScheduledAdmissionResetUsesGregorianRate", "account:1"
+
+	bookDebt(t, client, name, key, 2)
+
+	// The reset forgives the debt, so reset_time follows the Gregorian rate of 20 per hour
+	// (180s per token) and not the 6s per token the debt was booked at.
+	resp := sendOne(t, client, &guber.RateLimitReq{
+		Name: name, UniqueKey: key, Algorithm: guber.Algorithm_LEAKY_BUCKET,
+		Duration: guber.GregorianHours, Limit: 20, Burst: 20, Hits: 1,
+		Behavior: guber.Behavior_DURATION_IS_GREGORIAN | guber.Behavior_RESET_REMAINING,
+	})
+	assert.Equal(t, int64(19), resp.Remaining)
+	assert.GreaterOrEqual(t, resp.ResetTime-clock.Now().UnixMilli(), int64(100_000))
+}
+
+func TestScheduledAdmissionNegativeConfigKeepsDebt(t *testing.T) {
+	defer clock.Freeze(clock.Now()).Unfreeze()
+	client, err := guber.DialV1Server(cluster.PeerAt(0).GRPCAddress, nil)
+	require.NoError(t, err)
+	const name = "TestScheduledAdmissionNegativeConfigKeepsDebt"
+
+	for _, test := range []struct {
+		name, key string
+		limit     int64
+		duration  int64
+		burst     int64
+		bookBad   bool
+	}{
+		// With burst omitted, a negative limit makes the burst negative, which would deepen the debt.
+		{name: "negativeLimit", key: "limit", limit: -10, duration: guber.Minute},
+		// Two negatives make a positive rate, which would rescale the debt by a factor of 60000.
+		{name: "negativeLimitAndDuration", key: "both", limit: -10, duration: -1, burst: 10, bookBad: true},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			bookDebt(t, client, name, test.key, 2)
+
+			bad := leaky10PerMinute(name, test.key, 0, 0)
+			bad.Limit, bad.Duration, bad.Burst = test.limit, test.duration, test.burst
+			sendOne(t, client, bad)
+
+			// The debt of 2 tokens is untouched, so the next booking waits 3 tokens, 18000ms. A
+			// restored config would rescale the debt back, so book with the bad one to see it.
+			next := leaky10PerMinute(name, test.key, 1, 120000)
+			if test.bookBad {
+				next.Limit, next.Duration, next.Burst = test.limit, test.duration, test.burst
+			}
+			resp := sendOne(t, client, next)
+			assert.Equal(t, guber.Status_SCHEDULED, resp.Status)
+			assert.Equal(t, int64(18000), resp.RetryAfter)
+		})
+	}
+}
+
+func TestScheduledAdmissionStoredNegativeConfigKeepsGrantedSlots(t *testing.T) {
+	defer clock.Freeze(clock.Now()).Unfreeze()
+	client, err := guber.DialV1Server(cluster.PeerAt(0).GRPCAddress, nil)
+	require.NoError(t, err)
+	const name, key = "TestScheduledAdmissionStoredNegativeConfigKeepsGrantedSlots", "account:1"
+
+	// A key that is not in debt adopts two negatives, which book at their positive quotient, 6000ms per token.
+	stored := func(hits, maxWait int64) *guber.RateLimitReq {
+		req := leaky10PerMinute(name, key, hits, maxWait)
+		req.Limit, req.Duration = -10, -guber.Minute
+		return req
+	}
+	sendOne(t, client, leaky10PerMinute(name, key, 10, 0))
+	sendOne(t, client, stored(0, 0))
+	for range 2 {
+		require.Equal(t, guber.Status_SCHEDULED, sendOne(t, client, stored(1, 120000)).Status)
+	}
+
+	// A valid request at twice the rate must rescale that debt, as it does for any other stored rate.
+	raise := leaky10PerMinute(name, key, 1, 120000)
+	raise.Limit = 20
+	resp := sendOne(t, client, raise)
+	assert.Equal(t, guber.Status_SCHEDULED, resp.Status)
+	assert.Equal(t, int64(15000), resp.RetryAfter)
+}
+
+func TestScheduledAdmissionZeroLimitKeepsBurstOfDebt(t *testing.T) {
+	defer clock.Freeze(clock.Now()).Unfreeze()
+	client, err := guber.DialV1Server(cluster.PeerAt(0).GRPCAddress, nil)
+	require.NoError(t, err)
+	const name, key = "TestScheduledAdmissionZeroLimitKeepsBurstOfDebt", "account:1"
+
+	bookDebt(t, client, name, key, 2)
+
+	// A limit of 0 with no burst arrives with burst 0, which must not replace the burst of a key in debt.
+	zero := leaky10PerMinute(name, key, 0, 0)
+	zero.Limit, zero.Burst = 0, 0
+	sendOne(t, client, zero)
+
+	// 30s leaks 5 tokens, so the balance is 3. Swapping the burst 0 for 10 would add 10 and fill the bucket.
+	clock.Advance(30 * time.Second)
+	assert.Equal(t, int64(3), sendOne(t, client, leaky10PerMinute(name, key, 0, 0)).Remaining)
+}
+
+func TestScheduledAdmissionZeroLimitAfterDebtLeakedUsesZeroBurst(t *testing.T) {
+	defer clock.Freeze(clock.Now()).Unfreeze()
+	client, err := guber.DialV1Server(cluster.PeerAt(0).GRPCAddress, nil)
+	require.NoError(t, err)
+	const name, key = "TestScheduledAdmissionZeroLimitAfterDebtLeakedUsesZeroBurst", "account:1"
+
+	bookDebt(t, client, name, key, 2)
+
+	// 30s leaks 5 tokens, so the debt of 2 is repaid before this request arrives and the key
+	// no longer owns a burst of 10 to spend under a limit of 0.
+	clock.Advance(30 * time.Second)
+	zero := leaky10PerMinute(name, key, 1, 0)
+	zero.Limit, zero.Burst = 0, 0
+	assert.Equal(t, guber.Status_OVER_LIMIT, sendOne(t, client, zero).Status)
+}
+
+func TestScheduledAdmissionResetWithZeroBurstFillsToZero(t *testing.T) {
+	defer clock.Freeze(clock.Now()).Unfreeze()
+	client, err := guber.DialV1Server(cluster.PeerAt(0).GRPCAddress, nil)
+	require.NoError(t, err)
+	const name, key = "TestScheduledAdmissionResetWithZeroBurstFillsToZero", "account:1"
+
+	bookDebt(t, client, name, key, 2)
+
+	// A reset forgives the debt and fills the bucket to the requested burst, which is 0 here.
+	reset := leaky10PerMinute(name, key, 1, 0)
+	reset.Limit, reset.Burst = 0, 0
+	reset.Behavior = guber.Behavior_RESET_REMAINING
+	assert.Equal(t, guber.Status_OVER_LIMIT, sendOne(t, client, reset).Status)
+}
+
 // startSmallCacheCluster replaces the shared test cluster with one peer that caches size rate limits.
 func startSmallCacheCluster(t *testing.T, size int) guber.V1Client {
 	t.Helper()
