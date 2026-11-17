@@ -20,6 +20,11 @@ go test -v -race ./cluster/...
 # Run linter
 make lint
 
+# Run Tiger, a Go static analyzer (install: go install github.com/kapetan-io/tiger/cmd/tiger@latest)
+# make fails on any finding. scripts/tiger.sh
+# exits Tiger's own code: 0 clean, 1 findings, 2 could not check.
+make tiger
+
 # Run benchmarks
 make bench
 
@@ -32,6 +37,9 @@ make clean-proto
 # Build Docker image
 make docker
 ```
+
+To run Tiger before each push, enable the committed hook once per clone:
+`git config core.hooksPath .githooks`. It prints findings and never blocks the push.
 
 ## Architecture Overview
 

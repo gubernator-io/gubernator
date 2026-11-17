@@ -1,0 +1,18 @@
+#!/usr/bin/env bash
+# Runs Tiger before a push and prints what it finds. It never blocks the push. Turn the hook on once per clone with:
+#   git config core.hooksPath .githooks
+root="$(git rev-parse --show-toplevel)"
+
+if ! command -v tiger >/dev/null 2>&1; then
+	echo "pre-push: tiger is not installed, skipping. Install it with:"
+	echo "  go install github.com/kapetan-io/tiger/cmd/tiger@latest"
+	exit 0
+fi
+
+"$root/scripts/tiger.sh"
+case $? in
+0) echo "pre-push: tiger found nothing." ;;
+1) echo "pre-push: tiger reported findings (listed above). Pushing anyway." ;;
+*) echo "pre-push: tiger could not check the code (exit 2, see its output above). Pushing anyway." ;;
+esac
+exit 0
