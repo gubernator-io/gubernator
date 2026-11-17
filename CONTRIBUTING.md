@@ -30,6 +30,28 @@ We use a linter to ensure things stay pretty, ensure your code passes the linter
 $ make lint
 ```
 
+### Run Tiger
+We run [Tiger](https://github.com/kapetan-io/tiger), a static analyzer for Go, over every package. Install it with
+```bash
+$ go install github.com/kapetan-io/tiger/cmd/tiger@latest
+```
+and run it with
+```bash
+$ make tiger
+```
+`scripts/tiger.sh` pins `GOTOOLCHAIN` to the `go` version in `go.mod`. Tiger uses whichever `go` is on your PATH when
+it runs, and a newer one makes it fail on every package with `export data version N is greater than maximum supported
+version`. The pin makes Go use the `go.mod` version, downloading that toolchain the first time if you don't have it.
+
+`make tiger` fails when Tiger reports anything. Run `scripts/tiger.sh` directly to get Tiger's own exit code, which is
+0 when clean, 1 when Tiger has findings and 2 when it couldn't check the code.
+
+CI does not run Tiger. To see its findings before each push, turn on the committed hook once per clone (optional):
+```bash
+$ git config core.hooksPath .githooks
+```
+The hook prints Tiger's findings and never blocks the push. If `tiger` isn't installed it skips the step.
+
 ### Commits & Messages
 We don't have a specific structure for commit messages, but please be as descriptive as possible and avoid
 lots of tiny commits. If this is your style, please squash before making a PR, or we may squash on merge.
